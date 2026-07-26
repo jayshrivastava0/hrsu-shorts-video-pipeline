@@ -1,0 +1,49 @@
+# HRSU Blog Agent v3.0 - Python Dependencies
+
+# AI/LLM (local Ollama — gemma3:4b must be pulled via: ollama pull gemma3:4b)
+ollama>=0.1.0
+
+# Google APIs (Blogger, Sheets, Analytics)
+google-auth>=2.16.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.70.0
+gspread>=5.10.0
+
+# Web Search (keyword research)
+duckduckgo-search>=3.8.0
+
+# Scheduling (regional posting times)
+APScheduler>=3.10.0
+pytz>=2024.1
+
+# HTTP requests (LinkedIn + Facebook APIs)
+requests>=2.31.0
+
+# Browser automation (legacy social posting fallback — kept for reference)
+playwright>=1.40.0
+tf-playwright-stealth>=1.1.0
+
+# Standard library (built-in, no install needed):
+# pickle, json, datetime, typing, re, os, logging, argparse
+
+# ─── video_agent dependencies ─────────────────────────────────────────────
+edge-tts>=7.2.0
+kokoro-onnx>=0.3.0
+faster-whisper>=1.0.0
+moviepy>=1.0.3
+pillow>=10.0.0
+matplotlib>=3.8.0
+numpy>=1.26.0
+pydub>=0.25.1
+ffmpeg-python>=0.2.0
+sqlalchemy>=2.0.0
+pygithub>=2.1.0
+responses>=0.24.0
+pytest>=7.4.0
+yt-dlp>=2024.1.0
+ImageHash>=4.3.1
+pytesseract>=0.3.10
+
+# ─── price ingestion (local-only PO parsing) ──────────────────────────────
+pdfplumber>=0.11.0

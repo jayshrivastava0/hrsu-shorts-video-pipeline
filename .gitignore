@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.cache/
+*.log
+.env
+secrets.txt
+client_secrets.json
+token.pickle
+*token*.json
+.oauth_token*.json
+*credentials*.json
+*.pem
+*.key
+output/
+output_live/
+output_torture/

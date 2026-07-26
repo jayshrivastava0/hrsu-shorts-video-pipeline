@@ -1,0 +1,19 @@
+company: HRSU Indore Pvt. Ltd.
+domain: hrsuindore.com
+tagline: "Beyond Granules. The Purity of Powder."
+differentiators:
+  - id: b_purity
+    text: "Consistent high-purity calcium nitrate powder with batch-level QC"
+  - id: b_supply
+    text: "Flexible minimum order quantities and responsive quoting for trial orders"
+  - id: b_esg
+    text: "Solar power and steam-reuse initiatives at the Indore plant"
+cta_lines:
+  - "Full technical guide on the HRSU blog — link in description."
+  - "Sourcing calcium nitrate? Visit hrsuindore.com"
+banned_claims:
+  - "REACH registered"
+  - "REACH-registered"
+  - "certified"
+  - "ISO 9001"
+  - "FDA approved"
