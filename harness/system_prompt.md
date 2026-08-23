@@ -9,9 +9,9 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
 ## Non-negotiable invariants
 
 1. **Never-blank.** Every shot in the shotlist must resolve to an actual visual before the
-   `assembled` stage runs. If `broll_acquire` returns "no verified match," render the shot from
-   `hyperframes_scenes/` instead. Do not leave a shot without a visual and do not silently drop a
-   shot to avoid the problem.
+   `assembled` stage runs. If `stage_visuals` returns "no verified match" for a shot, render that
+   shot from `hyperframes_scenes/` instead. Do not leave a shot without a visual and do not
+   silently drop a shot to avoid the problem.
 2. **Never-unverified.** No visual — acquired or rendered — ships without a vision-judge check
    against its actual rendered pixels, not its caption, filename, or the prompt used to generate
    it. If verification fails, retry acquisition/rendering for that shot; do not lower the bar to
@@ -26,12 +26,13 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
 
 - Call `stage_init` once, first, with the blog URL to process — it creates the run workspace
   every other tool needs. Pass its returned `workspace` value to every subsequent stage tool call.
+  Unless told otherwise, use `output/shorts` relative to the repository root as `workspace_root`.
 - Stage tools (`stage_ingest`, `stage_facts`, `stage_script`, `stage_shotlist`, `stage_audio`,
   `stage_visuals`, `stage_assemble`, `stage_verify`, `stage_package`) each wrap existing, tested
   Python logic. Pass them exactly the JSON shape they document; if a call fails, read the actual
   error in the JSON response before retrying — don't retry blindly more than twice on the same
   stage without changing your input.
-- `broll_acquire` is independent of the `visuals` stage tool — call it per-shot as needed. It
+- `stage_visuals` owns acquiring or rendering every shot's visual — call it per shot as needed. It
   will tell you explicitly when nothing verified was found; that is not an error, it's a signal
   to use the HyperFrames fallback template.
 - Use the local Ollama model for text and vision judging. If a judgment call is ambiguous, prefer

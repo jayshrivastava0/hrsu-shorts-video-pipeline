@@ -69,6 +69,33 @@ def test_run_stage_on_missing_manifest_fails_loud(tmp_path):
     assert payload["status"] == "error"
 
 
+def test_run_stage_out_of_order_fails_loud(tmp_path):
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"]
+
+    ingest_result = run_cli([
+        "run-stage", "ingest",
+        "--workspace", workspace,
+        "--html-override", str(FIXTURE_HTML),
+    ])
+    assert ingest_result.returncode == 0, ingest_result.stderr
+
+    # Manifest has only reached "ingested" — jumping straight to "assemble"
+    # (which targets "assembled", several stages further along) must be
+    # rejected instead of silently attempted.
+    result = run_cli(["run-stage", "assemble", "--workspace", workspace])
+    assert result.returncode == 1
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+    assert "out of order" in payload["message"]
+
+    manifest = json.loads((Path(workspace) / "run_manifest.json").read_text())
+    assert manifest["last_ok_status"] == "ingested"
+
+
 def test_run_stage_on_unknown_stage_name_fails_loud(tmp_path):
     init_result = run_cli([
         "init", "https://blog.hrsuindore.com/test-post",

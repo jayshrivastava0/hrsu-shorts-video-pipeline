@@ -45,8 +45,30 @@ const STAGE_TOOLS: StageToolSpec[] = [
  *   - `output.render`'s `ContentBlock` (`{ type: 'text', text: string }`) matches the
  *     plan's sketch exactly (confirmed against `@deepseek-ai/dsh-llm`'s `types.d.ts`).
  */
+/**
+ * `local_only` is a real flag `stage_cli.py`'s `run-stage` subcommand already accepts
+ * (read by `facts.py`/`script.py` to pick local vs. cloud model tier). It's exposed on
+ * every per-stage tool except `stage_init` (which has no model-tier decision to make)
+ * and `publish` (publishing isn't a model call either).
+ */
+function supportsLocalOnly(spec: StageToolSpec): boolean {
+  return spec.stageName !== undefined && spec.stageName !== 'publish'
+}
+
 export function apply(ctx: Context, config: Config): void {
   for (const spec of STAGE_TOOLS) {
+    const localOnlyParam = supportsLocalOnly(spec)
+      ? {
+          local_only: {
+            type: 'boolean' as const,
+            // `ParameterPropertySpec.required` is `true | undefined` — the installed
+            // dsh-tools schema compiler rejects `required: false` outright
+            // ("required must be true when present"), so an optional parameter omits
+            // the field entirely rather than setting it falsy.
+            description: 'Force the local model tier instead of cloud for this stage.',
+          },
+        }
+      : {}
     ctx.tools.register(defineTool({
       name: spec.toolName,
       description: spec.description,
@@ -57,6 +79,7 @@ export function apply(ctx: Context, config: Config): void {
           }
         : {
             workspace: { type: 'string', required: true, description: 'Run workspace directory (from stage_init).' },
+            ...localOnlyParam,
           },
       output: {
         schema: { type: 'object', additionalProperties: true },
@@ -66,6 +89,9 @@ export function apply(ctx: Context, config: Config): void {
         const cliArgs = spec.stageName === undefined
           ? ['init', (args as { blog_url: string }).blog_url, '--workspace-root', (args as { workspace_root: string }).workspace_root]
           : ['run-stage', spec.stageName, '--workspace', (args as { workspace: string }).workspace]
+        if (supportsLocalOnly(spec) && (args as { local_only?: boolean }).local_only === true) {
+          cliArgs.push('--local-only')
+        }
         // runStageCli's return type is `Record<string, unknown>` (it's a JSON.parse of the
         // bridge CLI's arbitrary per-stage output shape); the tool's declared output schema is
         // an open `additionalProperties: true` object, so this is a safe narrowing, not a real

@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from shorts_engine.cli import build_stages
-from shorts_engine.manifest import RunManifest
+from shorts_engine.manifest import STATUS_ORDER, RunManifest
 from shorts_engine.runner import StageContext
 
 STAGE_FUNCTIONS = {name: fn for name, _status_after, fn in build_stages()}
@@ -49,6 +49,39 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_order_error(last_ok_status: str, target_status: str, stage_name: str) -> str | None:
+    """
+    Mirror of runner.py's `_should_skip_stage` ordering check, adapted for a
+    single out-of-process stage invocation: `run-stage` has no `for` loop to skip
+    ahead in, so instead of silently skipping a completed stage we must reject a
+    stage that isn't the correct next one for the manifest's current progress.
+
+    Returns an error message if `stage_name` (whose success target is
+    `target_status`) is not the immediate next stage after `last_ok_status` in
+    STATUS_ORDER, or None if it is safe to run.
+    """
+    if target_status not in STATUS_ORDER or last_ok_status not in STATUS_ORDER:
+        # Safety: if either status isn't recognized, don't block (matches
+        # _should_skip_stage's own "don't skip" fallback for unknown statuses).
+        return None
+
+    target_idx = STATUS_ORDER.index(target_status)
+    last_ok_idx = STATUS_ORDER.index(last_ok_status)
+
+    if target_idx <= last_ok_idx:
+        return (
+            f"Stage '{stage_name}' (-> '{target_status}') has already completed; "
+            f"manifest is already at '{last_ok_status}'."
+        )
+    if target_idx > last_ok_idx + 1:
+        expected_stage = STATUS_ORDER[last_ok_idx + 1]
+        return (
+            f"Stage '{stage_name}' (-> '{target_status}') is out of order; "
+            f"manifest is at '{last_ok_status}', expected next status is '{expected_stage}'."
+        )
+    return None
+
+
 def cmd_run_stage(args: argparse.Namespace) -> int:
     stage_fn = STAGE_FUNCTIONS.get(args.stage_name)
     if stage_fn is None:
@@ -67,6 +100,11 @@ def cmd_run_stage(args: argparse.Namespace) -> int:
 
     ctx = StageContext(manifest=manifest, workspace=workspace, flags=_flags_from_args(args))
     status_after = STAGE_STATUS_AFTER[args.stage_name]
+
+    order_error = _stage_order_error(manifest.last_ok_status, status_after, args.stage_name)
+    if order_error is not None:
+        print(json.dumps({"status": "error", "message": order_error}), file=sys.stderr)
+        return 1
 
     try:
         artifacts = stage_fn(ctx)

@@ -1,14 +1,19 @@
 import { CallId, LlmAdapter, LlmError, attributionHeaders } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, Message, StreamChunk, ToolCallBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
 
 export interface OllamaAdapterOptions {
   /** Resolved once per stream call, so a config change reaches the next request. */
   baseURL: () => string
 }
 
+interface OllamaWireToolCall {
+  function: { name: string; arguments: Record<string, unknown> }
+}
+
 interface OllamaWireMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  tool_calls?: OllamaWireToolCall[]
 }
 
 function textOf(message: Message): string {
@@ -18,13 +23,52 @@ function textOf(message: Message): string {
     .join('')
 }
 
+/**
+ * Text for a tool-result message's wire `content`. `ToolResultBlock.content` is
+ * itself a `ContentBlock[]` (whatever the tool returned) — when every block is
+ * text, join it; otherwise fall back to a JSON dump so non-text result payloads
+ * (e.g. structured data) still reach the model instead of silently vanishing.
+ */
+function toolResultText(block: ToolResultBlock): string {
+  const blocks: ContentBlock[] = block.content
+  if (blocks.every((b): b is { type: 'text'; text: string } => b.type === 'text')) {
+    return blocks.map(b => b.text).join('')
+  }
+  return JSON.stringify(blocks)
+}
+
+function isToolResultMessage(message: Message): message is Message & { content: [ToolResultBlock] } {
+  return message.role === 'user' && message.content.length === 1 && message.content[0]?.type === 'tool-result'
+}
+
 function toWireMessages(options: GenerateOptions): OllamaWireMessage[] {
   const wire: OllamaWireMessage[] = []
   if (options.system !== undefined) wire.push({ role: 'system', content: options.system })
   for (const message of options.messages) {
     // `Message.role` is `'system' | 'user' | 'assistant'` in this installed version of
     // @deepseek-ai/dsh-llm — there is no `'tool'` role. Tool results arrive as role
-    // `'user'` messages with a `ToolMessageSource`, so no separate branch is needed.
+    // `'user'` messages with a `ToolMessageSource` and a single `ToolResultBlock`, which
+    // we translate to Ollama's `role: 'tool'` wire shape below.
+    if (isToolResultMessage(message)) {
+      wire.push({ role: 'tool', content: toolResultText(message.content[0]) })
+      continue
+    }
+
+    const toolCallBlocks = message.content.filter((block): block is ToolCallBlock => block.type === 'tool-call')
+    if (message.role === 'assistant' && toolCallBlocks.length > 0) {
+      wire.push({
+        role: 'assistant',
+        content: textOf(message),
+        tool_calls: toolCallBlocks.map(block => ({
+          // Ollama expects `arguments` as a parsed object; our own outbound
+          // `ToolCallBlock.arguments` (and `argumentsDelta`) carry it as a raw JSON
+          // string, so it must be parsed back before round-tripping to the wire.
+          function: { name: block.name, arguments: JSON.parse(block.arguments) as Record<string, unknown> },
+        })),
+      })
+      continue
+    }
+
     const role = message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user'
     wire.push({ role, content: textOf(message) })
   }
@@ -105,6 +149,7 @@ export class OllamaAdapter extends LlmAdapter {
     let text = ''
     let nextIndex = 1
     let sawToolCalls = false
+    let doneReason: string | undefined
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -124,7 +169,9 @@ export class OllamaAdapter extends LlmAdapter {
               tool_calls?: { function: { name: string; arguments: Record<string, unknown> } }[]
             }
             done?: boolean
+            done_reason?: string
           }
+          if (parsed.done === true && parsed.done_reason !== undefined) doneReason = parsed.done_reason
           const delta = parsed.message?.content ?? ''
           if (delta.length > 0) {
             text += delta
@@ -152,6 +199,11 @@ export class OllamaAdapter extends LlmAdapter {
       throw new LlmError(`Ollama stream read failed: ${String(error)}`, 'TRANSPORT', { cause: error })
     }
     yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-    yield { type: 'finish', reason: sawToolCalls ? { kind: 'tool-calls' } : { kind: 'stop' } }
+    yield {
+      type: 'finish',
+      reason: doneReason === 'length'
+        ? { kind: 'max-tokens' }
+        : sawToolCalls ? { kind: 'tool-calls' } : { kind: 'stop' },
+    }
   }
 }
