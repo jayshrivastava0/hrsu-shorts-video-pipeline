@@ -20,9 +20,12 @@ import json
 import sys
 from pathlib import Path
 
+from shorts_engine import config
 from shorts_engine.cli import build_stages
+from shorts_engine.errors import EngineError
 from shorts_engine.manifest import STATUS_ORDER, RunManifest
 from shorts_engine.runner import StageContext
+from shorts_engine.stages.visuals import content_pixels, resolve_shot, sample_frame
 
 STAGE_FUNCTIONS = {name: fn for name, _status_after, fn in build_stages()}
 STAGE_STATUS_AFTER = {name: status_after for name, status_after, _fn in build_stages()}
@@ -120,6 +123,85 @@ def cmd_run_stage(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_visuals_prepare(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    try:
+        manifest = RunManifest.load(workspace)
+    except FileNotFoundError as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    order_error = _stage_order_error(manifest.last_ok_status, "visuals", "visuals-prepare")
+    if order_error is not None:
+        print(json.dumps({"status": "error", "message": order_error}), file=sys.stderr)
+        return 1
+
+    ctx = StageContext(manifest=manifest, workspace=workspace, flags=_flags_from_args(args))
+    try:
+        shots = json.loads((workspace / "shotlist.json").read_text(encoding="utf-8"))["shots"]
+        post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
+        briefs = []
+        for shot in shots:
+            rtype, payload, prov = resolve_shot(shot, ctx, post)
+            briefs.append({
+                "shot_id": shot["id"], "beat": shot["beat"], "type": rtype,
+                "payload": payload, "duration_s": shot["duration_s"],
+                "fade_in_s": config.TRANSITION_FADE_S if shot["beat"] != shots[0]["beat"] else 0.0,
+                "provenance": prov,
+            })
+    except Exception as exc:
+        manifest.status = "failed"
+        manifest.error = f"visuals-prepare: {exc}"
+        manifest.save()
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    (workspace / "shot_briefs.json").write_text(json.dumps(briefs, indent=2), encoding="utf-8")
+    print(json.dumps({"status": "ok", "shot_briefs": "shot_briefs.json"}))
+    return 0
+
+
+def cmd_visuals_finalize(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    try:
+        manifest = RunManifest.load(workspace)
+    except FileNotFoundError as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    try:
+        briefs = json.loads((workspace / "shot_briefs.json").read_text(encoding="utf-8"))
+        shots_dir = workspace / "shots"
+        report = {"shots": []}
+        for brief in briefs:
+            shot_id = brief["shot_id"]
+            mp4 = shots_dir / f"shot_{shot_id}.mp4"
+            if not mp4.exists():
+                raise EngineError(f"visuals-finalize: shot {shot_id} has no rendered mp4 at {mp4}")
+            png = shots_dir / f"shot_{shot_id}_mid.png"
+            sample_frame(mp4, brief["duration_s"] / 2, png)
+            pixels = content_pixels(png)
+            if pixels < config.MIN_CONTENT_PIXELS:
+                raise EngineError(
+                    f"visuals-finalize: shot {shot_id} ({brief['type']}) rendered without "
+                    f"visible content ({pixels} bright px < {config.MIN_CONTENT_PIXELS}) — "
+                    f"never-blank violated")
+            report["shots"].append({**brief, "content_pixels": pixels})
+        (workspace / "visuals_report.json").write_text(
+            json.dumps(report, indent=2), encoding="utf-8")
+    except Exception as exc:
+        manifest.status = "failed"
+        manifest.error = f"visuals-finalize: {exc}"
+        manifest.save()
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    artifacts = {"shots_dir": "shots", "visuals_report": "visuals_report.json"}
+    manifest.checkpoint(status="visuals", **artifacts)
+    print(json.dumps({"status": "ok", "status_after": "visuals", "artifacts": artifacts}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="shorts_engine.stage_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -139,6 +221,16 @@ def main(argv: list[str] | None = None) -> int:
     run_stage_parser.add_argument("--torture", action="store_true")
     run_stage_parser.add_argument("--publish", action="store_true")
     run_stage_parser.set_defaults(func=cmd_run_stage)
+
+    visuals_prepare_parser = subparsers.add_parser("visuals-prepare")
+    visuals_prepare_parser.add_argument("--workspace", required=True)
+    visuals_prepare_parser.add_argument("--local-only", action="store_true")
+    visuals_prepare_parser.add_argument("--torture", action="store_true")
+    visuals_prepare_parser.set_defaults(func=cmd_visuals_prepare)
+
+    visuals_finalize_parser = subparsers.add_parser("visuals-finalize")
+    visuals_finalize_parser.add_argument("--workspace", required=True)
+    visuals_finalize_parser.set_defaults(func=cmd_visuals_finalize)
 
     args = parser.parse_args(argv)
     return args.func(args)
