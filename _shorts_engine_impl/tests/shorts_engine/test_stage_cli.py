@@ -221,6 +221,36 @@ def test_visuals_finalize_checkpoints_when_all_shots_present_and_nonblank(tmp_pa
     assert manifest_after["artifacts"]["shots_dir"] == "shots"
 
 
+def test_visuals_finalize_out_of_order_fails_loud(tmp_path):
+    # Mirrors test_run_stage_out_of_order_fails_loud: cmd_visuals_prepare and cmd_run_stage both
+    # gate on _stage_order_error before proceeding; cmd_visuals_finalize must too. A manifest
+    # that hasn't even reached visuals-prepare's precondition (still at "ingested", several
+    # stages behind "audio") calling visuals-finalize directly must be rejected loudly instead
+    # of falling through to the generic except branch and marking an otherwise-fine run failed.
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"]
+
+    ingest_result = run_cli([
+        "run-stage", "ingest",
+        "--workspace", workspace,
+        "--html-override", str(FIXTURE_HTML),
+    ])
+    assert ingest_result.returncode == 0, ingest_result.stderr
+
+    result = run_cli(["visuals-finalize", "--workspace", workspace])
+    assert result.returncode == 1
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+    assert "out of order" in payload["message"]
+
+    manifest = json.loads((Path(workspace) / "run_manifest.json").read_text())
+    assert manifest["last_ok_status"] == "ingested"
+    assert manifest["status"] != "failed"
+
+
 def test_visuals_finalize_fails_loud_on_missing_shot_mp4(tmp_path):
     init_result = run_cli([
         "init", "https://blog.hrsuindore.com/test-post",

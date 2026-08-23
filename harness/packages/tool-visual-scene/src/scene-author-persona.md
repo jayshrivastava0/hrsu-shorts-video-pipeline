@@ -116,8 +116,9 @@ Your prompt includes one JSON object with this shape (from the pipeline's `shot_
 
 - `shot_id` — unique id for this shot within its run; use it to build a stable
   `data-composition-id` and to name the composition file (your tool calls will tell you the
-  exact `shot_id`/`workspace_id`/output path to pass — use those exact values, don't invent your
-  own).
+  exact `shot_id`/`workspace_id` to pass — use those exact values, don't invent your own).
+  `render_scene` decides where the rendered mp4 lands on its own; you never choose or pass an
+  output path.
 - `beat` — narrative beat this shot belongs to (e.g. `hook`, `body`, `cta`) — informs tone, not a
   literal string to render.
 - `type` — the shot's visual archetype (e.g. `HEADLINE_CARD`, `STAT_CARD`, `CTA_CARD`) — use it to
@@ -138,7 +139,8 @@ Your prompt includes one JSON object with this shape (from the pipeline's `shot_
 1. Compose the HTML/CSS/GSAP for this one shot as a complete, self-contained `.html` file
    following every contract above.
 2. Call `write_scene_file` with that HTML and the exact `workspace_id`/`shot_id` you were given.
-3. Call `render_scene` with the exact `workspace_id`/`shot_id`/output path you were given.
+3. Call `render_scene` with the exact `workspace_id`/`shot_id` you were given (no output path —
+   `render_scene` writes to the location the pipeline has already decided on).
 4. If `render_scene` throws or returns an error, read the error message carefully — it usually
    names a missing/invalid `data-*` attribute or an HTML/CSS problem — fix the specific issue it
    names, call `write_scene_file` again with the corrected HTML, and call `render_scene` once

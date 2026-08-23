@@ -177,6 +177,11 @@ def cmd_visuals_finalize(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
         return 1
 
+    order_error = _stage_order_error(manifest.last_ok_status, "visuals", "visuals-finalize")
+    if order_error is not None:
+        print(json.dumps({"status": "error", "message": order_error}), file=sys.stderr)
+        return 1
+
     try:
         briefs = json.loads((workspace / "shot_briefs.json").read_text(encoding="utf-8"))
         shots_dir = workspace / "shots"

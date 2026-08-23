@@ -6,8 +6,18 @@ function compositionsRoot(projectRoot: string): string {
   return join(projectRoot, 'compositions')
 }
 
+/** Identifiers that legitimately reach this function (`workspaceId`/`shotId`) are never
+ * themselves paths — reject any that contain a path separator or a drive-letter colon outright,
+ * rather than only catching it indirectly via `resolve()`/`relative()` semantics. */
+function containsPathSeparatorOrColon(value: string): boolean {
+  return value.includes('/') || value.includes('\\') || value.includes(':')
+}
+
 function resolveScopedPath(workspaceId: string, shotId: string, projectRoot: string, ext: string): string {
   const root = compositionsRoot(projectRoot)
+  const outsideError = () => new Error(
+    `resolveScopedPath: resolved path is outside compositions/: ${join(root, workspaceId, `${shotId}${ext}`)}`,
+  )
   // First line of defense: a workspaceId/shotId should never legitimately be an
   // absolute path. path.isAbsolute() correctly rejects drive-letter paths
   // (C:\..., D:\...) and UNC paths (\\host\share\...) on Windows, which
@@ -15,13 +25,21 @@ function resolveScopedPath(workspaceId: string, shotId: string, projectRoot: str
   // between different drives returns the absolute candidate unchanged, so a
   // '..'-prefix check silently passes).
   if (isAbsolute(workspaceId) || isAbsolute(shotId)) {
-    throw new Error(`writeSceneFile: resolved path is outside compositions/: ${join(root, workspaceId, `${shotId}${ext}`)}`)
+    throw outsideError()
+  }
+  // Second line of defense: reject separators/colons outright. path.isAbsolute() alone misses
+  // Windows "drive-relative" paths like `C:evil` (a drive letter with no separator) — Node
+  // considers that NOT absolute, yet it still resolves per-drive-cwd semantics and can escape
+  // compositions/. workspaceId/shotId are identifiers, not paths, so neither should ever
+  // legitimately contain '/', '\\', or ':' at all.
+  if (containsPathSeparatorOrColon(workspaceId) || containsPathSeparatorOrColon(shotId)) {
+    throw outsideError()
   }
   const candidate = resolve(root, workspaceId, `${shotId}${ext}`)
   const rel = relative(root, candidate)
-  // Second, redundant layer (defense in depth): catches relative traversal.
+  // Third, redundant layer (defense in depth): catches relative traversal.
   if (rel.startsWith('..') || resolve(root, rel) !== candidate) {
-    throw new Error(`writeSceneFile: resolved path is outside compositions/: ${candidate}`)
+    throw outsideError()
   }
   return candidate
 }
@@ -84,30 +102,55 @@ function runHyperframesRender(
   })
 }
 
-export function renderScene(
+export async function renderScene(
   workspaceId: string,
   shotId: string,
   projectRoot: string,
   outputPath: string,
   options: RenderOptions = {},
 ): Promise<string> {
-  const compositionRelPath = join('compositions', workspaceId, `${shotId}.html`)
+  // Route the composition path through the same scoped-path guard `writeSceneFile` uses (Fix 3):
+  // previously this built the path via a plain `join()`, so a shotId/workspaceId that slipped
+  // past validation elsewhere (or a caller that skipped it) could point `hyperframes render` at
+  // an arbitrary local file via `-c`. `async` (rather than a plain function returning the inner
+  // promise) matters here: it turns resolveScopedPath's synchronous throw into a rejected
+  // promise instead of an immediate synchronous exception, so callers can uniformly `await`/
+  // `.rejects` this function regardless of which failure mode fires.
+  const compositionAbsPath = resolveScopedPath(workspaceId, shotId, projectRoot, '.html')
+  const compositionRelPath = relative(projectRoot, compositionAbsPath)
   return runHyperframesRender(compositionRelPath, projectRoot, outputPath, options)
 }
 
-export function renderFallbackScene(
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+export async function renderFallbackScene(
   workspaceId: string,
   shotId: string,
   projectRoot: string,
   outputPath: string,
   captionText: string,
+  durationSeconds: number,
   options: RenderOptions = {},
 ): Promise<string> {
   const templatePath = join(projectRoot, 'templates', 'generic_fallback.html')
   const template = readFileSync(templatePath, 'utf8')
-  const html = template.replace('{{CAPTION}}', captionText)
+  // Caption text (and, defensively, the duration value) originates from scraped blog content
+  // reaching this template as plain substitution — escape both before substituting so `<`, `&`,
+  // etc. in the source text can't break or inject into the rendered composition (Fix 6).
+  const html = template
+    .replace(/\{\{CAPTION\}\}/g, escapeHtml(captionText))
+    .replace(/\{\{DURATION\}\}/g, escapeHtml(String(durationSeconds)))
   const fallbackShotId = `${shotId}_fallback`
   writeSceneFile(workspaceId, fallbackShotId, html, projectRoot)
-  const compositionRelPath = join('compositions', workspaceId, `${fallbackShotId}.html`)
+  // Same scoped-path guard as `renderScene` (Fix 3), for consistency — `writeSceneFile` above
+  // already validated this exact path, so this call is redundant-but-safe defense in depth.
+  const compositionAbsPath = resolveScopedPath(workspaceId, fallbackShotId, projectRoot, '.html')
+  const compositionRelPath = relative(projectRoot, compositionAbsPath)
   return runHyperframesRender(compositionRelPath, projectRoot, outputPath, options)
 }

@@ -57,6 +57,16 @@ export interface ShotBrief {
 export interface AuthorVisualSceneArgs {
   shot_brief: ShotBrief
   workspace_id: string
+  /**
+   * Absolute path to the Python run's workspace directory — the same value `stage_init` returns
+   * as `workspace`. The rendered mp4 lands at `<workspace>/shots/shot_<shot_id>.mp4`, matching
+   * exactly what `cmd_visuals_finalize` (`_shorts_engine_impl/shorts_engine/stage_cli.py`) looks
+   * for. `workspace_id` stays a separate value (conventionally the run's `run_id`) namespacing
+   * only the HyperFrames *composition* files under `compositions/<workspace_id>/` — it is not a
+   * filesystem path and must never be used to derive the mp4 output location (see Fix 1/1b in
+   * the final whole-branch review).
+   */
+  workspace: string
 }
 
 export interface AuthorVisualSceneOutput {
@@ -74,17 +84,17 @@ const MAX_ATTEMPTS = 2
 const CHILD_TOOL_NAMES = ['write_scene_file', 'render_scene'] as const
 
 /**
- * Convention for a shot's rendered output: `<projectRoot>/output/<workspaceId>/shots/shot_<shot_id>.mp4`.
- * The `shots/shot_<id>.mp4` suffix deliberately mirrors the Python `shorts_engine`
- * `visuals-finalize` stage's own expectation (`shots_dir / f"shot_{shot_id}.mp4"`, confirmed in
- * Task 2's `cmd_visuals_finalize`) so a later wiring task can point this tool's output straight
- * at the run workspace's `shots/` directory without a rename step. The `output/<workspaceId>/`
- * prefix keeps it inside the HyperFrames project root, alongside `compositions/<workspaceId>/`,
- * rather than writing outside `projectRoot` (full cross-project wiring between this harness and
- * the Python workspace root is out of this task's scope).
+ * A shot's rendered output MUST land at `<workspace>/shots/shot_<shot_id>.mp4` — exactly what the
+ * Python `shorts_engine` `visuals-finalize` stage looks for (`shots_dir / f"shot_{shot_id}.mp4"`,
+ * `_shorts_engine_impl/shorts_engine/stage_cli.py`'s `cmd_visuals_finalize`), where `workspace` is
+ * the Python run workspace's own absolute path (`stage_init`'s `workspace` output), NOT the
+ * HyperFrames project root and NOT anything derived from `workspace_id`. Fix 1 in the final
+ * whole-branch review: the previous `<projectRoot>/output/<workspaceId>/shots/...` convention put
+ * the mp4 in a directory `visuals-finalize` never looks in, so the real orchestrator flow
+ * (prepare -> N x author_visual_scene -> finalize) failed at finalize every time.
  */
-function resolveOutputPath(projectRoot: string, workspaceId: string, shotId: string): string {
-  return join(projectRoot, 'output', workspaceId, 'shots', `shot_${shotId}.mp4`)
+function resolveOutputPath(workspace: string, shotId: string): string {
+  return join(workspace, 'shots', `shot_${shotId}.mp4`)
 }
 
 /**
@@ -110,7 +120,6 @@ export function pickFallbackCaption(shotBrief: ShotBrief): string {
 function buildPrompt(
   shotBrief: ShotBrief,
   workspaceId: string,
-  outputPath: string,
   previousFailureReason: string | undefined,
 ): string {
   const briefJson = JSON.stringify(shotBrief, null, 2)
@@ -129,7 +138,9 @@ ${briefJson}
 
 - \`workspace_id\`: \`${workspaceId}\`
 - \`shot_id\`: \`${shotBrief.shot_id}\`
-- \`output_path\` (pass this exact string to \`render_scene\`): \`${outputPath}\`
+
+Note: \`render_scene\` takes only \`workspace_id\` and \`shot_id\` — it never takes an output path.
+Where the rendered mp4 lands is decided by the pipeline, not by you.
 ${retrySection}`
 }
 
@@ -161,14 +172,24 @@ export interface AuthorVisualSceneDeps {
   projectRoot: string
   existsSync: (path: string) => boolean
   renderFallbackScene: typeof renderFallbackScene
+  /**
+   * Records the exact, trusted output path a shot's mp4 must land at, keyed by the same
+   * `(workspace_id, shot_id)` identifiers the child subagent already supplies to `render_scene`.
+   * `render_scene`'s tool `execute()` (registered in `apply()` below) looks this up rather than
+   * accepting a free-form path argument from the (prompt-injection-reachable) subagent — see
+   * Fix 3 in the final whole-branch review. Called once, before the subagent is spawned, on every
+   * attempt (idempotent — always the same value for a given shot).
+   */
+  registerOutputPath: (workspaceId: string, shotId: string, outputPath: string) => void
 }
 
 export async function authorVisualScene(
   args: AuthorVisualSceneArgs,
   deps: AuthorVisualSceneDeps,
 ): Promise<AuthorVisualSceneOutput> {
-  const { shot_brief: shotBrief, workspace_id: workspaceId } = args
-  const outputPath = resolveOutputPath(deps.projectRoot, workspaceId, shotBrief.shot_id)
+  const { shot_brief: shotBrief, workspace_id: workspaceId, workspace } = args
+  const outputPath = resolveOutputPath(workspace, shotBrief.shot_id)
+  deps.registerOutputPath(workspaceId, shotBrief.shot_id, outputPath)
 
   let previousFailureReason: string | undefined
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -179,7 +200,7 @@ export async function authorVisualScene(
     }
     const run = await deps.subagents.start(deps.subagentProviderName, {
       label: `author_visual_scene:${shotBrief.shot_id}:attempt${attempt}`,
-      prompt: [{ type: 'text', text: buildPrompt(shotBrief, workspaceId, outputPath, previousFailureReason) }],
+      prompt: [{ type: 'text', text: buildPrompt(shotBrief, workspaceId, previousFailureReason) }],
       parent: deps.agent,
       signal: deps.signal,
       agentOptions: deps.agentOptions,
@@ -202,7 +223,7 @@ export async function authorVisualScene(
   }
 
   const captionText = pickFallbackCaption(shotBrief)
-  await deps.renderFallbackScene(workspaceId, shotBrief.shot_id, deps.projectRoot, outputPath, captionText)
+  await deps.renderFallbackScene(workspaceId, shotBrief.shot_id, deps.projectRoot, outputPath, captionText, shotBrief.duration_s)
   return { mp4_path: outputPath, attempts: MAX_ATTEMPTS, used_fallback: true }
 }
 
@@ -241,6 +262,15 @@ export async function authorVisualScene(
  * failure, so it is invoked as a plain function from `authorVisualScene` above.
  */
 export function apply(ctx: Context, config: Config): void {
+  // Trusted output-path registry (Fix 3): `author_visual_scene`'s own execute() below computes
+  // the exact, correct mp4 output path from `args.workspace`/`shot_id` (never from subagent
+  // input) and records it here BEFORE spawning the child, keyed by the same `(workspace_id,
+  // shot_id)` identifiers the child already supplies to `render_scene`. `render_scene`'s
+  // execute() looks the path up rather than accepting a free-form path argument, so a
+  // prompt-injected subagent can control WHICH shot to render but never WHERE the output lands.
+  const outputPathsByShot = new Map<string, string>()
+  const shotKey = (workspaceId: string, shotId: string): string => `${workspaceId} ${shotId}`
+
   ctx.tools.register(defineTool({
     name: 'write_scene_file',
     description: 'Write one HyperFrames scene composition (HTML/CSS/GSAP) to disk for later rendering.',
@@ -265,14 +295,21 @@ export function apply(ctx: Context, config: Config): void {
     parameters: {
       workspace_id: { type: 'string', required: true, description: 'Run workspace id (matches the composition subdirectory).' },
       shot_id: { type: 'string', required: true, description: 'This shot\'s id within the run.' },
-      output_path: { type: 'string', required: true, description: 'Absolute path the rendered MP4 should be written to.' },
     },
     output: {
       schema: { type: 'object', additionalProperties: false, properties: { path: { type: 'string', required: true } } },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args) {
-      const path = await renderScene(args.workspace_id, args.shot_id, config.projectRoot, args.output_path)
+      const outputPath = outputPathsByShot.get(shotKey(args.workspace_id, args.shot_id))
+      if (outputPath === undefined) {
+        throw new Error(
+          `render_scene: no registered output path for workspace_id=${JSON.stringify(args.workspace_id)} ` +
+          `shot_id=${JSON.stringify(args.shot_id)} — author_visual_scene must be the one starting this shot's ` +
+          'subagent (it registers the trusted output path before spawning).',
+        )
+      }
+      const path = await renderScene(args.workspace_id, args.shot_id, config.projectRoot, outputPath)
       return { path }
     },
   }))
@@ -284,7 +321,12 @@ export function apply(ctx: Context, config: Config): void {
       'by delegating composition to a kimi-k2.7-code scene-authoring subagent.',
     parameters: {
       shot_brief: { type: 'object', additionalProperties: true, required: true, description: 'One entry from shot_briefs.json.' },
-      workspace_id: { type: 'string', required: true, description: 'Run workspace id.' },
+      workspace_id: { type: 'string', required: true, description: 'Run workspace id (namespaces this shot\'s HyperFrames composition files).' },
+      workspace: {
+        type: 'string',
+        required: true,
+        description: 'Absolute path to the run workspace, from stage_init\'s `workspace` output. The rendered mp4 lands at `<workspace>/shots/shot_<shot_id>.mp4`, matching what stage_visuals_finalize expects.',
+      },
     },
     output: {
       schema: {
@@ -308,6 +350,9 @@ export function apply(ctx: Context, config: Config): void {
         projectRoot: config.projectRoot,
         existsSync,
         renderFallbackScene,
+        registerOutputPath: (workspaceId, shotId, outputPath) => {
+          outputPathsByShot.set(shotKey(workspaceId, shotId), outputPath)
+        },
       })
       // Unlike `@hrsu/dsh-tool-shorts-stage` (whose output schema is an open
       // `additionalProperties: true` object, inferring `Record<string, JsonValue>`), this tool's

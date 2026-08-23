@@ -69,9 +69,10 @@ describe('authorVisualScene', () => {
     })
     const renderFallbackScene = vi.fn()
     const existsSyncMock = vi.fn().mockReturnValue(true)
+    const registerOutputPath = vi.fn()
 
     const result = await authorVisualScene(
-      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42' },
+      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42', workspace: '/workspace' },
       {
         subagents: { start },
         subagentProviderName: 'spawn',
@@ -81,6 +82,7 @@ describe('authorVisualScene', () => {
         projectRoot: '/project',
         existsSync: existsSyncMock,
         renderFallbackScene,
+        registerOutputPath,
       },
     )
 
@@ -91,14 +93,18 @@ describe('authorVisualScene', () => {
     }))
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(renderFallbackScene).not.toHaveBeenCalled()
+    // The mp4 must land under the Python run WORKSPACE's shots/ dir (matching what
+    // cmd_visuals_finalize expects), never under projectRoot/output/ (Fix 1).
+    const expectedMp4Path = join('/workspace', 'shots', 'shot_3.mp4')
+    expect(registerOutputPath).toHaveBeenCalledWith('run-42', '3', expectedMp4Path)
     expect(result).toEqual({
-      mp4_path: join('/project', 'output', 'run-42', 'shots', 'shot_3.mp4'),
+      mp4_path: expectedMp4Path,
       attempts: 1,
       used_fallback: false,
     })
   })
 
-  it('falls back after two failed subagent-spawn attempts and calls renderFallbackScene with the right caption', async () => {
+  it('falls back after two failed subagent-spawn attempts and calls renderFallbackScene with the right caption and duration', async () => {
     const dispose = vi.fn().mockResolvedValue(undefined)
     const start = vi.fn().mockResolvedValue({
       id: 'child-1',
@@ -106,11 +112,12 @@ describe('authorVisualScene', () => {
       result: Promise.resolve(erroredResult('render_scene: missing data-duration')),
       dispose,
     })
-    const renderFallbackScene = vi.fn().mockResolvedValue('/project/output/run-42/shots/shot_4.mp4')
+    const renderFallbackScene = vi.fn().mockResolvedValue('/workspace/shots/shot_4.mp4')
     const existsSyncMock = vi.fn().mockReturnValue(false)
+    const registerOutputPath = vi.fn()
 
     const result = await authorVisualScene(
-      { shot_brief: STAT_BRIEF, workspace_id: 'run-42' },
+      { shot_brief: STAT_BRIEF, workspace_id: 'run-42', workspace: '/workspace' },
       {
         subagents: { start },
         subagentProviderName: 'spawn',
@@ -120,6 +127,7 @@ describe('authorVisualScene', () => {
         projectRoot: '/project',
         existsSync: existsSyncMock,
         renderFallbackScene,
+        registerOutputPath,
       },
     )
 
@@ -128,13 +136,14 @@ describe('authorVisualScene', () => {
     // Second attempt's prompt carries the first attempt's failure reason forward.
     const secondCallPrompt = start.mock.calls[1][1].prompt[0].text as string
     expect(secondCallPrompt).toContain('render_scene: missing data-duration')
-    const expectedMp4Path = join('/project', 'output', 'run-42', 'shots', 'shot_4.mp4')
+    const expectedMp4Path = join('/workspace', 'shots', 'shot_4.mp4')
     expect(renderFallbackScene).toHaveBeenCalledWith(
       'run-42',
       '4',
       '/project',
       expectedMp4Path,
       '38%',
+      STAT_BRIEF.duration_s,
     )
     expect(result).toEqual({
       mp4_path: expectedMp4Path,
@@ -151,12 +160,12 @@ describe('authorVisualScene', () => {
       result: Promise.resolve(completedResult()),
       dispose,
     })
-    const renderFallbackScene = vi.fn().mockResolvedValue('/project/output/run-42/shots/shot_3.mp4')
+    const renderFallbackScene = vi.fn().mockResolvedValue('/workspace/shots/shot_3.mp4')
     // The child claims a normal stop, but the mp4 never actually landed on disk.
     const existsSyncMock = vi.fn().mockReturnValue(false)
 
     const result = await authorVisualScene(
-      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42' },
+      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42', workspace: '/workspace' },
       {
         subagents: { start },
         subagentProviderName: 'spawn',
@@ -166,6 +175,7 @@ describe('authorVisualScene', () => {
         projectRoot: '/project',
         existsSync: existsSyncMock,
         renderFallbackScene,
+        registerOutputPath: vi.fn(),
       },
     )
 
@@ -177,7 +187,7 @@ describe('authorVisualScene', () => {
   it('throws when no parent agent is available to spawn from', async () => {
     const start = vi.fn()
     await expect(authorVisualScene(
-      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42' },
+      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42', workspace: '/workspace' },
       {
         subagents: { start },
         subagentProviderName: 'spawn',
@@ -187,6 +197,7 @@ describe('authorVisualScene', () => {
         projectRoot: '/project',
         existsSync: vi.fn(),
         renderFallbackScene: vi.fn(),
+        registerOutputPath: vi.fn(),
       },
     )).rejects.toThrow(/no parent agent/i)
     expect(start).not.toHaveBeenCalled()
