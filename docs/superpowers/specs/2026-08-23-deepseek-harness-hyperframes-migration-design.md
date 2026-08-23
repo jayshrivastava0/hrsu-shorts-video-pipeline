@@ -147,10 +147,17 @@ is not done — it is broken, even if a video file exists at the end.
 ## Migration phases
 
 1. Install/configure DeepSeek Harness + Ollama model plugin in `HRSU Shorts`; verify a trivial
-   tool call round-trips end to end.
+   text round-trip end to end (implemented 2026-08-23 — see
+   `docs/superpowers/plans/2026-08-23-harness-bootstrap-ollama-plugin.md` — delivered as a plain
+   text reply, not a tool call: the harness composition registers no tool plugins yet, and the
+   adapter sends no `tools` array). Before Phase 2 begins, the harness's Ollama adapter needs
+   tool-call support added (request `tools`, parse `tool_calls` in the response), and the pinned
+   model needs to change — `gemma3:4b` does not support tool calling in Ollama at all.
 2. Refactor shorts_engine stages into `stages/<stage>.py` CLI subcommands; wrap each as a harness
    tool; get the harness driving the *existing* renderer/assembly end-to-end (orchestration swap
-   only, no visual changes yet) — regression-check against a known-good prior dry run.
+   only, no visual changes yet) — regression-check against a known-good prior dry run. This phase
+   is the first one that actually requires tool calls; do not start it before Phase 1's follow-up
+   above (adapter tool-call support + a tool-calling-capable model) is in place.
 3. Build the `hyperframes_scenes/` template library and the `broll_acquire` tool plugin; swap
    `visuals`/`assembled` stages to HyperFrames; re-verify never-blank/never-unverified against
    real rendered pixels, not the old renderer's output.
