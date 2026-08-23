@@ -140,13 +140,21 @@ def cmd_visuals_prepare(args: argparse.Namespace) -> int:
     try:
         shots = json.loads((workspace / "shotlist.json").read_text(encoding="utf-8"))["shots"]
         post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
+        first_beat = shots[0]["beat"]
+        prev_beat = None
         briefs = []
         for shot in shots:
             rtype, payload, prov = resolve_shot(shot, ctx, post)
+            fade = (
+                config.TRANSITION_FADE_S
+                if (shot["beat"] != prev_beat and shot["beat"] != first_beat)
+                else 0.0
+            )
+            prev_beat = shot["beat"]
             briefs.append({
                 "shot_id": shot["id"], "beat": shot["beat"], "type": rtype,
                 "payload": payload, "duration_s": shot["duration_s"],
-                "fade_in_s": config.TRANSITION_FADE_S if shot["beat"] != shots[0]["beat"] else 0.0,
+                "fade_in_s": fade,
                 "provenance": prov,
             })
     except Exception as exc:

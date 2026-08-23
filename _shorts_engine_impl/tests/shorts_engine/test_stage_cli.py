@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from shorts_engine import config
+
 FIXTURE_HTML = Path(__file__).parent / "fixtures" / "nitrate_post.html"
 
 
@@ -144,6 +146,40 @@ def test_visuals_prepare_writes_shot_briefs_without_checkpointing(tmp_path):
     # Manifest must NOT have advanced past audio — visuals-prepare never checkpoints.
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["last_ok_status"] == "audio"
+
+
+def test_visuals_prepare_fade_in_s_only_fades_on_real_beat_transitions(tmp_path):
+    # Regression test: fade_in_s must be computed by tracking the *previous* shot's
+    # beat across the loop (matching shots_engine/stages/visuals.py:run()'s prev_beat
+    # logic), not by comparing every shot to the very first shot's beat. With beats
+    # [hook, hook, body, body, hook], a naive "!= first_beat" comparison would
+    # incorrectly fade the second "body" shot (since "body" != "hook") even though it
+    # is not a beat transition — the correct sequence only fades at index 2, where the
+    # beat actually changes from "hook" to "body".
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"]
+    manifest_path = Path(workspace) / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    beats = ["hook", "hook", "body", "body", "hook"]
+    (Path(workspace) / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": str(i + 1), "beat": beat, "type": "HEADLINE_CARD",
+         "payload": {"text": f"Test headline {i + 1}"}, "duration_s": 2.5}
+        for i, beat in enumerate(beats)
+    ]}))
+    (Path(workspace) / "post.json").write_text(json.dumps({"images": []}))
+
+    result = run_cli(["visuals-prepare", "--workspace", workspace])
+    assert result.returncode == 0, result.stderr
+
+    briefs = json.loads((Path(workspace) / "shot_briefs.json").read_text())
+    fades = [brief["fade_in_s"] for brief in briefs]
+    assert fades == [0.0, 0.0, config.TRANSITION_FADE_S, 0.0, 0.0]
 
 
 def test_visuals_finalize_checkpoints_when_all_shots_present_and_nonblank(tmp_path, monkeypatch):
