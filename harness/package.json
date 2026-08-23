@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "dsh": "node --import tsx/esm node_modules/@deepseek-ai/dsh/lib/bin.js"
   },
