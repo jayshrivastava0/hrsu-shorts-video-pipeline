@@ -44,6 +44,10 @@ class TestPhase2Constants:
         import video_agent.config as vac
         assert vac.SMART_TEXT_MODEL == config.SMART_TEXT_MODEL
 
+    def test_main_website_derives_from_brand_facts(self):
+        import video_agent.config as vac
+        assert vac.MAIN_WEBSITE == "https://hrsuindore.com"
+
     def test_domain_lists_match_spec(self):
         from shorts_engine import config
         for d in ("springer.com", "mdpi.com", "wiley.com", "arxiv.org", "doi.org",

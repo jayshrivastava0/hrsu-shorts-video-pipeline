@@ -1,10 +1,12 @@
 """
 video_agent configuration.
-Imports shared brand/region values from the root config.py.
+Imports shared brand values from brand_facts.yaml.
 All video-specific knobs live here.
 """
 import os
 from pathlib import Path as _Path
+
+import yaml as _yaml
 
 # ── Load .env from project root (no-op if file absent) ────────────────────
 _PROJECT_ROOT = _Path(__file__).parent.parent
@@ -26,10 +28,15 @@ os.environ["TEMP"]   = str(_TMP)   # moviepy / ffmpeg temp files
 os.environ["TMP"]    = str(_TMP)
 os.environ["TMPDIR"] = str(_TMP)
 
-from config import (
-    BLOG_STYLE_TEMPLATE, REGION_POSTING_SCHEDULE, MAIN_WEBSITE,
-    COMPANY_NAME, CALCIUM_NITRATE_APPLICATIONS,
-)
+# MAIN_WEBSITE (the only one of these values any code in this repo actually
+# consumes — see youtube_packager.py's CTA line) previously came from an
+# `import config` at the repo root that belongs to a sibling repo
+# (hrsu-blog-publishing) this pipeline was split out of and never carried
+# over. Read it from this repo's own brand_facts.yaml instead.
+_BRAND_FACTS_PATH = _PROJECT_ROOT / "brand_facts.yaml"
+with open(_BRAND_FACTS_PATH, encoding="utf-8") as _f:
+    _brand_facts = _yaml.safe_load(_f)
+MAIN_WEBSITE = f"https://{_brand_facts['domain']}"
 
 # ─── Format ────────────────────────────────────────────────────────────────
 SHORT_FORMAT = {
