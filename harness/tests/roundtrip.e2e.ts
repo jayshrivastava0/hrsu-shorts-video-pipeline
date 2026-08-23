@@ -31,10 +31,13 @@ async function ollamaReachable(): Promise<boolean> {
  * than the one this composition builds.
  */
 describe('harness round trip', () => {
-  it('gets a real, non-empty response from the local model through the harness', async () => {
+  it('gets a real, non-empty response from the local model through the harness', async (ctx) => {
     if (!(await ollamaReachable())) {
-      console.warn('Ollama not reachable at OLLAMA_HOST/localhost:11434 — skipping round-trip test')
-      return
+      // `ctx.skip()` throws to abort the test and mark it "skipped" in the
+      // Vitest report. A bare `return` here would instead report a silent
+      // PASS with zero assertions run, hiding the fact that nothing was
+      // actually verified on a machine without a reachable Ollama server.
+      ctx.skip('Ollama not reachable at OLLAMA_HOST/localhost:11434 — skipping round-trip test')
     }
 
     const root = new Context()

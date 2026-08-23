@@ -17,3 +17,4 @@ output_live/
 output_torture/
 .worktrees/
 harness/.sessions/
+node_modules/
