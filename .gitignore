@@ -15,3 +15,4 @@ token.pickle
 output/
 output_live/
 output_torture/
+.worktrees/
