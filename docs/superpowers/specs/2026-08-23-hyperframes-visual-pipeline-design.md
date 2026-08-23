@@ -45,7 +45,9 @@ harness tools (`author_visual_scene` spawns a subagent, which only the harness/N
 This splits what used to be one atomic `stage_visuals.run()` call into three pieces: two Python
 bridge calls bookending N orchestrator-driven per-shot tool calls in between. `RunManifest` still
 checkpoints exactly once, at the end (`stage_visuals_finalize`) — `last_ok_status` stays at
-`shotlisted` for the whole shot-authoring loop, so this needs no manifest schema change:
+`audio` (the real immediate predecessor of `visuals` in `STATUS_ORDER`, not `shotlisted` —
+`audio` sits between them) for the whole shot-authoring loop, so this needs no manifest schema
+change:
 
 ```
 1. stage_visuals_prepare (Python, via stage_cli.py — NEW subcommand, replaces the old
