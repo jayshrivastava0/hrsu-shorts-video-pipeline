@@ -1,0 +1,194 @@
+import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { authorVisualScene, pickFallbackCaption, type ShotBrief } from '../src/index.ts'
+
+const HEADLINE_BRIEF: ShotBrief = {
+  shot_id: '3',
+  beat: 'hook',
+  type: 'HEADLINE_CARD',
+  payload: { text: 'Cold weather pours do not have to wait for spring.' },
+  duration_s: 2.5,
+  fade_in_s: 0.4,
+}
+
+const STAT_BRIEF: ShotBrief = {
+  shot_id: '4',
+  beat: 'body',
+  type: 'STAT_CARD',
+  payload: { stat: '38%' },
+  duration_s: 3,
+  fade_in_s: 0,
+}
+
+const NO_TEXT_FIELD_BRIEF: ShotBrief = {
+  shot_id: '5',
+  beat: 'transition',
+  type: 'B_ROLL',
+  payload: {},
+  duration_s: 1.5,
+  fade_in_s: 0,
+}
+
+function fakeAgent(): never {
+  // A `SubagentStartRequest.parent` is typed `Agent`, not `Agent | undefined` — the real API
+  // requires it. Tests only need a distinct object identity (never actually dereferenced by the
+  // mocked `subagents.start`), so an opaque cast stands in for a real `Agent`.
+  return {} as never
+}
+
+function completedResult(): { output: never[]; stopReason: 'completed' } {
+  return { output: [], stopReason: 'completed' }
+}
+
+function erroredResult(diagnostic: string): { output: never[]; stopReason: 'error'; diagnostic: string } {
+  return { output: [], stopReason: 'error', diagnostic }
+}
+
+describe('pickFallbackCaption', () => {
+  it('uses payload.text for HEADLINE_CARD', () => {
+    expect(pickFallbackCaption(HEADLINE_BRIEF)).toBe('Cold weather pours do not have to wait for spring.')
+  })
+
+  it('uses payload.stat for STAT_CARD', () => {
+    expect(pickFallbackCaption(STAT_BRIEF)).toBe('38%')
+  })
+
+  it('falls back to beat when the type has no obvious single text field', () => {
+    expect(pickFallbackCaption(NO_TEXT_FIELD_BRIEF)).toBe('transition')
+  })
+})
+
+describe('authorVisualScene', () => {
+  it('never touches the fallback path when the subagent-spawn succeeds on the first attempt', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockResolvedValue({
+      id: 'child-1',
+      localAgent: undefined,
+      result: Promise.resolve(completedResult()),
+      dispose,
+    })
+    const renderFallbackScene = vi.fn()
+    const existsSyncMock = vi.fn().mockReturnValue(true)
+
+    const result = await authorVisualScene(
+      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42' },
+      {
+        subagents: { start },
+        subagentProviderName: 'spawn',
+        agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
+        agent: fakeAgent(),
+        signal: new AbortController().signal,
+        projectRoot: '/project',
+        existsSync: existsSyncMock,
+        renderFallbackScene,
+      },
+    )
+
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(start).toHaveBeenCalledWith('spawn', expect.objectContaining({
+      agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
+      toolFilter: { allow: ['write_scene_file', 'render_scene'] },
+    }))
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(renderFallbackScene).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      mp4_path: join('/project', 'output', 'run-42', 'shots', 'shot_3.mp4'),
+      attempts: 1,
+      used_fallback: false,
+    })
+  })
+
+  it('falls back after two failed subagent-spawn attempts and calls renderFallbackScene with the right caption', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockResolvedValue({
+      id: 'child-1',
+      localAgent: undefined,
+      result: Promise.resolve(erroredResult('render_scene: missing data-duration')),
+      dispose,
+    })
+    const renderFallbackScene = vi.fn().mockResolvedValue('/project/output/run-42/shots/shot_4.mp4')
+    const existsSyncMock = vi.fn().mockReturnValue(false)
+
+    const result = await authorVisualScene(
+      { shot_brief: STAT_BRIEF, workspace_id: 'run-42' },
+      {
+        subagents: { start },
+        subagentProviderName: 'spawn',
+        agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
+        agent: fakeAgent(),
+        signal: new AbortController().signal,
+        projectRoot: '/project',
+        existsSync: existsSyncMock,
+        renderFallbackScene,
+      },
+    )
+
+    expect(start).toHaveBeenCalledTimes(2)
+    expect(dispose).toHaveBeenCalledTimes(2)
+    // Second attempt's prompt carries the first attempt's failure reason forward.
+    const secondCallPrompt = start.mock.calls[1][1].prompt[0].text as string
+    expect(secondCallPrompt).toContain('render_scene: missing data-duration')
+    const expectedMp4Path = join('/project', 'output', 'run-42', 'shots', 'shot_4.mp4')
+    expect(renderFallbackScene).toHaveBeenCalledWith(
+      'run-42',
+      '4',
+      '/project',
+      expectedMp4Path,
+      '38%',
+    )
+    expect(result).toEqual({
+      mp4_path: expectedMp4Path,
+      attempts: 2,
+      used_fallback: true,
+    })
+  })
+
+  it('treats a completed run whose output file never materialized as a failure (does not trust claimed success)', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined)
+    const start = vi.fn().mockResolvedValue({
+      id: 'child-1',
+      localAgent: undefined,
+      result: Promise.resolve(completedResult()),
+      dispose,
+    })
+    const renderFallbackScene = vi.fn().mockResolvedValue('/project/output/run-42/shots/shot_3.mp4')
+    // The child claims a normal stop, but the mp4 never actually landed on disk.
+    const existsSyncMock = vi.fn().mockReturnValue(false)
+
+    const result = await authorVisualScene(
+      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42' },
+      {
+        subagents: { start },
+        subagentProviderName: 'spawn',
+        agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
+        agent: fakeAgent(),
+        signal: new AbortController().signal,
+        projectRoot: '/project',
+        existsSync: existsSyncMock,
+        renderFallbackScene,
+      },
+    )
+
+    expect(start).toHaveBeenCalledTimes(2)
+    expect(result.used_fallback).toBe(true)
+    expect(result.attempts).toBe(2)
+  })
+
+  it('throws when no parent agent is available to spawn from', async () => {
+    const start = vi.fn()
+    await expect(authorVisualScene(
+      { shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42' },
+      {
+        subagents: { start },
+        subagentProviderName: 'spawn',
+        agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
+        agent: undefined,
+        signal: new AbortController().signal,
+        projectRoot: '/project',
+        existsSync: vi.fn(),
+        renderFallbackScene: vi.fn(),
+      },
+    )).rejects.toThrow(/no parent agent/i)
+    expect(start).not.toHaveBeenCalled()
+  })
+})
