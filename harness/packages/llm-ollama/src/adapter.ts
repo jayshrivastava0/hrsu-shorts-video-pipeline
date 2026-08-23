@@ -1,4 +1,4 @@
-import { LlmAdapter, LlmError, attributionHeaders } from '@deepseek-ai/dsh-llm'
+import { CallId, LlmAdapter, LlmError, attributionHeaders } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 
 export interface OllamaAdapterOptions {
@@ -68,6 +68,12 @@ export class OllamaAdapter extends LlmAdapter {
           stream: true,
           messages: toWireMessages(options),
           ...options.temperature === undefined ? {} : { options: { temperature: options.temperature } },
+          ...options.tools === undefined ? {} : {
+            tools: options.tools.map(tool => ({
+              type: 'function' as const,
+              function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+            })),
+          },
         }),
         signal: options.signal,
       })
@@ -97,6 +103,8 @@ export class OllamaAdapter extends LlmAdapter {
 
     yield { type: 'block-start', index: 0, blockType: 'text' }
     let text = ''
+    let nextIndex = 1
+    let sawToolCalls = false
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -110,11 +118,33 @@ export class OllamaAdapter extends LlmAdapter {
           const line = buffer.slice(0, newlineIndex).trim()
           buffer = buffer.slice(newlineIndex + 1)
           if (line.length === 0) continue
-          const parsed = JSON.parse(line) as { message?: { content?: string }; done?: boolean }
+          const parsed = JSON.parse(line) as {
+            message?: {
+              content?: string
+              tool_calls?: { function: { name: string; arguments: Record<string, unknown> } }[]
+            }
+            done?: boolean
+          }
           const delta = parsed.message?.content ?? ''
           if (delta.length > 0) {
             text += delta
             yield { type: 'text-delta', index: 0, text: delta }
+          }
+          const toolCalls = parsed.message?.tool_calls
+          if (toolCalls !== undefined && toolCalls.length > 0) {
+            sawToolCalls = true
+            for (const call of toolCalls) {
+              const index = nextIndex++
+              const id = CallId(`ollama-${index}`)
+              const argumentsJson = JSON.stringify(call.function.arguments)
+              yield { type: 'block-start', index, blockType: 'tool-call' }
+              yield { type: 'tool-call-delta', index, id, name: call.function.name, argumentsDelta: argumentsJson }
+              yield {
+                type: 'block-end',
+                index,
+                block: { type: 'tool-call', id, name: call.function.name, arguments: argumentsJson },
+              }
+            }
           }
         }
       }
@@ -122,6 +152,6 @@ export class OllamaAdapter extends LlmAdapter {
       throw new LlmError(`Ollama stream read failed: ${String(error)}`, 'TRANSPORT', { cause: error })
     }
     yield { type: 'block-end', index: 0, block: { type: 'text', text } }
-    yield { type: 'finish', reason: { kind: 'stop' } }
+    yield { type: 'finish', reason: sawToolCalls ? { kind: 'tool-calls' } : { kind: 'stop' } }
   }
 }
