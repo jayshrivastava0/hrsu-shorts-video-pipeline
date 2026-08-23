@@ -24,6 +24,8 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
 
 ## How to use your tools
 
+- Call `stage_init` once, first, with the blog URL to process — it creates the run workspace
+  every other tool needs. Pass its returned `workspace` value to every subsequent stage tool call.
 - Stage tools (`stage_ingest`, `stage_facts`, `stage_script`, `stage_shotlist`, `stage_audio`,
   `stage_visuals`, `stage_assemble`, `stage_verify`, `stage_package`) each wrap existing, tested
   Python logic. Pass them exactly the JSON shape they document; if a call fails, read the actual

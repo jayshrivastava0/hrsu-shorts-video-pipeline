@@ -28,6 +28,22 @@
     provider: ollama-local
     baseURL: !!js "process.env.OLLAMA_HOST ?? 'http://localhost:11434'"
 
+- id: tool-shorts-stage
+  name: '@hrsu/dsh-tool-shorts-stage'
+  config:
+    # `!!js "require('node:path').resolve(...)"` was tried first per plan and confirmed to fail
+    # the same way documented above for `persona`: `cordis-plugin-loader`'s `evaluate()` runs
+    # `with (ctx) { eval(expr) }` with no `require` in scope (this is ESM, no global `require`).
+    # Verified directly: with the `require(...)` form in place, `loader.await()` resolved without
+    # throwing (the failing entry is rolled back silently, not surfaced as a loader error), but
+    # the registered-tools list contained none of the `stage_*`/`publish` tools — only the
+    # baseline `skill`/`job_*` tools agent-spine registers itself. Switched to the
+    # `process.cwd()` string-concatenation fallback below and re-verified the same way: after
+    # this change, `stage_init`, `stage_ingest`, ..., `publish` all appear in the registered-tools
+    # list, and the resolved `shortsEngineCwd` matches `_shorts_engine_impl/`'s real path
+    # (confirmed by running `python -m shorts_engine.stage_cli` from that exact resolved cwd).
+    shortsEngineCwd: !!js "process.cwd() + '/../_shorts_engine_impl'"
+
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
@@ -41,7 +57,7 @@
     agents:
       - id: main
         provider: ollama-local
-        model: gemma3:4b
+        model: gemma4:31b-cloud
         cwd: !!js process.cwd()
     persona: |
       # HRSU Shorts Pipeline Agent
@@ -70,6 +86,8 @@
 
       ## How to use your tools
 
+      - Call `stage_init` once, first, with the blog URL to process — it creates the run workspace
+        every other tool needs. Pass its returned `workspace` value to every subsequent stage tool call.
       - Stage tools (`stage_ingest`, `stage_facts`, `stage_script`, `stage_shotlist`, `stage_audio`,
         `stage_visuals`, `stage_assemble`, `stage_verify`, `stage_package`) each wrap existing, tested
         Python logic. Pass them exactly the JSON shape they document; if a call fails, read the actual
