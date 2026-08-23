@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en" data-resolution="portrait">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1080px;
+        height: 1920px;
+        overflow: hidden;
+        background: #0a192f;
+      }
+      body {
+        font-family: "Inter", sans-serif;
+      }
+      .backdrop {
+        position: absolute;
+        inset: 0;
+        width: 1080px;
+        height: 1920px;
+        background: linear-gradient(180deg, #0a192f 0%, #0a1428 100%);
+      }
+      .brand-mark {
+        position: absolute;
+        top: 220px;
+        left: 0;
+        width: 1080px;
+        text-align: center;
+        font-family: Georgia, "Times New Roman", serif;
+        font-weight: 700;
+        font-size: 56px;
+        letter-spacing: 2px;
+        color: #d4af37;
+      }
+      .brand-tagline {
+        position: absolute;
+        top: 320px;
+        left: 90px;
+        width: 900px;
+        text-align: center;
+        font-family: Arial, "Segoe UI", sans-serif;
+        font-size: 30px;
+        color: #8892b0;
+      }
+      .rule {
+        position: absolute;
+        top: 920px;
+        left: 390px;
+        width: 300px;
+        height: 3px;
+        background: #d4af37;
+      }
+      .caption {
+        position: absolute;
+        top: 960px;
+        left: 90px;
+        width: 900px;
+        min-height: 400px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        font-family: Arial, "Segoe UI", sans-serif;
+        font-weight: 600;
+        font-size: 52px;
+        line-height: 1.4;
+        color: #ccd6f6;
+      }
+      .domain {
+        position: absolute;
+        bottom: 140px;
+        left: 0;
+        width: 1080px;
+        text-align: center;
+        font-family: Arial, "Segoe UI", sans-serif;
+        font-size: 28px;
+        letter-spacing: 1px;
+        color: #d4af37;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="generic-fallback"
+      data-start="0"
+      data-duration="6"
+      data-width="1080"
+      data-height="1920"
+    >
+      <div class="backdrop"></div>
+
+      <div id="brand-mark" class="clip" data-start="0" data-duration="6" data-track-index="0">
+        <div class="brand-mark">HRSU INDORE</div>
+        <div class="brand-tagline">Beyond Granules. The Purity of Powder.</div>
+        <div class="rule"></div>
+      </div>
+
+      <div id="caption" class="clip" data-start="0" data-duration="6" data-track-index="0">
+        <div class="caption">{{CAPTION}}</div>
+      </div>
+
+      <div id="domain" class="clip" data-start="0" data-duration="6" data-track-index="0">
+        <div class="domain">hrsuindore.com</div>
+      </div>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      tl.from("#brand-mark .brand-mark", { opacity: 0, y: -20, duration: 0.6 }, 0);
+      tl.from("#brand-mark .brand-tagline", { opacity: 0, y: -10, duration: 0.6 }, 0.15);
+      tl.from("#brand-mark .rule", { opacity: 0, scaleX: 0, duration: 0.5 }, 0.3);
+      tl.from("#caption .caption", { opacity: 0, y: 20, duration: 0.6 }, 0.4);
+      tl.from("#domain .domain", { opacity: 0, duration: 0.6 }, 0.6);
+      window.__timelines["generic-fallback"] = tl;
+    </script>
+  </body>
+</html>

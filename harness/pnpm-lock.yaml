@@ -81,6 +81,12 @@ importers:
         specifier: '*'
         version: 3.2.7(@types/node@26.2.0)(tsx@4.23.12)(yaml@2.9.0)
 
+  packages/tool-visual-scene:
+    devDependencies:
+      vitest:
+        specifier: '*'
+        version: 3.2.7(@types/node@26.2.0)(tsx@4.23.12)(yaml@2.9.0)
+
 packages:
 
   '@anthropic-ai/sdk@0.91.1':
