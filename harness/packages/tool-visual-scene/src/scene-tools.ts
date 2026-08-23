@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 function compositionsRoot(projectRoot: string): string {
   return join(projectRoot, 'compositions')
@@ -8,8 +8,18 @@ function compositionsRoot(projectRoot: string): string {
 
 function resolveScopedPath(workspaceId: string, shotId: string, projectRoot: string, ext: string): string {
   const root = compositionsRoot(projectRoot)
+  // First line of defense: a workspaceId/shotId should never legitimately be an
+  // absolute path. path.isAbsolute() correctly rejects drive-letter paths
+  // (C:\..., D:\...) and UNC paths (\\host\share\...) on Windows, which
+  // path.relative()-based checks alone do NOT catch across drives (relative()
+  // between different drives returns the absolute candidate unchanged, so a
+  // '..'-prefix check silently passes).
+  if (isAbsolute(workspaceId) || isAbsolute(shotId)) {
+    throw new Error(`writeSceneFile: resolved path is outside compositions/: ${join(root, workspaceId, `${shotId}${ext}`)}`)
+  }
   const candidate = resolve(root, workspaceId, `${shotId}${ext}`)
   const rel = relative(root, candidate)
+  // Second, redundant layer (defense in depth): catches relative traversal.
   if (rel.startsWith('..') || resolve(root, rel) !== candidate) {
     throw new Error(`writeSceneFile: resolved path is outside compositions/: ${candidate}`)
   }

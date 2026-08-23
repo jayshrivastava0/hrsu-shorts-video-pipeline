@@ -18,6 +18,30 @@ describe('writeSceneFile', () => {
     expect(() => writeSceneFile('run-42', '../../../etc/passwd', '<html></html>', projectRoot))
       .toThrow(/outside/i)
   })
+
+  it('rejects a cross-drive absolute shotId (Windows drive-letter bypass)', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    expect(() => writeSceneFile('run-42', 'D:\\evil\\payload', '<html></html>', projectRoot))
+      .toThrow(/outside/i)
+  })
+
+  it('rejects a UNC-path shotId (network share bypass)', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    expect(() => writeSceneFile('run-42', '\\\\attacker-host\\share\\evil', '<html></html>', projectRoot))
+      .toThrow(/outside/i)
+  })
+
+  it('rejects a cross-drive absolute workspaceId', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    expect(() => writeSceneFile('D:\\evil\\payload', 'shot-1', '<html></html>', projectRoot))
+      .toThrow(/outside/i)
+  })
+
+  it('rejects a UNC-path workspaceId', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    expect(() => writeSceneFile('\\\\attacker-host\\share\\evil', 'shot-1', '<html></html>', projectRoot))
+      .toThrow(/outside/i)
+  })
 })
 
 describe('renderScene', () => {
