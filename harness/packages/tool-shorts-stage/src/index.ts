@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
 import { runStageCli } from './stage-tool.ts'
 
 export { runStageCli } from './stage-tool.ts'
@@ -70,8 +70,10 @@ export function apply(ctx: Context, config: Config): void {
         // bridge CLI's arbitrary per-stage output shape); the tool's declared output schema is
         // an open `additionalProperties: true` object, so this is a safe narrowing, not a real
         // type hole — the registry re-validates the returned value against `output.schema`
-        // before it reaches the model.
-        return (await runStageCli(cliArgs, { cwd: config.shortsEngineCwd })) as never
+        // before it reaches the model. `Record<string, JsonValue>` is the type `execute`'s
+        // signature actually infers for this schema (see `InferValue` in dsh-tools'
+        // `schema.d.ts`), so narrow to that instead of `never`.
+        return (await runStageCli(cliArgs, { cwd: config.shortsEngineCwd })) as Record<string, JsonValue>
       },
     }))
   }
