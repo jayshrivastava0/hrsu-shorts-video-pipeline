@@ -40,33 +40,60 @@ compositions, rendered via `npx hyperframes render`), per the original migration
 
 ## Architecture
 
+Per-shot authoring must be driven by the **orchestrator agent**, not Python — Python cannot call
+harness tools (`author_visual_scene` spawns a subagent, which only the harness/Node side can do).
+This splits what used to be one atomic `stage_visuals.run()` call into three pieces: two Python
+bridge calls bookending N orchestrator-driven per-shot tool calls in between. `RunManifest` still
+checkpoints exactly once, at the end (`stage_visuals_finalize`) — `last_ok_status` stays at
+`shotlisted` for the whole shot-authoring loop, so this needs no manifest schema change:
+
 ```
-stage_visuals (existing Python stage, minimal changes)
-  for each shot in shotlist:
-    if BROLL or PAPER_CARD: run the EXISTING acquisition ladder (shorts_engine/sourcing/ladder.py,
-      shorts_engine/sourcing/paper_page.py) — UNCHANGED, this phase does not touch acquisition,
-      only what consumes its output. Acquired asset path (or "no verified match") becomes part of
-      the shot brief handed to the authoring subagent.
-    else: shot brief = { type, payload } straight from the shotlist (same shape as today's
-      RENDERERS dict input — HEADLINE_CARD's payload, STAT_CARD's payload, etc.)
+1. stage_visuals_prepare (Python, via stage_cli.py — NEW subcommand, replaces the old
+   monolithic stage_visuals.run())
+   for each shot in shotlist:
+     if BROLL or PAPER_CARD: run the EXISTING acquisition ladder
+       (shorts_engine/sourcing/ladder.py, shorts_engine/sourcing/paper_page.py) — UNCHANGED,
+       this phase does not touch acquisition, only what consumes its output.
+     shot brief = { shot_id, type, payload, acquired_asset_path? } — same data today's RENDERERS
+       dict already receives, plus the acquired asset path when relevant.
+   writes workspace/shot_briefs.json (a new intermediate artifact, NOT a manifest status advance)
+   returns { shot_briefs_path } to the orchestrator — this is what makes the shot briefs visible
+   to the agent driving step 2 without needing Python and the harness to share live process state.
 
-harness (new, this phase)
-  tool: author_visual_scene(shot_brief, workspace) -> { scene_html_path, render_status }
-    spawns a kimi-k2.7-code subagent, scoped tools:
-      - write_scene_file(shot_id, html) -> writes hyperframes_scenes/<workspace_id>/<shot_id>.html
-      - render_scene(shot_id) -> shells `npx hyperframes render` for that file, returns mp4 path
-    subagent receives the shot brief + this phase's authored composition conventions (see below)
-    as its system prompt/persona, and iterates write→render→(self-check) up to 2 attempts before
-    returning whatever it has — matching the existing harness persona's "don't retry blindly more
-    than twice" convention from Phase 1.
+2. author_visual_scene(shot_brief, workspace) [harness tool, NEW, this phase]
+   spawns a kimi-k2.7-code subagent, scoped tools:
+     - write_scene_file(shot_id, html) -> writes
+       hyperframes_scenes_project/compositions/<workspace_id>/<shot_id>.html (inside the ONE
+       shared HyperFrames project directory this phase creates once — see below; `hyperframes
+       render` operates on a project directory, not an arbitrary standalone file)
+     - render_scene(shot_id) -> shells `hyperframes render -c
+       compositions/<workspace_id>/<shot_id>.html -o <workspace>/shots/<shot_id>.mp4
+       --resolution portrait` (1080x1920, matching config.CANVAS_W/H exactly — confirmed against
+       the real installed CLI's `--resolution` flag), returns the rendered mp4 path
+   subagent receives the shot brief + this phase's authored composition conventions (see below)
+   as its system prompt/persona, and iterates write→render→(self-check) up to 2 attempts before
+   returning whatever it has — matching the existing harness persona's "don't retry blindly more
+   than twice" convention from Phase 1.
+   Orchestrator calls this once per shot in shot_briefs.json, sequentially.
 
-  never-blank / never-unverified enforcement (orchestrator-level, unchanged invariant):
-    orchestrator calls the EXISTING vision-judge (same describe-then-match check already used for
-    acquired b-roll) against the actual rendered mp4's sampled frame(s). On failure: retry
-    author_visual_scene with the judge's rejection reason appended to the shot brief, up to 2
-    retries total (matching the persona's existing "don't retry blindly more than twice"
-    convention); on exhaustion: fall back to a single hand-authored generic HyperFrames template
-    (the one remaining pre-built template this phase needs — the never-blank safety net).
+   never-blank / never-unverified enforcement (orchestrator-level, unchanged invariant):
+     orchestrator calls the EXISTING vision-judge (same describe-then-match check already used for
+     acquired b-roll) against the actual rendered mp4's sampled frame(s). On failure: retry
+     author_visual_scene with the judge's rejection reason appended to the shot brief, up to 2
+     retries total; on exhaustion: fall back to a single hand-authored generic HyperFrames template
+     (the one remaining pre-built template this phase needs — the never-blank safety net).
+
+3. stage_visuals_finalize (Python, via stage_cli.py — NEW subcommand)
+   verifies every shot in shot_briefs.json has a corresponding rendered mp4 in workspace/shots/
+   (fail loud if any are missing — the orchestrator forgot a shot or a subagent silently failed),
+   checkpoints manifest to status="visuals" with the shot mp4 paths as artifacts.
+```
+
+**The shared HyperFrames project.** `hyperframes init` is run ONCE (this phase's first task, not
+per-run) to create `harness/hyperframes_scenes_project/` — a portrait-resolution (1080x1920)
+project directory that every run's per-shot compositions live inside, under
+`compositions/<workspace_id>/<shot_id>.html`. Runs don't each get their own HyperFrames project;
+they get their own subdirectory within the one shared project.
 
 stage_assemble (rewritten this phase)
   Instead of ffmpeg concat + ASS burn + logo overlay + progress-bar draw:
@@ -126,12 +153,30 @@ receive. This persona is a deliverable of this phase's first task, not an aftert
   Task 5 Step 4 pattern (report findings honestly, not a pass/fail gate), except for one automated
   live test analogous to Phase 1/2's `roundtrip.e2e.ts`.
 
-## Open items for the implementation plan (not resolved here, deferred to writing-plans)
+## Resolved during spec research (verified against real, installed/fetched sources)
 
-- Exact `hyperframes_scenes/` directory structure and naming for the "generic fallback template."
-- Whether `npx hyperframes` needs installing per-workspace or once globally in the harness's own
-  `node_modules` (likely the latter, consistent with Phase 1/2's dependency conventions) — verify
-  against HyperFrames' actual install instructions before writing the plan's first task.
-- Exact DSH subagent API (`dsh-tool-subagent`'s config shape for spawning with a different
-  provider/model per call) — needs the same "read the real installed package" discipline Phase 1/2
-  applied to `dsh-tools`/`dsh-llm`, not assumed from this design doc's sketch.
+- **HyperFrames CLI is real and published** (`hyperframes` on npm, v0.8.10, maintained by HeyGen's
+  own team; depends on `puppeteer-core` + `sharp`, confirming the headless-Chrome-capture
+  architecture). Installed as a `harness/` devDependency, same convention as Phase 1/2.
+- **`render` operates on a project directory**, not a standalone file — confirmed via the real
+  `hyperframes render --help`: `USAGE hyperframes render [OPTIONS] [DIR]`, with `-c/--composition`
+  selecting a specific file within that project. This is why the architecture above uses one
+  shared project directory rather than a fresh `init` per run.
+- **`--variables`/`--variables-file`** (JSON merged over `data-composition-variables` defaults) and
+  **`--resolution portrait`** (1080x1920, exact match for `config.CANVAS_W/H`) are both real,
+  confirmed CLI flags.
+- **`lint`/`validate`/`check`** are real subcommands ("Runtime-validate a composition in headless
+  Chrome (JS errors, missing assets, contrast)") — worth using inside `render_scene` before the
+  actual render, as a fast pre-check that catches broken HTML/GSAP without spending a full render
+  cycle. Left as an implementation detail for the plan, not required by this spec.
+- **`dsh-tool-subagent`'s config shape** for a differently-modeled child is real:
+  `agentOptions: { model, maxTokens }` overrides the parent's provider/model for the spawned
+  child, and `toolFilter` restricts which tools it can see — confirmed against the real package
+  README, not assumed.
+
+## Open items for the implementation plan (still deferred to writing-plans)
+
+- Exact directory naming/content for the "generic fallback template" HTML.
+- Exact `write_scene_file`'s path-scoping enforcement mechanism (reject any path escaping
+  `compositions/<workspace_id>/`) — a straightforward check, but the plan should show the real
+  code, not describe it.
