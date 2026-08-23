@@ -4,6 +4,9 @@
   "version": "0.0.1",
   "type": "module",
   "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "scripts": {
     "dsh": "node --import tsx/esm node_modules/@deepseek-ai/dsh/lib/bin.js"
   },
@@ -17,6 +20,9 @@
     "@hrsu/dsh-llm-ollama": "workspace:*"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/cordis-plugin-include": "1.0.6",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.2",
     "tsx": "^4",
     "typescript": "^5",
     "vitest": "^3"

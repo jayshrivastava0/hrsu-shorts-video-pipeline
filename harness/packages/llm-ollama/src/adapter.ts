@@ -38,8 +38,19 @@ function toWireMessages(options: GenerateOptions): OllamaWireMessage[] {
  * this first version only needs to prove a text round-trip.
  */
 export class OllamaAdapter extends LlmAdapter {
-  constructor(private readonly config: OllamaAdapterOptions) {
+  // Not a TS constructor-parameter-property shorthand: Cordis's plugin loader
+  // dynamically `import()`s this package's raw `src/index.ts` at runtime (its
+  // own README's usage example loads plugins by module specifier, not from a
+  // prebuilt `lib/`), and under Node's native type-stripping loader (no
+  // bundler/transform involved) a parameter property throws
+  // `TypeScript parameter property is not supported in strip-only mode` —
+  // confirmed empirically while getting Task 4's round-trip test to boot.
+  // Plain field assignment strips cleanly with no behavior change.
+  private readonly config: OllamaAdapterOptions
+
+  constructor(config: OllamaAdapterOptions) {
     super()
+    this.config = config
   }
 
   override providerInfo(provider: string) {

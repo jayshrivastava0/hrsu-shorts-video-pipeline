@@ -31,6 +31,13 @@
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
+    # Required by the installed @deepseek-ai/dsh-agent-spine-demo@0.1.1-rc.2 schema
+    # (`workspaceContext: z.union([z.const(false), workspaceContext.Config]).required()`
+    # — verified against the installed package's lib/index.js; not documented as
+    # optional despite the README's prose). 65536 bytes matches the same cap used
+    # by the shipped `standard`/`cordis` dsh agent presets' own agent-instructions row.
+    workspaceContext:
+      maxBytes: 65536
     agents:
       - id: main
         provider: ollama-local
