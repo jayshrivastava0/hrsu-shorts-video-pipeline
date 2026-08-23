@@ -1,4 +1,4 @@
-import { LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmAdapter, LlmError, attributionHeaders } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 
 export interface OllamaAdapterOptions {
@@ -51,7 +51,7 @@ export class OllamaAdapter extends LlmAdapter {
     try {
       response = await fetch(`${this.config.baseURL()}/api/chat`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...attributionHeaders() },
         body: JSON.stringify({
           model: options.model,
           stream: true,
