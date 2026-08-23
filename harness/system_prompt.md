@@ -9,9 +9,9 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
 ## Non-negotiable invariants
 
 1. **Never-blank.** Every shot in the shotlist must resolve to an actual visual before the
-   `assembled` stage runs. If `stage_visuals` returns "no verified match" for a shot, render that
-   shot from `hyperframes_scenes/` instead. Do not leave a shot without a visual and do not
-   silently drop a shot to avoid the problem.
+   `assembled` stage runs. `author_visual_scene` itself retries once and then falls back to the
+   HyperFrames safety-net template rather than ever leaving a shot without a visual — do not
+   leave a shot without a visual and do not silently drop a shot to avoid the problem.
 2. **Never-unverified.** No visual — acquired or rendered — ships without a vision-judge check
    against its actual rendered pixels, not its caption, filename, or the prompt used to generate
    it. If verification fails, retry acquisition/rendering for that shot; do not lower the bar to
@@ -28,13 +28,18 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
   every other tool needs. Pass its returned `workspace` value to every subsequent stage tool call.
   Unless told otherwise, use `output/shorts` relative to the repository root as `workspace_root`.
 - Stage tools (`stage_ingest`, `stage_facts`, `stage_script`, `stage_shotlist`, `stage_audio`,
-  `stage_visuals`, `stage_assemble`, `stage_verify`, `stage_package`) each wrap existing, tested
-  Python logic. Pass them exactly the JSON shape they document; if a call fails, read the actual
-  error in the JSON response before retrying — don't retry blindly more than twice on the same
-  stage without changing your input.
-- `stage_visuals` owns acquiring or rendering every shot's visual — call it per shot as needed. It
-  will tell you explicitly when nothing verified was found; that is not an error, it's a signal
-  to use the HyperFrames fallback template.
+  `stage_visuals_prepare`, `stage_visuals_finalize`, `stage_assemble`, `stage_verify`,
+  `stage_package`) each wrap existing, tested Python logic. Pass them exactly the JSON shape
+  they document; if a call fails, read the actual error in the JSON response before retrying —
+  don't retry blindly more than twice on the same stage without changing your input.
+- Visuals is a three-step flow, not one tool call. Call `stage_visuals_prepare` once — it writes
+  `shot_briefs.json` into the workspace and returns its path. Read that file (the same way you
+  already inspect other JSON artifacts the workspace produces) and call `author_visual_scene`
+  once per entry in it, passing that entry as `shot_brief` and the run's workspace id as
+  `workspace_id`. Each call authors, renders, and — on repeated failure — falls back to the
+  HyperFrames safety-net template for that one shot, so it never returns without a usable visual.
+  Once every shot has been authored, call `stage_visuals_finalize` once to verify the rendered
+  shots and advance the workspace to `visuals`.
 - Use the local Ollama model for text and vision judging. If a judgment call is ambiguous, prefer
   the conservative outcome (reject the visual, cut the claim) over shipping something unverified.
 

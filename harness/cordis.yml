@@ -44,6 +44,47 @@
     # (confirmed by running `python -m shorts_engine.stage_cli` from that exact resolved cwd).
     shortsEngineCwd: !!js "process.cwd() + '/../_shorts_engine_impl'"
 
+# `@deepseek-ai/dsh-subagent`'s default export is the `SubagentRuntime` Cordis `Service` class
+# itself (verified by reading the installed package's `lib/index.js`: `var SubagentRuntime = class
+# extends Service { constructor(ctx) { super(ctx, "subagents") ... } }`, exported both named and as
+# `default`). It is not a `{name, inject, apply}` plugin object — `cordis-plugin-loader` accepts a
+# bare Service class as a plugin too (`ctx.plugin(ServiceClass)` is a documented Cordis pattern),
+# so registering it here by package name mounts the class and installs `ctx.subagents`. Nothing
+# else in this composition (`dsh-agent-spine-demo` included) registers this service — confirmed by
+# grepping its installed `lib/index.js` for `subagents`, which found no match.
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+# The in-process spawn provider (`@deepseek-ai/dsh-subagent-spawn-in-process`, confirmed via its
+# installed README/lib/index.js: exported `name: "subagent-spawn-in-process"`, `inject:
+# ["subagents"]`, `Config: { providerName: z.string().default("spawn") }`, `apply(ctx, config) {
+# ctx.subagents.registerProvider(new SpawnInProcessProvider(config.providerName)) }`) registers
+# itself under `providerName` (default `'spawn'`, `@hrsu/dsh-tool-visual-scene`'s
+# `Config.subagentProviderName` default too) on the `ctx.subagents` registry the `subagent` entry
+# above installs — so no explicit `providerName` override is needed here.
+- id: subagent-spawn
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+
+- id: tool-visual-scene
+  name: '@hrsu/dsh-tool-visual-scene'
+  config:
+    # Same `!!js "process.cwd() + '/...'"` fallback pattern as `tool-shorts-stage.shortsEngineCwd`
+    # above (`!!js require(...)` confirmed broken in this harness version — see that entry's
+    # comment). Points at the HyperFrames project Task 1 initialized under `harness/`.
+    projectRoot: !!js "process.cwd() + '/hyperframes_scenes_project'"
+    agentOptions:
+      provider: ollama-local
+      # `kimi-k2.7-code` bare has no local pull and 404s immediately against this machine's
+      # Ollama server (confirmed via `curl .../api/show`: "model 'kimi-k2.7-code:latest' not
+      # found") — Step 7's exploratory check hit exactly this and fell back to the safety-net
+      # template on both attempts. `ollama pull kimi-k2.7-code` itself reports the real name:
+      # "kimi-k2.7-code:cloud" is available. Same cloud-routing convention `agent-spine`'s own
+      # `agents[0].model: gemma4:31b-cloud` already uses in this file, just with the cloud
+      # designation as an explicit `:cloud` tag instead of embedded in the bare name (that's
+      # Ollama's own naming for this particular model, not a choice made here).
+      model: kimi-k2.7-code:cloud
+      maxTokens: 8192
+
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
@@ -71,9 +112,9 @@
       ## Non-negotiable invariants
 
       1. **Never-blank.** Every shot in the shotlist must resolve to an actual visual before the
-         `assembled` stage runs. If `stage_visuals` returns "no verified match" for a shot, render that
-         shot from `hyperframes_scenes/` instead. Do not leave a shot without a visual and do not
-         silently drop a shot to avoid the problem.
+         `assembled` stage runs. `author_visual_scene` itself retries once and then falls back to the
+         HyperFrames safety-net template rather than ever leaving a shot without a visual — do not
+         leave a shot without a visual and do not silently drop a shot to avoid the problem.
       2. **Never-unverified.** No visual — acquired or rendered — ships without a vision-judge check
          against its actual rendered pixels, not its caption, filename, or the prompt used to generate
          it. If verification fails, retry acquisition/rendering for that shot; do not lower the bar to
@@ -90,13 +131,18 @@
         every other tool needs. Pass its returned `workspace` value to every subsequent stage tool call.
         Unless told otherwise, use `output/shorts` relative to the repository root as `workspace_root`.
       - Stage tools (`stage_ingest`, `stage_facts`, `stage_script`, `stage_shotlist`, `stage_audio`,
-        `stage_visuals`, `stage_assemble`, `stage_verify`, `stage_package`) each wrap existing, tested
-        Python logic. Pass them exactly the JSON shape they document; if a call fails, read the actual
-        error in the JSON response before retrying — don't retry blindly more than twice on the same
-        stage without changing your input.
-      - `stage_visuals` owns acquiring or rendering every shot's visual — call it per shot as needed. It
-        will tell you explicitly when nothing verified was found; that is not an error, it's a signal
-        to use the HyperFrames fallback template.
+        `stage_visuals_prepare`, `stage_visuals_finalize`, `stage_assemble`, `stage_verify`,
+        `stage_package`) each wrap existing, tested Python logic. Pass them exactly the JSON shape
+        they document; if a call fails, read the actual error in the JSON response before retrying —
+        don't retry blindly more than twice on the same stage without changing your input.
+      - Visuals is a three-step flow, not one tool call. Call `stage_visuals_prepare` once — it writes
+        `shot_briefs.json` into the workspace and returns its path. Read that file (the same way you
+        already inspect other JSON artifacts the workspace produces) and call `author_visual_scene`
+        once per entry in it, passing that entry as `shot_brief` and the run's workspace id as
+        `workspace_id`. Each call authors, renders, and — on repeated failure — falls back to the
+        HyperFrames safety-net template for that one shot, so it never returns without a usable visual.
+        Once every shot has been authored, call `stage_visuals_finalize` once to verify the rendered
+        shots and advance the workspace to `visuals`.
       - Use the local Ollama model for text and vision judging. If a judgment call is ambiguous, prefer
         the conservative outcome (reject the visual, cut the claim) over shipping something unverified.
 

@@ -18,6 +18,19 @@ interface StageToolSpec {
   description: string
   /** `undefined` for the `init` operation (blog_url/workspace_root replace the `--workspace` arg). */
   stageName?: string
+  /**
+   * Bridge-CLI subcommand to invoke instead of `run-stage <stageName>`. Used by the two
+   * `visuals-prepare`/`visuals-finalize` entries, which `stage_cli.py` exposes as their own
+   * top-level subcommands (see `_shorts_engine_impl/shorts_engine/stage_cli.py`'s `main()`),
+   * not as `run-stage`-dispatched stage names.
+   */
+  cliVerb?: string
+  /**
+   * `visuals-finalize`'s argparse subparser (`stage_cli.py`) does not accept `--local-only` at
+   * all (it does no model-tier work — it only verifies already-rendered mp4s), unlike every
+   * other per-stage tool. Set `true` to omit the `local_only` parameter for that one tool.
+   */
+  noLocalOnly?: boolean
 }
 
 const STAGE_TOOLS: StageToolSpec[] = [
@@ -27,7 +40,19 @@ const STAGE_TOOLS: StageToolSpec[] = [
   { toolName: 'stage_script', description: 'Generate the narration script from the factsheet.', stageName: 'script' },
   { toolName: 'stage_shotlist', description: 'Break the script into a shot-by-shot list.', stageName: 'shotlist' },
   { toolName: 'stage_audio', description: 'Synthesize per-beat voiceover audio.', stageName: 'audio' },
-  { toolName: 'stage_visuals', description: 'Acquire or render each shot\'s visual.', stageName: 'visuals' },
+  {
+    toolName: 'stage_visuals_prepare',
+    description: 'Break the shotlist into per-shot visual authoring briefs (shot_briefs.json).',
+    stageName: 'visuals-prepare',
+    cliVerb: 'visuals-prepare',
+  },
+  {
+    toolName: 'stage_visuals_finalize',
+    description: 'Verify every shot\'s rendered visual (never-blank check) and advance the workspace to visuals.',
+    stageName: 'visuals-finalize',
+    cliVerb: 'visuals-finalize',
+    noLocalOnly: true,
+  },
   { toolName: 'stage_assemble', description: 'Assemble shots, audio, and captions into one video.', stageName: 'assemble' },
   { toolName: 'stage_verify', description: 'Run the vision-judge/grounding verification gates.', stageName: 'verify' },
   { toolName: 'stage_package', description: 'Package the verified video for publishing review.', stageName: 'package' },
@@ -52,7 +77,7 @@ const STAGE_TOOLS: StageToolSpec[] = [
  * and `publish` (publishing isn't a model call either).
  */
 function supportsLocalOnly(spec: StageToolSpec): boolean {
-  return spec.stageName !== undefined && spec.stageName !== 'publish'
+  return spec.stageName !== undefined && spec.stageName !== 'publish' && spec.noLocalOnly !== true
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -88,7 +113,9 @@ export function apply(ctx: Context, config: Config): void {
       async execute(args) {
         const cliArgs = spec.stageName === undefined
           ? ['init', (args as { blog_url: string }).blog_url, '--workspace-root', (args as { workspace_root: string }).workspace_root]
-          : ['run-stage', spec.stageName, '--workspace', (args as { workspace: string }).workspace]
+          : spec.cliVerb !== undefined
+            ? [spec.cliVerb, '--workspace', (args as { workspace: string }).workspace]
+            : ['run-stage', spec.stageName, '--workspace', (args as { workspace: string }).workspace]
         if (supportsLocalOnly(spec) && (args as { local_only?: boolean }).local_only === true) {
           cliArgs.push('--local-only')
         }

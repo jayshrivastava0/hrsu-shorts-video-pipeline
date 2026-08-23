@@ -60,12 +60,24 @@ describe('renderScene', () => {
       spawn: spawnMock as never,
     })
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      'npx',
-      ['hyperframes', 'render', '-c', join('compositions', 'run-42', 'shot-1.html'),
-       '-o', '/out/shot-1.mp4', '--resolution', 'portrait'],
-      expect.objectContaining({ cwd: '/project' }),
-    )
+    // Windows routes through `cmd.exe /c npx ...` (see scene-tools.ts's comment for why: bare
+    // 'npx' throws ENOENT, and both `npx.cmd` directly and `shell: true` fail differently);
+    // every other platform keeps the bare 'npx' name with no shell wrapper.
+    const expectedArgs = ['hyperframes', 'render', '-c', join('compositions', 'run-42', 'shot-1.html'),
+      '-o', '/out/shot-1.mp4', '--resolution', 'portrait']
+    if (process.platform === 'win32') {
+      expect(spawnMock).toHaveBeenCalledWith(
+        'cmd.exe',
+        ['/c', 'npx', ...expectedArgs],
+        expect.objectContaining({ cwd: '/project' }),
+      )
+    } else {
+      expect(spawnMock).toHaveBeenCalledWith(
+        'npx',
+        expectedArgs,
+        expect.objectContaining({ cwd: '/project' }),
+      )
+    }
     expect(result).toBe('/out/shot-1.mp4')
   })
 

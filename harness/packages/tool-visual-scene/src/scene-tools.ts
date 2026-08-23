@@ -50,10 +50,28 @@ function runHyperframesRender(
   options: RenderOptions = {},
 ): Promise<string> {
   const spawnFn = options.spawn ?? nodeSpawn
+  // Three approaches were tried against the real installed CLI in this repo's harness (whose own
+  // path contains a space, "HRSU Shorts" — a real-world case, not a hypothetical):
+  //   1. Bare `spawn('npx', ...)`: Node's spawn() does no PATHEXT resolution, so this throws
+  //      `ENOENT` on Windows even though `npx` (really `npx.cmd`) is on PATH.
+  //   2. `spawn('npx.cmd', ..., { shell: true })`: Node's shell mode concatenates argv into one
+  //      unescaped command line (see Node's own DEP0190 deprecation warning), which silently
+  //      corrupted every path argument containing a space.
+  //   3. `spawn('npx.cmd', ...)` directly (no shell): throws `spawn EINVAL` — Node's
+  //      child_process rejects spawning a `.cmd`/`.bat` file directly without going through a
+  //      shell (reproduced directly on the installed Node 24 / Windows 11 in this environment).
+  // Routing through `cmd.exe /c` explicitly (not `shell: true`, which is `cmd.exe /d /s /c
+  // "<concatenated-string>"`) keeps argv as a real, separately-quoted array — Node's own Windows
+  // arg-escaping (`internal/child_process`) applies to each element even when the target is
+  // `cmd.exe`, so a path containing a space survives as one argument. Verified directly: a probe
+  // script spawning `cmd.exe -> echo <path with spaces>` this way round-trips the path unchanged.
+  const [command, args] = process.platform === 'win32'
+    ? ['cmd.exe', ['/c', 'npx', 'hyperframes', 'render', '-c', compositionRelPath, '-o', outputPath, '--resolution', 'portrait']]
+    : ['npx', ['hyperframes', 'render', '-c', compositionRelPath, '-o', outputPath, '--resolution', 'portrait']]
   return new Promise((resolvePromise, reject) => {
     const child = spawnFn(
-      'npx',
-      ['hyperframes', 'render', '-c', compositionRelPath, '-o', outputPath, '--resolution', 'portrait'],
+      command,
+      args,
       { cwd: projectRoot },
     )
     let stderr = ''

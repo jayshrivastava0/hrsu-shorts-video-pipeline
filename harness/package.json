@@ -17,8 +17,13 @@
     "@deepseek-ai/dsh-credentials-local": "0.1.1-rc.2",
     "@deepseek-ai/dsh-agent-spine-demo": "0.1.1-rc.2",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-subagent-in-process-driver": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-invariants": "0.1.1-rc.2",
     "@hrsu/dsh-llm-ollama": "workspace:*",
-    "@hrsu/dsh-tool-shorts-stage": "workspace:*"
+    "@hrsu/dsh-tool-shorts-stage": "workspace:*",
+    "@hrsu/dsh-tool-visual-scene": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
