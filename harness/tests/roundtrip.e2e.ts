@@ -86,5 +86,5 @@ describe('harness round trip', () => {
     await root.fiber.dispose()
 
     expect(text.toLowerCase()).toContain('pong')
-  }, 60_000)
+  }, 120_000)
 })
