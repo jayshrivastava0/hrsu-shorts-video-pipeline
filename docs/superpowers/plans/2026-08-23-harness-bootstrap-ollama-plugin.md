@@ -104,9 +104,7 @@ Create `harness/package.json`:
     "@deepseek-ai/dsh-settings-file": "0.0.1-rc.3",
     "@deepseek-ai/dsh-credentials-local": "0.0.1-rc.3",
     "@deepseek-ai/dsh-agent-spine-demo": "0.0.1-rc.1",
-    "@deepseek-ai/dsh-session-persistence-jsonl": "0.0.1-rc.3",
-    "@deepseek-ai/schemastery": "workspace:*",
-    "@hrsu/dsh-llm-ollama": "workspace:*"
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.0.1-rc.3"
   },
   "devDependencies": {
     "tsx": "^4",
@@ -129,22 +127,16 @@ packages:
   - packages/*
 ```
 
-- [ ] **Step 3: Create the local schemastery dependency placeholder**
+Note: this app's own code never imports `@deepseek-ai/schemastery` — Task 2's plugin config is a
+plain TypeScript interface, not a validated schema — so it is deliberately absent from these
+dependencies. Do not add it.
 
-`@deepseek-ai/schemastery` is a vendored package inside the upstream monorepo, not published
-standalone under that exact scope in every release. Run:
+Note: `@hrsu/dsh-llm-ollama` is deliberately absent from these dependencies too, even though
+Task 2 creates that package inside this same workspace. Declaring a `workspace:*` dependency on a
+package that does not exist yet fails `pnpm install` in Step 4 below — Task 2 adds this line (and
+reinstalls) once the package actually exists.
 
-```bash
-npm view @deepseek-ai/schemastery versions --json
-```
-
-If this returns a version list, replace the `"workspace:*"` line above with a real pinned
-version (e.g. `"^3.x"`) and skip to Step 4. If it 404s, it is not published standalone — in that
-case Task 2's `llm-ollama` package must avoid importing schemastery and use plain
-hand-written TypeScript interfaces plus manual validation instead of a `z.object(...)` schema
-(see Task 2, Step 2's fallback note).
-
-- [ ] **Step 4: Install**
+- [ ] **Step 3: Install**
 
 Run: `cd harness && pnpm install`
 
@@ -153,11 +145,11 @@ exact published name with `npm search dsh-<guessed-name>` before proceeding — 
 this developer-preview harness may have shifted between when this plan was written and when it's
 executed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 cd harness
-git add package.json pnpm-workspace.yaml
+git add package.json pnpm-workspace.yaml pnpm-lock.yaml
 git commit -m "Add DeepSeek Harness consumer app workspace"
 ```
 
@@ -433,17 +425,25 @@ Create `harness/packages/llm-ollama/package.json`:
 }
 ```
 
-- [ ] **Step 7: Reinstall so the workspace links the new package, then run the full test suite**
+- [ ] **Step 7: Register the new package as a workspace dependency**
+
+Edit `harness/package.json` (created in Task 1): add `"@hrsu/dsh-llm-ollama": "workspace:*"` to
+its `"dependencies"` object. This must happen after Task 2 Step 6 creates
+`harness/packages/llm-ollama/package.json` — declaring it any earlier makes `pnpm install` fail
+because pnpm's `workspace:*` protocol requires the named package to already exist in the
+workspace.
+
+- [ ] **Step 8: Reinstall so the workspace links the new package, then run the full test suite**
 
 Run: `cd harness && pnpm install && pnpm --filter @hrsu/dsh-llm-ollama test`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 cd harness
-git add packages/llm-ollama
+git add packages/llm-ollama package.json pnpm-lock.yaml
 git commit -m "Add Ollama LlmAdapter plugin for DeepSeek Harness"
 ```
 
