@@ -53,6 +53,10 @@ describe('authorAssemblyComposition', () => {
     expect(result.used_fallback).toBe(false)
     expect(result.attempts).toBe(1)
     expect(result.mp4_path).toBe(outputPath)
+    expect(deps.subagents.start).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ toolFilter: { allow: ['write_composition_file', 'render_composition'] } }),
+    )
   })
 
   test('falls back after two failed attempts and calls renderFallbackComposition', async () => {
@@ -70,6 +74,34 @@ describe('authorAssemblyComposition', () => {
     expect(result.attempts).toBe(2)
     expect(deps.renderFallbackComposition).toHaveBeenCalledTimes(1)
     expect(deps.subagents.start).toHaveBeenCalledTimes(2)
+  })
+
+  test('recovers on attempt 2 after attempt 1 fails, threading the failure reason into the retry prompt', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'assemble-ws-'))
+    const outputPath = join(workspace, 'video_short.mp4')
+    const start = vi.fn()
+      .mockResolvedValueOnce({
+        result: Promise.resolve({ output: [], stopReason: 'error', diagnostic: 'render failed: bad html' } as SubagentResult),
+        dispose: vi.fn(async () => {}),
+      })
+      .mockImplementationOnce(async () => {
+        // Simulate the child's second-attempt tool calls actually producing the output file.
+        writeFileSync(outputPath, 'fake mp4 bytes')
+        return {
+          result: Promise.resolve({ output: [], stopReason: 'completed' } as SubagentResult),
+          dispose: vi.fn(async () => {}),
+        }
+      })
+    const deps = makeDeps({ subagents: { start } })
+    const result = await authorAssemblyComposition(baseArgs(workspace), deps)
+
+    expect(result.used_fallback).toBe(false)
+    expect(result.attempts).toBe(2)
+    expect(start).toHaveBeenCalledTimes(2)
+
+    const secondCallRequest = start.mock.calls[1][1] as { prompt: Array<{ type: string; text: string }> }
+    const secondPromptText = secondCallRequest.prompt.map((block) => block.text).join('\n')
+    expect(secondPromptText).toContain('render failed: bad html')
   })
 
   test('output path is fixed at <workspace>/video_short.mp4 regardless of subagent input', async () => {
