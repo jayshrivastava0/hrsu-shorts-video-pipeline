@@ -31,6 +31,14 @@ describe('writeCompositionFile', () => {
     expect(() => writeCompositionFile('C:evil', '<html></html>', projectRoot)).toThrow(/outside compositions/)
     expect(() => writeCompositionFile('a/b', '<html></html>', projectRoot)).toThrow(/outside compositions/)
   })
+
+  test('rejects a bare ".." workspaceId (caught only by the layer-3 relative-traversal check, not layers 1/2)', () => {
+    // ".." has no separator and no colon, so it passes isAbsolute and
+    // containsPathSeparatorOrColon untouched — this is the one value that proves the
+    // relative(root, candidate)/resolve(root, rel) !== candidate check is load-bearing.
+    const projectRoot = tempProject()
+    expect(() => writeCompositionFile('..', '<html></html>', projectRoot)).toThrow(/outside compositions/)
+  })
 })
 
 describe('renderComposition', () => {
@@ -109,12 +117,17 @@ describe('buildDeterministicAssemblyHtml', () => {
   })
 
   test('escapes caption text and does not reference logo_path as an image asset', () => {
+    // groupWordsIntoCues uppercases word text, so a payload relying on lowercase '<script>' would
+    // be defeated by the case change alone rather than by real escaping. Use a payload whose
+    // breakout characters (<, >, /) stay meaningful regardless of case.
     const withUnsafeCaption: AssemblyBrief = {
       ...brief,
-      word_timings: [{ word: '<script>evil()</script>', start: 0, end: 1 }],
+      word_timings: [{ word: '</SCRIPT><img onerror=x src=y>', start: 0, end: 1 }],
     }
     const html = buildDeterministicAssemblyHtml(withUnsafeCaption)
-    expect(html).not.toContain('<script>evil()</script>')
+    expect(html).not.toContain('</SCRIPT><img onerror=x src=y>')
+    expect(html).not.toContain('</SCRIPT><IMG ONERROR=X SRC=Y>')
+    expect(html).toContain('&lt;/SCRIPT&gt;&lt;IMG ONERROR=X SRC=Y&gt;')
     // The fallback deliberately uses the proven text-based brand mark, not an unverified
     // <img>/background-image asset load (see Global Constraints item 6).
     expect(html).not.toContain(brief.logo_path)

@@ -139,7 +139,7 @@ export function buildDeterministicAssemblyHtml(brief: AssemblyBrief): string {
   const cues = groupWordsIntoCues(brief.word_timings)
   const captionTimelineCalls = cues.map((cue) => `
         tl.set(box, { visibility: 'visible' }, ${cue.start});
-        tl.to(box, { opacity: 1, duration: 0.1, onStart: () => { textEl.textContent = ${JSON.stringify(cue.text)}; } }, ${cue.start});
+        tl.to(box, { opacity: 1, duration: 0.1, onStart: () => { textEl.textContent = ${JSON.stringify(escapeHtml(cue.text))}; } }, ${cue.start});
         tl.to(box, { opacity: 0, duration: 0.1 }, ${cue.end});
         tl.set(box, { opacity: 0, visibility: 'hidden' }, ${cue.end + 0.1});`).join('')
 
