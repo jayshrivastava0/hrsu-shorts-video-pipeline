@@ -278,3 +278,170 @@ def test_visuals_finalize_fails_loud_on_missing_shot_mp4(tmp_path):
 
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["status"] == "failed"
+
+
+def _write_assemble_prepare_fixtures(workspace: Path) -> None:
+    (workspace / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "type": "HEADLINE_CARD",
+         "payload": {"text": "Cold weather pours"}, "duration_s": 2.5},
+        {"id": "2", "beat": "cta", "type": "LOGO_CTA",
+         "payload": {"text": "Visit hrsuindore.com"}, "duration_s": 3.0},
+    ]}))
+    (workspace / "beats_audio.json").write_text(json.dumps([
+        {"beat": "hook", "start_s": 0.0},
+        {"beat": "cta", "start_s": 2.4},
+    ]))
+    (workspace / "word_timings.json").write_text(json.dumps([
+        {"word": "Cold", "start": 0.1, "end": 0.4},
+        {"word": "pours", "start": 0.5, "end": 0.9},
+    ]))
+    (workspace / "post.json").write_text(json.dumps({"region": "usa", "images": []}))
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "3.4",
+        str(workspace / "voiceover.mp3"),
+    ], check=True, capture_output=True)
+    shots_dir = workspace / "shots"
+    shots_dir.mkdir()
+    for shot_id in ("1", "2"):
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=white:s=64x64:d=2.5",
+            str(shots_dir / f"shot_{shot_id}.mp4"),
+        ], check=True, capture_output=True)
+
+
+def test_assemble_prepare_writes_brief_without_checkpointing(tmp_path):
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"]
+    manifest_path = Path(workspace) / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "visuals"
+    manifest["last_ok_status"] = "visuals"
+    manifest_path.write_text(json.dumps(manifest))
+    _write_assemble_prepare_fixtures(Path(workspace))
+
+    result = run_cli(["assemble-prepare", "--workspace", workspace])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "ok"
+    assert payload["assembly_brief"] == "assembly_brief.json"
+
+    brief = json.loads((Path(workspace) / "assembly_brief.json").read_text())
+    assert [s["id"] for s in brief["shots"]] == ["1", "2"]
+    assert brief["shots"][0]["start_s"] == 0.0
+    assert brief["shots"][1]["start_s"] == pytest.approx(brief["shots"][0]["duration_s"], abs=0.01)
+    assert brief["word_timings"][0]["word"] == "Cold"
+    assert Path(brief["audio_path"]).exists()
+    assert brief["logo_path"] == str(config.BRAND_LOGO_FILE)
+    assert brief["target_duration_s"] == pytest.approx(
+        brief["voice_total_s"] + config.END_CARD_HOLD_S, abs=0.01)
+
+    # Not checkpointed yet — still "visuals" (mirrors visuals-prepare's own contract).
+    manifest_after = json.loads(manifest_path.read_text())
+    assert manifest_after["last_ok_status"] == "visuals"
+
+
+def test_assemble_finalize_checkpoints_when_duration_law_holds_and_shots_present(tmp_path):
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = Path(json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"])
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "visuals"
+    manifest["last_ok_status"] = "visuals"
+    manifest_path.write_text(json.dumps(manifest))
+
+    voice_total_s = 3.0
+    target = voice_total_s + config.END_CARD_HOLD_S
+    shots_dir = workspace / "shots"
+    shots_dir.mkdir()
+    (workspace / "assembly_brief.json").write_text(json.dumps({
+        "shots": [
+            {"id": "1", "video_path": str(workspace / "shots" / "shot_1.mp4"),
+             "start_s": 0.0, "duration_s": target / 2, "beat": "hook"},
+            {"id": "2", "video_path": str(workspace / "shots" / "shot_2.mp4"),
+             "start_s": target / 2, "duration_s": target / 2, "beat": "cta"},
+        ],
+        "word_timings": [], "audio_path": str(workspace / "voiceover.mp3"),
+        "logo_path": str(config.BRAND_LOGO_FILE),
+        "voice_total_s": voice_total_s, "target_duration_s": target,
+    }))
+    # The rendered final video: bright/white throughout, duration exactly on the law.
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={target}",
+        str(workspace / "video_short.mp4"),
+    ], check=True, capture_output=True)
+
+    result = run_cli(["assemble-finalize", "--workspace", str(workspace)])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["status"] == "ok"
+    assert payload["status_after"] == "assembled"
+
+    manifest_after = json.loads(manifest_path.read_text())
+    assert manifest_after["last_ok_status"] == "assembled"
+    report = json.loads((workspace / "assemble_report.json").read_text())
+    assert len(report["shots"]) == 2
+    assert all(s["content_pixels"] >= config.MIN_CONTENT_PIXELS for s in report["shots"])
+
+
+def test_assemble_finalize_out_of_order_fails_loud(tmp_path):
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"]
+
+    ingest_result = run_cli([
+        "run-stage", "ingest",
+        "--workspace", workspace,
+        "--html-override", str(FIXTURE_HTML),
+    ])
+    assert ingest_result.returncode == 0, ingest_result.stderr
+
+    result = run_cli(["assemble-finalize", "--workspace", workspace])
+    assert result.returncode == 1
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+    assert "out of order" in payload["message"]
+
+    manifest = json.loads((Path(workspace) / "run_manifest.json").read_text())
+    assert manifest["last_ok_status"] == "ingested"
+    assert manifest["status"] != "failed"
+
+
+def test_assemble_finalize_fails_loud_on_duration_law_violation(tmp_path):
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = Path(json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"])
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "visuals"
+    manifest["last_ok_status"] = "visuals"
+    manifest_path.write_text(json.dumps(manifest))
+
+    voice_total_s = 3.0
+    (workspace / "assembly_brief.json").write_text(json.dumps({
+        "shots": [], "word_timings": [], "audio_path": str(workspace / "voiceover.mp3"),
+        "logo_path": str(config.BRAND_LOGO_FILE), "voice_total_s": voice_total_s,
+        "target_duration_s": voice_total_s + config.END_CARD_HOLD_S,
+    }))
+    # Deliberately too short — violates the duration law.
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=white:s=64x64:d=1.0",
+        str(workspace / "video_short.mp4"),
+    ], check=True, capture_output=True)
+
+    result = run_cli(["assemble-finalize", "--workspace", str(workspace)])
+    assert result.returncode == 1
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+
+    manifest_after = json.loads(manifest_path.read_text())
+    assert manifest_after["status"] == "failed"

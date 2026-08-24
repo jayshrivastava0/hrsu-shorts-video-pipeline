@@ -25,6 +25,7 @@ from shorts_engine.cli import build_stages
 from shorts_engine.errors import EngineError
 from shorts_engine.manifest import STATUS_ORDER, RunManifest
 from shorts_engine.runner import StageContext
+from shorts_engine.stages.assemble import reflow
 from shorts_engine.stages.visuals import content_pixels, resolve_shot, sample_frame
 
 STAGE_FUNCTIONS = {name: fn for name, _status_after, fn in build_stages()}
@@ -215,6 +216,127 @@ def cmd_visuals_finalize(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_assemble_prepare(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    try:
+        manifest = RunManifest.load(workspace)
+    except FileNotFoundError as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    order_error = _stage_order_error(manifest.last_ok_status, "assembled", "assemble-prepare")
+    if order_error is not None:
+        print(json.dumps({"status": "error", "message": order_error}), file=sys.stderr)
+        return 1
+
+    try:
+        from shorts_engine.cards import encoder
+        from video_agent.music import mix_music_under_voice
+
+        shots = json.loads((workspace / "shotlist.json").read_text(encoding="utf-8"))["shots"]
+        beats_audio = json.loads((workspace / "beats_audio.json").read_text(encoding="utf-8"))
+        voice = workspace / "voiceover.mp3"
+        voice_total = encoder.probe_duration(voice)
+        final_shots = reflow(shots, beats_audio, voice_total)
+
+        shots_dir = workspace / "shots"
+        shots_brief = []
+        cum = 0.0
+        for shot in final_shots:
+            video_path = shots_dir / f"shot_{shot['id']}.mp4"
+            if not video_path.exists():
+                raise EngineError(
+                    f"assemble-prepare: shot {shot['id']} has no rendered mp4 at "
+                    f"{video_path} — did stage_visuals_finalize run first?")
+            shots_brief.append({
+                "id": shot["id"], "video_path": str(video_path),
+                "start_s": round(cum, 3), "duration_s": round(shot["duration_s"], 3),
+                "beat": shot["beat"],
+            })
+            cum += shot["duration_s"]
+
+        words = json.loads((workspace / "word_timings.json").read_text(encoding="utf-8"))
+        region = json.loads((workspace / "post.json").read_text(encoding="utf-8")).get(
+            "region") or "default"
+        mixed = mix_music_under_voice(voice, workspace / "music_mix.mp3", region)
+
+        brief = {
+            "shots": shots_brief, "word_timings": words, "audio_path": str(Path(mixed)),
+            "logo_path": str(config.BRAND_LOGO_FILE), "voice_total_s": round(voice_total, 3),
+            "target_duration_s": round(voice_total + config.END_CARD_HOLD_S, 3),
+        }
+    except Exception as exc:
+        manifest.status = "failed"
+        manifest.error = f"assemble-prepare: {exc}"
+        manifest.save()
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    (workspace / "assembly_brief.json").write_text(json.dumps(brief, indent=2), encoding="utf-8")
+    print(json.dumps({"status": "ok", "assembly_brief": "assembly_brief.json"}))
+    return 0
+
+
+def cmd_assemble_finalize(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    try:
+        manifest = RunManifest.load(workspace)
+    except FileNotFoundError as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    order_error = _stage_order_error(manifest.last_ok_status, "assembled", "assemble-finalize")
+    if order_error is not None:
+        print(json.dumps({"status": "error", "message": order_error}), file=sys.stderr)
+        return 1
+
+    try:
+        from shorts_engine.cards import encoder
+
+        brief = json.loads((workspace / "assembly_brief.json").read_text(encoding="utf-8"))
+        video = workspace / "video_short.mp4"
+        if not video.exists():
+            raise EngineError(f"assemble-finalize: no rendered video at {video}")
+        vd = encoder.probe_duration(video)
+        voice_total = brief["voice_total_s"]
+        if vd < voice_total + config.AUDIO_COMPLETENESS_MARGIN_S:
+            raise EngineError(
+                f"ASSEMBLE: video {vd:.2f}s < voice {voice_total:.2f}s + "
+                f"{config.AUDIO_COMPLETENESS_MARGIN_S}s — CTA would clip")
+        if abs(vd - (voice_total + config.END_CARD_HOLD_S)) > 0.35:
+            raise EngineError(
+                f"ASSEMBLE: video {vd:.2f}s violates duration law (voice {voice_total:.2f}s "
+                f"+ hold {config.END_CARD_HOLD_S}s)")
+
+        report_shots = []
+        for shot in brief["shots"]:
+            png = workspace / "shots" / f"assembled_check_{shot['id']}.png"
+            sample_frame(video, shot["start_s"] + shot["duration_s"] / 2, png)
+            pixels = content_pixels(png)
+            if pixels < config.MIN_CONTENT_PIXELS:
+                raise EngineError(
+                    f"assemble-finalize: shot {shot['id']} not visibly present in the "
+                    f"assembled video ({pixels} bright px < {config.MIN_CONTENT_PIXELS}) — "
+                    f"never-blank violated")
+            report_shots.append({"id": shot["id"], "content_pixels": pixels})
+
+        report = {"voice_total_s": voice_total, "video_duration_s": round(vd, 3),
+                  "shots": report_shots}
+        (workspace / "assemble_report.json").write_text(
+            json.dumps(report, indent=2), encoding="utf-8")
+    except Exception as exc:
+        manifest.status = "failed"
+        manifest.error = f"assemble-finalize: {exc}"
+        manifest.save()
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+
+    artifacts = {"video": "video_short.mp4", "assemble_report": "assemble_report.json"}
+    manifest.checkpoint(status="assembled", **artifacts)
+    print(json.dumps({"status": "ok", "status_after": "assembled", "artifacts": artifacts}))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="shorts_engine.stage_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -244,6 +366,14 @@ def main(argv: list[str] | None = None) -> int:
     visuals_finalize_parser = subparsers.add_parser("visuals-finalize")
     visuals_finalize_parser.add_argument("--workspace", required=True)
     visuals_finalize_parser.set_defaults(func=cmd_visuals_finalize)
+
+    assemble_prepare_parser = subparsers.add_parser("assemble-prepare")
+    assemble_prepare_parser.add_argument("--workspace", required=True)
+    assemble_prepare_parser.set_defaults(func=cmd_assemble_prepare)
+
+    assemble_finalize_parser = subparsers.add_parser("assemble-finalize")
+    assemble_finalize_parser.add_argument("--workspace", required=True)
+    assemble_finalize_parser.set_defaults(func=cmd_assemble_finalize)
 
     args = parser.parse_args(argv)
     return args.func(args)
