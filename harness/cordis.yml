@@ -74,15 +74,14 @@
     projectRoot: !!js "process.cwd() + '/hyperframes_scenes_project'"
     agentOptions:
       provider: ollama-local
-      # `kimi-k2.7-code` bare has no local pull and 404s immediately against this machine's
-      # Ollama server (confirmed via `curl .../api/show`: "model 'kimi-k2.7-code:latest' not
-      # found") — Step 7's exploratory check hit exactly this and fell back to the safety-net
-      # template on both attempts. `ollama pull kimi-k2.7-code` itself reports the real name:
-      # "kimi-k2.7-code:cloud" is available. Same cloud-routing convention `agent-spine`'s own
-      # `agents[0].model: gemma4:31b-cloud` already uses in this file, just with the cloud
-      # designation as an explicit `:cloud` tag instead of embedded in the bare name (that's
-      # Ollama's own naming for this particular model, not a choice made here).
-      model: kimi-k2.7-code:cloud
+      # kimi-k2.7-code:cloud requires an Ollama subscription this account doesn't have (confirmed
+      # 403 on live authoring attempts) — out of scope as of 2026-08-25. Swappable via
+      # SCENE_AUTHOR_MODEL, same process.env pattern as ORCHESTRATOR_MODEL above, so any
+      # subscription-accessible agentic cloud model (nemotron-3-ultra:cloud, glm-5.1:cloud,
+      # minimax-m2.7:cloud, minimax-m3:cloud, gemma4:31b-cloud, ...) can be swapped in without
+      # editing this file. Defaults to gemma4:31b-cloud (same model already proven reachable for
+      # the main orchestrator) rather than kimi.
+      model: !!js "process.env.SCENE_AUTHOR_MODEL ?? 'gemma4:31b-cloud'"
       maxTokens: 8192
 
 - id: agent-spine

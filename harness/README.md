@@ -28,10 +28,20 @@ ORCHESTRATOR_MODEL=deepseek-v4-flash:cloud pnpm dsh
 ```
 
 Any model pulled/available on the target Ollama server works — `deepseek-v4-flash:cloud`,
-`kimi-k2.7:cloud`, `minimax-*:cloud`, etc. Unset (or leave blank) to keep the previous default,
-`gemma4:31b-cloud`. This only affects the main orchestrator agent; the `tool-visual-scene`
-subagent's model (`kimi-k2.7-code:cloud`, used for scene authoring) is configured separately in
-`cordis.yml`'s `tool-visual-scene.config.agentOptions` and is unaffected by this env var.
+`nemotron-3-ultra:cloud`, `glm-5.1:cloud`, `minimax-m2.7:cloud`, `minimax-m3:cloud`, etc. Unset (or
+leave blank) to keep the previous default, `gemma4:31b-cloud`.
+
+This only affects the main orchestrator agent. The `tool-visual-scene` subagent (shot/scene
+authoring) has its own independent override, `SCENE_AUTHOR_MODEL` (also defaults to
+`gemma4:31b-cloud`) — `kimi-k2.7-code:cloud` was the original choice but requires an Ollama
+subscription this account doesn't have (confirmed 403), so it's out of scope for now:
+
+```bash
+SCENE_AUTHOR_MODEL=minimax-m3:cloud pnpm dsh
+```
+
+The assembly stage's creative-authoring subagent (once built) will follow the same convention
+under `ASSEMBLY_AUTHOR_MODEL` — see the assembly-stage design doc.
 
 ## Install
 
