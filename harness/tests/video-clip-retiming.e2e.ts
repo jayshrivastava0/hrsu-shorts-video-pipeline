@@ -42,15 +42,11 @@ function compositionHtml(compositionDuration: number, clipDataDuration: number):
 <html lang="en"><head><meta charset="UTF-8"><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>body,html{margin:0;padding:0;width:1080px;height:1920px;overflow:hidden;background:#000;}video{display:block;width:100%;height:100%;object-fit:cover;}</style>
 </head><body>
-<div id="root" data-composition-id="retime-check" data-start="0" data-duration="${compositionDuration}" data-width="1080" data-height="1920">
-<video id="clip" class="clip" src="compositions/_video_retime_check/red_green.mp4" muted playsinline autoplay
+<div id="root" data-composition-id="retime-check" data-duration="${compositionDuration}" data-width="1080" data-height="1920">
+<video id="clip" class="clip" src="compositions/_video_retime_check/red_green.mp4" muted playsinline
        data-start="0" data-duration="${clipDataDuration}" data-track-index="0"></video>
 <script>
 window.__timelines = window.__timelines || {};
-const clip = document.getElementById('clip');
-if (clip) {
-  clip.play().catch(() => {});
-}
 window.__timelines['retime-check'] = gsap.timeline({ paused: true });
 </script>
 </div></body></html>`
