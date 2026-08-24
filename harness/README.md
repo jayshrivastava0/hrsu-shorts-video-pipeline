@@ -15,6 +15,24 @@ stay in sync by hand — see "Persona sync" below).
 - A running **Ollama** server reachable at `OLLAMA_HOST` (default `http://localhost:11434`) if you
   want to run the e2e round-trip test or actually drive the agent.
 
+## Swapping the orchestrator model
+
+`cordis.yml`'s `agent-spine.config.agents[0].model` reads `ORCHESTRATOR_MODEL` at startup
+(`process.env.ORCHESTRATOR_MODEL ?? 'gemma4:31b-cloud'`), same pattern as `llm-ollama`'s
+`baseURL`/`OLLAMA_HOST` above. Set it before launching the harness to A/B a different Ollama-cloud
+model as the main orchestrator (tool sequencing, invariant enforcement, retry decisions) without
+touching `cordis.yml`:
+
+```bash
+ORCHESTRATOR_MODEL=deepseek-v4-flash:cloud pnpm dsh
+```
+
+Any model pulled/available on the target Ollama server works — `deepseek-v4-flash:cloud`,
+`kimi-k2.7:cloud`, `minimax-*:cloud`, etc. Unset (or leave blank) to keep the previous default,
+`gemma4:31b-cloud`. This only affects the main orchestrator agent; the `tool-visual-scene`
+subagent's model (`kimi-k2.7-code:cloud`, used for scene authoring) is configured separately in
+`cordis.yml`'s `tool-visual-scene.config.agentOptions` and is unaffected by this env var.
+
 ## Install
 
 ```bash

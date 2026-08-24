@@ -98,7 +98,11 @@
     agents:
       - id: main
         provider: ollama-local
-        model: gemma4:31b-cloud
+        # Swappable so we can A/B whether gemma4 is actually the best orchestrator vs. other
+        # Ollama-cloud models (deepseek, kimi, minimax, etc.) — same process.env pattern already
+        # proven for llm-ollama's `baseURL` above. Unset -> gemma4:31b-cloud (previous hardcoded
+        # default, unchanged).
+        model: !!js "process.env.ORCHESTRATOR_MODEL ?? 'gemma4:31b-cloud'"
         cwd: !!js process.cwd()
     persona: |
       # HRSU Shorts Pipeline Agent
