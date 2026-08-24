@@ -1129,7 +1129,7 @@ Create `harness/packages/tool-assembly/tests/index.spec.ts`:
 
 ```typescript
 import { describe, expect, test, vi } from 'vitest'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { authorAssemblyComposition, type AuthorAssemblyCompositionArgs, type AuthorAssemblyCompositionDeps } from '../src/index.ts'
@@ -1169,7 +1169,7 @@ describe('authorAssemblyComposition', () => {
   test('returns the rendered path on first-attempt success', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'assemble-ws-'))
     const outputPath = join(workspace, 'video_short.mp4')
-    require('node:fs').writeFileSync(outputPath, 'fake mp4 bytes')
+    writeFileSync(outputPath, 'fake mp4 bytes')
     const deps = makeDeps({
       subagents: {
         start: vi.fn(async () => ({
@@ -1204,7 +1204,7 @@ describe('authorAssemblyComposition', () => {
   test('output path is fixed at <workspace>/video_short.mp4 regardless of subagent input', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'assemble-ws-'))
     const outputPath = join(workspace, 'video_short.mp4')
-    require('node:fs').writeFileSync(outputPath, 'fake mp4 bytes')
+    writeFileSync(outputPath, 'fake mp4 bytes')
     let registeredPath: string | undefined
     const deps = makeDeps({
       subagents: {
