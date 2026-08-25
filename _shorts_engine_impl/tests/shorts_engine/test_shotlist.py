@@ -19,21 +19,26 @@ CITES = [{"marker": 2, "url": "https://www.mdpi.com/2073-4441/12/5/1234", "kind"
 # Narration lengths sized for WORDS_PER_SECOND=1.7 so the planned total
 # lands inside [TOTAL_MIN_S, TOTAL_MAX_S] (62 words ~= 36.5s estimated).
 BEATS = [
-    {"beat": "hook", "narration": "Your effluent nitrate is creeping toward the limit.",
+    {"beat": "hook", "purpose": "hook",
+     "narration": "Your effluent nitrate is creeping toward the limit.",
      "fact_ids": [], "card_text": "Nitrate limits are tightening", "broll_wish": "aeration basin"},
-    {"beat": "stakes", "narration": "Plants dose one point five to three kilograms per cubic meter.",
+    {"beat": "stakes", "purpose": "stakes",
+     "narration": "Plants dose one point five to three kilograms per cubic meter.",
      "fact_ids": ["f1"],
      "card_text": "The dosing window that works", "broll_wish": ""},
-    {"beat": "mechanism", "narration": "Calcium nitrate feeds denitrifying bacteria, so they strip oxygen "
+    {"beat": "mechanism", "purpose": "mechanism",
+     "narration": "Calcium nitrate feeds denitrifying bacteria, so they strip oxygen "
      "from nitrate, releasing harmless nitrogen gas before discharge without any retrofit.",
      "fact_ids": ["f1"], "card_text": "Bacteria do the removal",
      "broll_wish": "", "diagram_labels": ["Effluent in", "Calcium nitrate dosing",
                                           "Denitrifying bacteria", "N2 out"]},
-    {"beat": "proof", "narration": "Published trials report ninety two percent nitrate removal with this "
+    {"beat": "proof", "purpose": "proof",
+     "narration": "Published trials report ninety two percent nitrate removal with this "
      "approach across municipal plants.",
      "fact_ids": ["f2"],
      "card_text": "92 percent removal", "broll_wish": ""},
-    {"beat": "cta", "narration": "HRSU ships high-purity powder with batch QC. The dosing guide is at "
+    {"beat": "cta", "purpose": "cta",
+     "narration": "HRSU ships high-purity powder with batch QC. The dosing guide is at "
      "hrsuindore dot com.",
      "fact_ids": ["b_purity"],
      "card_text": "Get the dosing guide", "broll_wish": ""},
@@ -110,104 +115,70 @@ class TestBeatMapping:
                           differentiators=[{"id": "b_purity", "text": "high-purity powder"}],
                           cta_lines=["Full guide on the HRSU blog"], banned_claims=[])
 
-    def test_hook_is_headline(self):
-        # BEATS[0]'s narration is a single unpunctuated 9-word sentence whose
-        # estimate (5.29s) exceeds SHOT_TARGET_MAX_S (3.5s), so pack_phrases
-        # subdivides it into 2 spans (see TestPhrasePacking regression test).
-        # Combined with a non-empty broll_wish, that now correctly triggers
-        # the new BROLL-first emission (Task 9) with a HEADLINE_CARD fallback
-        # carrying the beat's card_text -- not a HEADLINE_CARD directly.
+    def test_hook_without_fact_suggests_headline(self):
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[0], self._facts_by_id(), self._cites(),
                                          self._brand())
-        assert shots[0]["type"] == "BROLL"
-        assert shots[0]["payload"]["wish"] == "aeration basin"
-        fb = shots[0]["fallback"]
-        assert fb["type"] == "HEADLINE_CARD"
-        assert fb["payload"]["text"] == "Nitrate limits are tightening"
+        assert all(s["suggested_type"] == "HEADLINE_CARD" for s in shots)
+        assert all(s["beat_purpose"] == "hook" for s in shots)
+        assert all(s["payload"]["text"] == "Nitrate limits are tightening" for s in shots)
 
     def test_stakes_uses_stat_from_fact(self):
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[1], self._facts_by_id(), self._cites(),
                                          self._brand())
-        assert shots[0]["type"] == "STAT_CARD"
-        assert shots[0]["payload"]["value"] == "1.5–3"
-        assert "mdpi.com" in shots[0]["payload"]["citation"]
+        assert all(s["suggested_type"] == "STAT_CARD" for s in shots)
+        assert shots[0]["payload"]["fact_value"] == "1.5–3"
+        assert "mdpi.com" in shots[0]["payload"]["fact_citation"]
 
-    def test_mechanism_flow_reveal_stages(self):
+    def test_mechanism_suggests_diagram_with_labels(self):
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[2], self._facts_by_id(), self._cites(),
                                          self._brand())
-        assert all(s["type"] == "DIAGRAM" for s in shots)
-        assert 1 <= len(shots) <= 3
-        stages = [s["payload"]["reveal_stage"] for s in shots]
-        assert stages == list(range(1, len(shots) + 1))
-        assert all(s["payload"]["reveal_total"] == len(shots) for s in shots)
-        assert shots[0]["payload"]["labels"] == BEATS[2]["diagram_labels"]
+        assert all(s["suggested_type"] == "DIAGRAM" for s in shots)
+        assert all(s["beat_purpose"] == "mechanism" for s in shots)
+        assert all(s["payload"]["diagram_labels"] == BEATS[2]["diagram_labels"] for s in shots)
 
-    def test_proof_paper_card_with_quote_fallback(self):
-        from shorts_engine.stages import shotlist
-        beat = dict(BEATS[3], fact_ids=["f1"])  # f1 cites marker 2 = paper
-        shots = shotlist.plan_beat_shots(beat, self._facts_by_id(), self._cites(),
-                                         self._brand())
-        assert shots[0]["type"] == "PAPER_CARD"
-        fb = shots[0]["fallback"]
-        assert fb["type"] == "QUOTE_CARD"
-        assert "1.5 to 3 kg" in fb["payload"]["quote"]
-
-    def test_proof_without_paper_is_stat_plus_quote(self):
+    def test_proof_with_numeric_fact_suggests_stat_card(self):
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[3], self._facts_by_id(), self._cites(),
                                          self._brand())  # f2 cites web
-        assert [s["type"] for s in shots] == ["STAT_CARD", "QUOTE_CARD"]
+        assert all(s["suggested_type"] == "STAT_CARD" for s in shots)
+        assert shots[0]["payload"]["fact_text"] == \
+            "denitrifying filters removed 92 percent of nitrate"
 
-    def test_cta_single_logo_shot(self):
+    def test_cta_shots_carry_brand_payload(self):
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[4], self._facts_by_id(), self._cites(),
                                          self._brand())
-        assert len(shots) == 1 and shots[0]["type"] == "LOGO_CTA"
-        assert shots[0]["payload"]["differentiator"] == "high-purity powder"
-        assert shots[0]["payload"]["domain"] == "hrsuindore.com"
+        assert all(s["suggested_type"] == "LOGO_CTA" for s in shots)
+        assert all(s["payload"]["differentiator"] == "high-purity powder" for s in shots)
+        assert all(s["payload"]["domain"] == "hrsuindore.com" for s in shots)
+        assert all(s["duration_s"] <= 10.0 for s in shots)  # LOGO_CTA_MAX_S
 
 
 class TestLinter:
-    def test_paper_card_without_fallback_flagged(self):
-        from shorts_engine.stages import shotlist
-        shots = [{"id": "s00", "beat": "proof", "type": "PAPER_CARD", "duration_s": 3.0,
-                  "narration_span": "x", "payload": {}, "fallback": None}]
-        errs = shotlist.lint_shotlist(shots, FACTS)
-        assert any("fallback" in e for e in errs)
-
-    def test_stat_digits_must_trace_to_fact(self):
-        from shorts_engine.stages import shotlist
-        shots = [{"id": "s00", "beat": "proof", "type": "STAT_CARD", "duration_s": 3.0,
-                  "narration_span": "x", "fallback": None,
-                  "payload": {"value": "97", "unit": "%", "label": "l",
-                              "fact_id": "f2"}}]
-        errs = shotlist.lint_shotlist(shots, FACTS)
-        assert any("97" in e for e in errs)
-
     def test_duration_bounds_flagged(self):
         from shorts_engine.stages import shotlist
-        shots = [{"id": "s00", "beat": "hook", "type": "HEADLINE_CARD",
+        shots = [{"id": "s00", "beat": "hook", "beat_purpose": "hook",
                   "duration_s": 9.0, "narration_span": "x",
-                  "payload": {"text": "t"}, "fallback": None}]
+                  "payload": {"text": "t"}}]
         errs = shotlist.lint_shotlist(shots, FACTS)
         assert any("9.0" in e for e in errs)
 
     def test_logo_cta_exempt_up_to_10s(self):
         from shorts_engine.stages import shotlist
         shots = [
-            {"id": "s00", "beat": "hook", "type": "HEADLINE_CARD", "duration_s": 3.0,
-             "narration_span": "x", "payload": {"text": "t"}, "fallback": None},
-            {"id": "s01", "beat": "stakes", "type": "STAT_CARD", "duration_s": 5.0,
-             "narration_span": "x", "payload": {"value": "1.5", "unit": "kg", "label": "l"}, "fallback": None},
-            {"id": "s02", "beat": "mechanism", "type": "DIAGRAM", "duration_s": 10.0,
-             "narration_span": "x", "payload": {"template": "flow", "labels": ["a", "b"]}, "fallback": None},
-            {"id": "s03", "beat": "proof", "type": "STAT_CARD", "duration_s": 10.0,
-             "narration_span": "x", "payload": {"value": "92", "unit": "%", "label": "l"}, "fallback": None},
-            {"id": "s04", "beat": "cta", "type": "LOGO_CTA", "duration_s": 8.0,
-             "narration_span": "x", "payload": {}, "fallback": None}
+            {"id": "s00", "beat": "hook", "beat_purpose": "hook", "duration_s": 3.0,
+             "narration_span": "x", "payload": {"text": "t"}},
+            {"id": "s01", "beat": "stakes", "beat_purpose": "stakes", "duration_s": 5.0,
+             "narration_span": "x", "payload": {"fact_value": "1.5", "fact_unit": "kg"}},
+            {"id": "s02", "beat": "mechanism", "beat_purpose": "mechanism", "duration_s": 10.0,
+             "narration_span": "x", "payload": {"diagram_labels": ["a", "b"]}},
+            {"id": "s03", "beat": "proof", "beat_purpose": "proof", "duration_s": 10.0,
+             "narration_span": "x", "payload": {"fact_value": "92", "fact_unit": "%"}},
+            {"id": "s04", "beat": "cta", "beat_purpose": "cta", "duration_s": 8.0,
+             "narration_span": "x", "payload": {}}
         ]
         # LOGO_CTA should not be flagged for its 8.0s duration (cap is 10.0s)
         errs = shotlist.lint_shotlist(shots, FACTS)
@@ -215,17 +186,16 @@ class TestLinter:
         assert not duration_errors
 
     def _shots_with_durations(self, durations):
-        """Otherwise lint-clean shots (HEADLINE_CARDs + final LOGO_CTA)
-        carrying the given per-shot durations."""
+        """Otherwise lint-clean shots (hook cards + final cta) carrying the
+        given per-shot durations."""
         shots = [
-            {"id": f"s{i:02d}", "beat": "hook", "type": "HEADLINE_CARD",
-             "duration_s": d, "narration_span": "x",
-             "payload": {"text": "t"}, "fallback": None}
+            {"id": f"s{i:02d}", "beat": "hook", "beat_purpose": "hook",
+             "duration_s": d, "narration_span": "x", "payload": {"text": "t"}}
             for i, d in enumerate(durations[:-1])
         ]
         shots.append({"id": f"s{len(durations)-1:02d}", "beat": "cta",
-                      "type": "LOGO_CTA", "duration_s": durations[-1],
-                      "narration_span": "x", "payload": {}, "fallback": None})
+                      "beat_purpose": "cta", "duration_s": durations[-1],
+                      "narration_span": "x", "payload": {}})
         return shots
 
     def test_total_rounding_loss_at_the_floor_is_tolerated(self):
@@ -242,61 +212,76 @@ class TestLinter:
         assert not [e for e in errs if "total duration" in e]
 
     def test_genuinely_short_total_is_still_flagged(self):
-        """The epsilon only absorbs rounding (~0.1s) -- a real half-second
-        shortfall must still be rejected, with 2-decimal honesty."""
+        """The epsilon only absorbs rounding (~0.1s) -- a real shortfall
+        below the TOTAL_MIN_S floor (30s) must still be rejected, with
+        2-decimal honesty. (The ceiling check no longer exists -- Task 3
+        dropped it -- so only the floor is exercised here.)"""
         from shorts_engine.stages import shotlist
-        durations = [3.85, 2.69, 2.69, 3.46, 3.46, 3.46, 4.23, 4.23, 6.40]
+        durations = [2.85, 1.69, 1.69, 2.46, 2.46, 2.46, 3.23, 3.23, 4.40]
+        assert abs(sum(durations) - 24.47) < 1e-9
         errs = shotlist.lint_shotlist(self._shots_with_durations(durations), FACTS)
         total_errs = [e for e in errs if "total duration" in e]
         assert len(total_errs) == 1
-        assert "34.47" in total_errs[0]
+        assert "24.47" in total_errs[0]
 
 
-class TestBrollEmission:
-    def _fixtures(self):
-        facts = {f["id"]: f for f in FACTS["facts"]}
-        cites = {c["marker"]: c for c in CITES}
-        from shorts_engine.brand import BrandFacts
-        brand = BrandFacts(company="HRSU", domain="hrsuindore.com", tagline="t",
-                           differentiators=[{"id": "b_purity", "text": "high-purity powder"}],
-                           cta_lines=["Full guide on the HRSU blog"], banned_claims=[])
-        return facts, cites, brand
+class TestFreeformShotPlanning:
+    def test_shots_carry_suggested_type_not_type(self):
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        shots = plan_beat_shots(_beat("cold-open", "hook", "Cold weather pours."),
+                                 {}, {}, _fake_brand())
+        assert "suggested_type" in shots[0]
+        assert "type" not in shots[0]
 
-    def test_hook_with_wish_and_two_spans_emits_broll_first(self):
-        from shorts_engine.stages import shotlist
-        beat = {"beat": "hook",
-                "narration": "Your effluent nitrate is creeping toward the limit, "
-                             "and the discharge clock is already running.",
-                "fact_ids": [], "card_text": "Nitrate limits are tightening",
-                "broll_wish": "wastewater aeration basin"}
-        shots = shotlist.plan_beat_shots(beat, *self._fixtures())
-        assert shots[0]["type"] == "BROLL"
-        assert shots[0]["payload"]["wish"] == "wastewater aeration basin"
-        fb = shots[0]["fallback"]
-        assert fb["type"] == "HEADLINE_CARD"
-        assert fb["payload"]["text"] == "Nitrate limits are tightening"
+    def test_shots_carry_beat_purpose(self):
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        shots = plan_beat_shots(_beat("twist", "mechanism", "How it works, step one."),
+                                 {}, {}, _fake_brand())
+        assert all(s["beat_purpose"] == "mechanism" for s in shots)
 
-    def test_hook_without_wish_stays_headline(self):
-        from shorts_engine.stages import shotlist
-        beat = {"beat": "hook", "narration": "Your effluent nitrate is rising fast.",
-                "fact_ids": [], "card_text": "Limits tightening", "broll_wish": ""}
-        shots = shotlist.plan_beat_shots(beat, *self._fixtures())
-        assert all(s["type"] != "BROLL" for s in shots)
+    def test_fact_resolved_verbatim_into_payload(self):
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        facts = {"f1": {"id": "f1", "verbatim_quote": "425 mS/cm peak conductivity",
+                        "value": 425, "unit": "mS/cm", "citation_marker": 1}}
+        cites = {1: {"url": "https://epa.gov/x", "kind": "standard"}}
+        shots = plan_beat_shots(
+            _beat("evidence", "proof", "Peak conductivity reached 425.", fact_ids=["f1"]),
+            facts, cites, _fake_brand())
+        assert shots[0]["payload"]["fact_text"] == "425 mS/cm peak conductivity"
+        assert shots[0]["payload"]["fact_value"] == 425
 
-    def test_single_span_hook_keeps_designed_card_despite_wish(self):
-        from shorts_engine.stages import shotlist
-        beat = {"beat": "hook", "narration": "Nitrate limits are rising.",
-                "fact_ids": [], "card_text": "Limits tightening",
-                "broll_wish": "aeration basin"}
-        shots = shotlist.plan_beat_shots(beat, *self._fixtures())
-        assert shots[0]["type"] == "HEADLINE_CARD"
+    def test_cta_purpose_gets_cta_length_cap(self):
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        shots = plan_beat_shots(
+            _beat("close", "cta", "Visit us today for pricing and technical support now.",
+                  fact_ids=["b_purity"]),
+            {}, {}, _fake_brand())
+        assert all(s["duration_s"] <= 10.0 for s in shots)  # config.LOGO_CTA_MAX_S
 
-    def test_linter_flags_broll_without_fallback(self):
-        from shorts_engine.stages import shotlist
-        shots = [{"id": "s00", "beat": "hook", "type": "BROLL", "duration_s": 3.0,
-                  "narration_span": "x", "payload": {"wish": "w"}, "fallback": None}]
-        errs = shotlist.lint_shotlist(shots, FACTS)
-        assert any("fallback" in e for e in errs)
+    def test_lint_shotlist_has_no_ceiling(self):
+        from shorts_engine.stages.shotlist import lint_shotlist
+        shots = [{"id": "s00", "duration_s": 4.0, "beat_purpose": "hook"}] * 20  # far over old 50s
+        assert lint_shotlist(shots, {"facts": []}) == []
+
+    def test_lint_shotlist_still_enforces_floor(self):
+        from shorts_engine.stages.shotlist import lint_shotlist
+        shots = [{"id": "s00", "duration_s": 2.0, "beat_purpose": "hook"}]  # well under 30s
+        errors = lint_shotlist(shots, {"facts": []})
+        assert any("floor" in e or "under" in e for e in errors)
+
+
+def _beat(beat, purpose, narration, fact_ids=None, card_text="c", broll_wish=""):
+    return {"beat": beat, "purpose": purpose, "narration": narration,
+            "fact_ids": fact_ids or [], "card_text": card_text, "broll_wish": broll_wish}
+
+
+def _fake_brand():
+    from shorts_engine.brand import BrandFacts
+    return BrandFacts(
+        company="HRSU", domain="hrsuindore.com", tagline="t",
+        differentiators=[{"id": "b_purity", "text": "High-purity calcium nitrate"}],
+        cta_lines=["Visit hrsuindore.com"], banned_claims=[],
+    )
 
 
 class TestRun:
@@ -314,6 +299,7 @@ class TestRun:
         arts = shotlist.run(ctx)
         data = json.loads((ws / arts["shotlist"]).read_text(encoding="utf-8"))
         assert data["shots"][0]["beat"] == "hook"
-        assert data["shots"][-1]["type"] == "LOGO_CTA"
+        assert data["shots"][-1]["suggested_type"] == "LOGO_CTA"
+        assert data["shots"][-1]["beat_purpose"] == "cta"
         from shorts_engine import config
-        assert config.TOTAL_MIN_S <= data["total_s"] <= config.TOTAL_MAX_S
+        assert data["total_s"] >= config.TOTAL_MIN_S

@@ -97,98 +97,55 @@ def _fallback_labels(narration: str) -> list[str]:
     return labels if len(labels) >= 2 else (labels + ["Result"])[:2]
 
 
+def _suggest_type(purpose: str, fact: dict | None) -> str:
+    """Advisory only -- Task 4's authoring subagent may override this. Never
+    read by lint_shotlist or any gate."""
+    if purpose == "cta":
+        return "LOGO_CTA"
+    if purpose == "mechanism":
+        return "DIAGRAM"
+    if fact is not None:
+        return "STAT_CARD"
+    return "HEADLINE_CARD"
+
+
 def plan_beat_shots(beat: dict, facts: dict, cites: dict, brand) -> list[dict]:
-    name = beat["beat"]
     narration = beat["narration"]
+    purpose = beat.get("purpose", "other")
     spans = pack_phrases(split_phrases(narration)) or [narration]
     est_total = max(estimate_s(narration), config.SHOT_MIN_S)
+
+    fact = _first_numeric_fact(beat, facts) or next(
+        (facts[f] for f in beat.get("fact_ids", []) if f in facts), None)
+
     shots: list[dict] = []
+    for span in spans:
+        payload = {"text": beat.get("card_text", "")}
+        if fact is not None:
+            payload["fact_text"] = fact["verbatim_quote"]
+            payload["fact_value"] = fact.get("value")
+            payload["fact_unit"] = fact.get("unit")
+            payload["fact_citation"] = _chip(fact.get("citation_marker"), cites)
+        if purpose == "mechanism":
+            payload["diagram_labels"] = beat.get("diagram_labels") or _fallback_labels(narration)
+        if purpose == "cta":
+            diff_text = ""
+            for fid in beat.get("fact_ids", []):
+                for dd in brand.differentiators:
+                    if dd["id"] == fid:
+                        diff_text = dd["text"]
+            payload["differentiator"] = diff_text
+            payload["cta_line"] = brand.cta_lines[0] if brand.cta_lines else ""
+            payload["domain"] = brand.domain
+        shots.append({
+            "id": "", "beat": beat.get("beat", purpose), "beat_purpose": purpose,
+            "suggested_type": _suggest_type(purpose, fact), "duration_s": 0.0,
+            "narration_span": span, "payload": payload,
+            "broll_wish": beat.get("broll_wish", ""),
+        })
 
-    def add(type_, payload, span, fallback=None):
-        shots.append({"id": "", "beat": name, "type": type_, "duration_s": 0.0,
-                      "narration_span": span, "payload": payload,
-                      "fallback": fallback})
-
-    if name == "hook":
-        headline_payload = {"text": beat["card_text"],
-                            "wish": beat.get("broll_wish", "")}
-        wish = (beat.get("broll_wish") or "").strip()
-        if wish and len(spans) >= 2:
-            add("BROLL", {"wish": wish, "layout": "auto"}, spans[0],
-                fallback={"type": "HEADLINE_CARD", "payload": headline_payload})
-            add("HEADLINE_CARD", headline_payload, ", ".join(spans[1:]))
-        else:
-            add("HEADLINE_CARD", headline_payload, narration)
-    elif name == "stakes":
-        fact = _first_numeric_fact(beat, facts)
-        if fact:
-            add("STAT_CARD", _stat_payload(fact, beat["card_text"], cites), spans[0])
-        else:
-            add("HEADLINE_CARD", {"text": beat["card_text"]}, spans[0])
-        if len(spans) > 1:
-            rest = ", ".join(spans[1:])
-            add("HEADLINE_CARD", {"text": beat["card_text"]}, rest)
-    elif name == "mechanism":
-        labels = beat.get("diagram_labels") or _fallback_labels(narration)
-        n_shots = max(1, min(3, len(spans)))
-        span_groups = spans[:n_shots - 1] + [", ".join(spans[n_shots - 1:])] \
-            if n_shots > 1 else [narration]
-        for k, span in enumerate(span_groups, start=1):
-            add("DIAGRAM", {"template": "flow", "labels": labels,
-                            "reveal_stage": k, "reveal_total": n_shots}, span)
-    elif name == "proof":
-        fact = _first_numeric_fact(beat, facts) or next(
-            (facts[f] for f in beat.get("fact_ids", []) if f in facts), None)
-        paper_fact = None
-        for fid in beat.get("fact_ids", []):
-            f = facts.get(fid)
-            m = f.get("citation_marker") if f else None
-            if m in cites and cites[m]["kind"] == "paper":
-                paper_fact = f
-                break
-        wish = (beat.get("broll_wish") or "").strip()
-        if paper_fact is not None:
-            m = paper_fact["citation_marker"]
-            quote_fb = {"type": "QUOTE_CARD",
-                        "payload": {"quote": paper_fact["verbatim_quote"],
-                                    "source": _chip(m, cites)}}
-            add("PAPER_CARD", {"marker": m, "url": cites[m]["url"],
-                               "highlight": beat["card_text"],
-                               "wish": beat.get("broll_wish", "")},
-                spans[0], fallback=quote_fb)
-            stat = paper_fact if extract_numeric_tokens(str(paper_fact.get("value", ""))) \
-                else (fact or paper_fact)
-            add("STAT_CARD", _stat_payload(stat, beat["card_text"], cites),
-                ", ".join(spans[1:]) or narration)
-        elif wish and len(spans) >= 2 and fact is not None:
-            stat_payload = _stat_payload(fact, beat["card_text"], cites)
-            add("BROLL", {"wish": wish, "layout": "auto"}, spans[0],
-                fallback={"type": "STAT_CARD", "payload": stat_payload})
-            add("QUOTE_CARD", {"quote": fact["verbatim_quote"],
-                               "source": _chip(fact.get("citation_marker"), cites)},
-                ", ".join(spans[1:]) or narration)
-        elif fact is not None:
-            add("STAT_CARD", _stat_payload(fact, beat["card_text"], cites), spans[0])
-            add("QUOTE_CARD", {"quote": fact["verbatim_quote"],
-                               "source": _chip(fact.get("citation_marker"), cites)},
-                ", ".join(spans[1:]) or narration)
-        else:
-            add("HEADLINE_CARD", {"text": beat["card_text"]}, narration)
-    elif name == "cta":
-        diff_text = ""
-        for fid in beat.get("fact_ids", []):
-            for dd in brand.differentiators:
-                if dd["id"] == fid:
-                    diff_text = dd["text"]
-        add("LOGO_CTA", {"differentiator": diff_text,
-                         "cta_line": brand.cta_lines[0] if brand.cta_lines else "",
-                         "domain": brand.domain}, narration)
-    else:
-        add("HEADLINE_CARD", {"text": beat.get("card_text", "")}, narration)
-
-    # distribute the beat's estimated duration across its shots, clamped
     per = est_total / len(shots)
-    cap = config.LOGO_CTA_MAX_S if name == "cta" else config.SHOT_MAX_S
+    cap = config.LOGO_CTA_MAX_S if purpose == "cta" else config.SHOT_MAX_S
     for s in shots:
         s["duration_s"] = round(min(max(per, config.SHOT_MIN_S), cap), 2)
     return shots
@@ -196,45 +153,16 @@ def plan_beat_shots(beat: dict, facts: dict, cites: dict, brand) -> list[dict]:
 
 def lint_shotlist(shots: list[dict], factsheet: dict) -> list[str]:
     errors: list[str] = []
-    facts = {f["id"]: f for f in factsheet.get("facts", [])}
-    known = {"HEADLINE_CARD", "STAT_CARD", "DIAGRAM", "QUOTE_CARD",
-             "PAPER_CARD", "LOGO_CTA", "BROLL"}
     total = 0.0
     for s in shots:
         total += s["duration_s"]
-        if s["type"] not in known:
-            errors.append(f"{s['id']}: unknown shot type {s['type']}")
-        cap = config.LOGO_CTA_MAX_S if s["type"] == "LOGO_CTA" else config.SHOT_MAX_S
+        cap = config.LOGO_CTA_MAX_S if s.get("beat_purpose") == "cta" else config.SHOT_MAX_S
         if not (config.SHOT_MIN_S <= s["duration_s"] <= cap):
             errors.append(f"{s['id']}: duration {s['duration_s']} outside "
                           f"[{config.SHOT_MIN_S}, {cap}]")
-        if s["type"] in ("PAPER_CARD", "BROLL") and not s.get("fallback"):
-            errors.append(f"{s['id']}: {s['type']} requires a declared fallback")
-        if s["type"] == "STAT_CARD":
-            fact = facts.get(s["payload"].get("fact_id", ""))
-            quote_digits = set(extract_numeric_tokens(
-                fact["verbatim_quote"])) if fact else set()
-            for tok in extract_numeric_tokens(str(s["payload"].get("value", ""))):
-                if tok not in quote_digits:
-                    errors.append(f"{s['id']}: STAT value token '{tok}' not in "
-                                  f"referenced fact quote")
-        if s["type"] == "DIAGRAM" and s["payload"].get("template") == "flow":
-            n = len(s["payload"].get("labels") or [])
-            if not 2 <= n <= 4:
-                errors.append(f"{s['id']}: flow diagram needs 2-4 labels, has {n}")
-    # Per-shot durations are rounded to 2 decimals in plan_beat_shots, so a
-    # script sitting exactly on the boundary can lose up to 0.005s per shot
-    # to accumulated rounding (observed live: a 91-word script -> exactly
-    # 35.0s estimated -> 9 shots summing to 34.99, failing a strict check
-    # whose {:.1f}-formatted message then displayed the impossible-looking
-    # "35.0s outside [35.0, 50.0]"). This total is a plan sanity check, not
-    # a precision contract -- ASSEMBLE re-flows every duration against the
-    # real measured voice audio anyway -- so absorb rounding with an epsilon
-    # sized for ~20 shots.
     eps = 0.1
-    if not (config.TOTAL_MIN_S - eps <= total <= config.TOTAL_MAX_S + eps):
-        errors.append(f"total duration {total:.2f}s outside "
-                      f"[{config.TOTAL_MIN_S}, {config.TOTAL_MAX_S}]")
+    if total < config.TOTAL_MIN_S - eps:
+        errors.append(f"total duration {total:.2f}s under the {config.TOTAL_MIN_S}s floor")
     return errors
 
 

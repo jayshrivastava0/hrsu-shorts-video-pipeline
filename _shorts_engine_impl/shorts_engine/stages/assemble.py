@@ -27,7 +27,7 @@ def beat_spans(beats_audio: list[dict], voice_total_s: float) -> list[dict]:
 
 
 def _cap(shot: dict) -> float:
-    return config.LOGO_CTA_MAX_S if shot["type"] == "LOGO_CTA" else config.SHOT_MAX_S
+    return config.LOGO_CTA_MAX_S if shot.get("beat_purpose") == "cta" else config.SHOT_MAX_S
 
 
 def reflow(shots: list[dict], beats_audio: list[dict],
