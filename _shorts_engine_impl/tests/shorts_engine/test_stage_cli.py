@@ -337,6 +337,9 @@ def test_assemble_prepare_writes_brief_without_checkpointing(tmp_path):
     assert brief["logo_path"] == str(config.BRAND_LOGO_FILE)
     assert brief["target_duration_s"] == pytest.approx(
         brief["voice_total_s"] + config.END_CARD_HOLD_S, abs=0.01)
+    # No music track exists for region "usa" under asset_library/music in this test
+    # environment, so mix_music_under_voice returns the voice path unchanged.
+    assert brief["music_used"] is False
 
     # Not checkpointed yet — still "visuals" (mirrors visuals-prepare's own contract).
     manifest_after = json.loads(manifest_path.read_text())
@@ -359,6 +362,13 @@ def test_assemble_finalize_checkpoints_when_duration_law_holds_and_shots_present
     target = voice_total_s + config.END_CARD_HOLD_S
     shots_dir = workspace / "shots"
     shots_dir.mkdir()
+    # Source shot mp4s -- same white content as the assembled video below, so the
+    # shot-presence similarity check (I1) passes for a legitimate composition.
+    for shot_id in ("1", "2"):
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={target / 2}",
+            str(shots_dir / f"shot_{shot_id}.mp4"),
+        ], check=True, capture_output=True)
     (workspace / "assembly_brief.json").write_text(json.dumps({
         "shots": [
             {"id": "1", "video_path": str(workspace / "shots" / "shot_1.mp4"),
@@ -369,6 +379,7 @@ def test_assemble_finalize_checkpoints_when_duration_law_holds_and_shots_present
         "word_timings": [], "audio_path": str(workspace / "voiceover.mp3"),
         "logo_path": str(config.BRAND_LOGO_FILE),
         "voice_total_s": voice_total_s, "target_duration_s": target,
+        "music_used": False,
     }))
     # The rendered final video: bright/white throughout, duration exactly on the law.
     subprocess.run([
@@ -387,6 +398,18 @@ def test_assemble_finalize_checkpoints_when_duration_law_holds_and_shots_present
     report = json.loads((workspace / "assemble_report.json").read_text())
     assert len(report["shots"]) == 2
     assert all(s["content_pixels"] >= config.MIN_CONTENT_PIXELS for s in report["shots"])
+    assert all("final_duration_s" in s and "beat" in s for s in report["shots"])
+    assert report["music_used"] is False
+
+    # The finalize output must be consumable by verify.shot_timeline() (C1 regression) --
+    # the old shape's KeyError on "final_duration_s" broke every real run.
+    from shorts_engine.stages.verify import shot_timeline
+    timeline = shot_timeline(report)
+    assert len(timeline) == 2
+    assert timeline[0]["start_s"] == pytest.approx(0.0, abs=0.01)
+    assert timeline[0]["duration_s"] == pytest.approx(target / 2, abs=0.01)
+    assert timeline[0]["mid_s"] == pytest.approx(target / 4, abs=0.01)
+    assert timeline[1]["start_s"] == pytest.approx(target / 2, abs=0.01)
 
 
 def test_assemble_finalize_out_of_order_fails_loud(tmp_path):
@@ -442,6 +465,73 @@ def test_assemble_finalize_fails_loud_on_duration_law_violation(tmp_path):
     assert result.returncode == 1
     payload = json.loads(result.stderr.strip().splitlines()[-1])
     assert payload["status"] == "error"
+
+    manifest_after = json.loads(manifest_path.read_text())
+    assert manifest_after["status"] == "failed"
+
+
+def test_assemble_finalize_catches_swapped_shot_content(tmp_path):
+    # I1 regression: the never-blank check alone (content_pixels >= MIN_CONTENT_PIXELS)
+    # passes for ANY bright content, so a shot silently dropped/reordered/swapped in the
+    # assembled composition would previously slip through undetected as long as SOMETHING
+    # bright was on screen. Build an assembled video whose first half is mostly black
+    # (with just enough of a bright box to still clear the never-blank floor) while shot
+    # 1's own source mp4 is plain white -- the new similarity check must catch this.
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = Path(json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"])
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "visuals"
+    manifest["last_ok_status"] = "visuals"
+    manifest_path.write_text(json.dumps(manifest))
+
+    voice_total_s = 3.0
+    target = voice_total_s + config.END_CARD_HOLD_S
+    half = target / 2
+    shots_dir = workspace / "shots"
+    shots_dir.mkdir()
+    # Each shot's own source mp4: plain white, as a legitimate render would be.
+    for shot_id in ("1", "2"):
+        subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={half}",
+            str(shots_dir / f"shot_{shot_id}.mp4"),
+        ], check=True, capture_output=True)
+
+    (workspace / "assembly_brief.json").write_text(json.dumps({
+        "shots": [
+            {"id": "1", "video_path": str(shots_dir / "shot_1.mp4"),
+             "start_s": 0.0, "duration_s": half, "beat": "hook"},
+            {"id": "2", "video_path": str(shots_dir / "shot_2.mp4"),
+             "start_s": half, "duration_s": half, "beat": "cta"},
+        ],
+        "word_timings": [], "audio_path": str(workspace / "voiceover.mp3"),
+        "logo_path": str(config.BRAND_LOGO_FILE),
+        "voice_total_s": voice_total_s, "target_duration_s": target,
+        "music_used": False,
+    }))
+    # The "assembled" video: mostly-black first half (with a small bright box so it
+    # still clears the never-blank floor) followed by a white second half -- shot 1's
+    # position doesn't actually show shot 1's content.
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=c=black:s=64x64:d={half}",
+        "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={half}",
+        "-filter_complex",
+        "[0:v]drawbox=x=17:y=17:w=30:h=30:color=white:t=fill[v0];"
+        "[v0][1:v]concat=n=2:v=1:a=0[outv]",
+        "-map", "[outv]",
+        str(workspace / "video_short.mp4"),
+    ], check=True, capture_output=True)
+
+    result = run_cli(["assemble-finalize", "--workspace", str(workspace)])
+    assert result.returncode == 1, result.stdout
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error"
+    assert "shot 1" in payload["message"]
+    assert "doesn't match its own source shot mp4" in payload["message"]
 
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["status"] == "failed"

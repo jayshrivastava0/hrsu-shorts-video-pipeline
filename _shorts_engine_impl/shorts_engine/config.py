@@ -155,6 +155,17 @@ CARD_RERENDER_EPSILON_S = 0.05     # re-render card if re-flow moved it more
 MIN_CONTENT_PIXELS = 500
 LUMA_CONTENT_THRESHOLD = 140
 
+# ── Shot-presence content check (ASSEMBLE) ─────────────────────────────────
+# Coarse similarity gate between each shot's own pre-rendered mp4 and the
+# assembled video at that shot's on-timeline position -- catches a dropped,
+# reordered, or swapped shot that the never-blank check alone would miss
+# (any bright content passes never-blank, even the fallback brand mark).
+# Deliberately loose: the assembled frame carries caption/progress-bar
+# overlays and possibly a transition the source shot mp4 doesn't have, and
+# this must not false-positive on legitimate compositions. Mean absolute
+# difference is computed on a 16x16 grayscale thumbnail, 0-255 scale.
+SHOT_CONTENT_MAX_MEAN_DIFF = 90
+
 # ── Sourcing: acquisition ladder (spec §6) ──────────────────────────────────
 DOMAIN_BLACKLIST = [
     "ftcdn.net", "shutterstock.com", "alamy.com", "istockphoto.com",

@@ -184,6 +184,32 @@ class TestRunLoop:
             verify.run(Ctx())
 
 
+class TestReassemble:
+    # C2 regression: _reassemble used to silently call the retired ffmpeg
+    # assemble.run(), which would overwrite the HyperFrames-composed
+    # video_short.mp4 with the old fixed-caption/progress-bar render. It must
+    # now fail loudly instead, and never import/invoke the retired module.
+    def test_reassemble_raises_engine_error(self, tmp_path):
+        from shorts_engine.stages import verify
+        from shorts_engine.errors import EngineError
+        ws = _ws(tmp_path)
+        class Ctx: workspace = ws; flags = {}
+        with pytest.raises(EngineError, match="re-assemble"):
+            verify._reassemble(Ctx())
+
+    def test_reassemble_does_not_call_retired_assemble_run(self, tmp_path, monkeypatch):
+        from shorts_engine.stages import verify, assemble
+        from shorts_engine.errors import EngineError
+
+        called = []
+        monkeypatch.setattr(assemble, "run", lambda ctx: called.append(1))
+        ws = _ws(tmp_path)
+        class Ctx: workspace = ws; flags = {}
+        with pytest.raises(EngineError):
+            verify._reassemble(Ctx())
+        assert called == []
+
+
 class TestBuildAssMargin:
     def test_margin_v_default_unchanged(self, tmp_path):
         from shorts_engine.stages import assemble

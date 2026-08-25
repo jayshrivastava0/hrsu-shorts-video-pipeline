@@ -20,6 +20,9 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
+
 from shorts_engine import config
 from shorts_engine.cli import build_stages
 from shorts_engine.errors import EngineError
@@ -27,6 +30,17 @@ from shorts_engine.manifest import STATUS_ORDER, RunManifest
 from shorts_engine.runner import StageContext
 from shorts_engine.stages.assemble import reflow
 from shorts_engine.stages.visuals import content_pixels, resolve_shot, sample_frame
+
+
+def _thumbnail_mean_abs_diff(png_a: Path, png_b: Path) -> float:
+    """Coarse similarity check between two frames: downscale both to a 16x16
+    grayscale thumbnail and return the mean absolute per-cell luma difference
+    (0-255 scale). Tolerant of caption/progress-bar overlays and transitions;
+    intended to catch a dropped/reordered/swapped shot, not to be an exact
+    pixel comparison (see config.SHOT_CONTENT_MAX_MEAN_DIFF)."""
+    a = np.asarray(Image.open(png_a).convert("L").resize((16, 16)), dtype=np.int16)
+    b = np.asarray(Image.open(png_b).convert("L").resize((16, 16)), dtype=np.int16)
+    return float(np.abs(a - b).mean())
 
 STAGE_FUNCTIONS = {name: fn for name, _status_after, fn in build_stages()}
 STAGE_STATUS_AFTER = {name: status_after for name, status_after, _fn in build_stages()}
@@ -259,11 +273,15 @@ def cmd_assemble_prepare(args: argparse.Namespace) -> int:
         region = json.loads((workspace / "post.json").read_text(encoding="utf-8")).get(
             "region") or "default"
         mixed = mix_music_under_voice(voice, workspace / "music_mix.mp3", region)
+        # mix_music_under_voice returns voice_path UNCHANGED when no region track exists,
+        # otherwise a real mixed output path (per video_agent/music.py's documented contract).
+        music_used = Path(mixed) != Path(voice)
 
         brief = {
             "shots": shots_brief, "word_timings": words, "audio_path": str(Path(mixed)),
             "logo_path": str(config.BRAND_LOGO_FILE), "voice_total_s": round(voice_total, 3),
             "target_duration_s": round(voice_total + config.END_CARD_HOLD_S, 3),
+            "music_used": music_used,
         }
     except Exception as exc:
         manifest.status = "failed"
@@ -318,10 +336,33 @@ def cmd_assemble_finalize(args: argparse.Namespace) -> int:
                     f"assemble-finalize: shot {shot['id']} not visibly present in the "
                     f"assembled video ({pixels} bright px < {config.MIN_CONTENT_PIXELS}) — "
                     f"never-blank violated")
-            report_shots.append({"id": shot["id"], "content_pixels": pixels})
+
+            # Non-blankness alone passes for ANY bright content (e.g. the fallback
+            # composition's brand mark + progress bar), so also compare the assembled
+            # frame against the shot's OWN pre-rendered mp4 at ITS OWN midpoint —
+            # catches a shot that was silently dropped, reordered, or swapped.
+            source_video = Path(shot["video_path"])
+            if not source_video.exists():
+                raise EngineError(
+                    f"assemble-finalize: shot {shot['id']} source mp4 missing at "
+                    f"{source_video} — cannot verify shot presence")
+            source_png = workspace / "shots" / f"assembled_check_{shot['id']}_source.png"
+            sample_frame(source_video, shot["duration_s"] / 2, source_png)
+            diff = _thumbnail_mean_abs_diff(png, source_png)
+            if diff > config.SHOT_CONTENT_MAX_MEAN_DIFF:
+                raise EngineError(
+                    f"assemble-finalize: shot {shot['id']} content in the assembled video "
+                    f"doesn't match its own source shot mp4 (mean thumbnail diff {diff:.1f} "
+                    f"> {config.SHOT_CONTENT_MAX_MEAN_DIFF}) — shot may be missing, "
+                    f"reordered, or swapped")
+
+            report_shots.append({
+                "id": shot["id"], "content_pixels": pixels,
+                "final_duration_s": shot["duration_s"], "beat": shot["beat"],
+            })
 
         report = {"voice_total_s": voice_total, "video_duration_s": round(vd, 3),
-                  "shots": report_shots}
+                  "shots": report_shots, "music_used": brief["music_used"]}
         (workspace / "assemble_report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8")
     except Exception as exc:
