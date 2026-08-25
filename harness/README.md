@@ -40,8 +40,13 @@ subscription this account doesn't have (confirmed 403), so it's out of scope for
 SCENE_AUTHOR_MODEL=minimax-m3:cloud pnpm dsh
 ```
 
-The assembly stage's creative-authoring subagent (once built) will follow the same convention
-under `ASSEMBLY_AUTHOR_MODEL` — see the assembly-stage design doc.
+The `tool-assembly` subagent (the `assembled` stage's creative-authoring subagent, which composes
+HyperFrames compositions from an `AssemblyBrief`) has its own independent override,
+`ASSEMBLY_AUTHOR_MODEL` (also defaults to `gemma4:31b-cloud`):
+
+```bash
+ASSEMBLY_AUTHOR_MODEL=minimax-m3:cloud pnpm dsh
+```
 
 ## Install
 

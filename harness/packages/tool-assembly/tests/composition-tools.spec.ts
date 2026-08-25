@@ -116,10 +116,17 @@ describe('buildDeterministicAssemblyHtml', () => {
     expect(html).toContain('data-duration="5.5"')
   })
 
-  test('escapes caption text and does not reference logo_path as an image asset', () => {
+  test('neutralizes </script>-breakout in caption text without HTML-entity-escaping it', () => {
     // groupWordsIntoCues uppercases word text, so a payload relying on lowercase '<script>' would
     // be defeated by the case change alone rather than by real escaping. Use a payload whose
     // breakout characters (<, >, /) stay meaningful regardless of case.
+    //
+    // The caption text is assigned via `.textContent`, not `.innerHTML` -- HTML-entity escaping
+    // is never un-escaped by the browser at that sink, so it would corrupt visible text (e.g.
+    // "R&D" would render as the literal string "R&amp;D"). The fix instead JSON.stringify's the
+    // raw text (a valid JS string literal) and further-escapes only <, >, & as unicode escapes,
+    // which keeps the literal "</script>" string out of the emitted HTML without ever producing
+    // HTML entities.
     const withUnsafeCaption: AssemblyBrief = {
       ...brief,
       word_timings: [{ word: '</SCRIPT><img onerror=x src=y>', start: 0, end: 1 }],
@@ -127,11 +134,32 @@ describe('buildDeterministicAssemblyHtml', () => {
     const html = buildDeterministicAssemblyHtml(withUnsafeCaption)
     expect(html).not.toContain('</SCRIPT><img onerror=x src=y>')
     expect(html).not.toContain('</SCRIPT><IMG ONERROR=X SRC=Y>')
-    expect(html).toContain('&lt;/SCRIPT&gt;&lt;IMG ONERROR=X SRC=Y&gt;')
+    // The payload's own literal '</SCRIPT>' breakout string must not appear anywhere
+    // (the template's own legitimate closing </script> tag is unaffected by this check).
+    expect(html).not.toContain('</SCRIPT>')
+    // Neutralized via unicode escapes inside the JS string literal, not HTML entities.
+    expect(html).toContain('\\u003c/SCRIPT\\u003e\\u003cIMG ONERROR=X SRC=Y\\u003e')
+    expect(html).not.toContain('&lt;')
+    expect(html).not.toContain('&gt;')
     // The fallback deliberately uses the proven text-based brand mark, not an unverified
     // <img>/background-image asset load (see Global Constraints item 6).
     expect(html).not.toContain(brief.logo_path)
     expect(html).toContain('HRSU INDORE')
+  })
+
+  test('caption text containing & renders as a literal ampersand, not an HTML entity', () => {
+    // I2 regression: escapeHtml(cue.text) used to run before JSON.stringify, so a caption like
+    // "R&D applications" would be embedded as the literal JS string "R&amp;D APPLICATIONS" and
+    // .textContent would display "R&amp;D APPLICATIONS" on screen instead of "R&D APPLICATIONS".
+    const withAmpersand: AssemblyBrief = {
+      ...brief,
+      word_timings: [{ word: 'R&D applications', start: 0, end: 1 }],
+    }
+    const html = buildDeterministicAssemblyHtml(withAmpersand)
+    expect(html).not.toContain('&amp;')
+    // groupWordsIntoCues uppercases and & is escaped to \u0026 to keep it out of any HTML-entity
+    // decoding path, but it still represents a literal ampersand at runtime.
+    expect(html).toContain('R\\u0026D')
   })
 
   test('registers a paused GSAP timeline keyed to the composition id', () => {

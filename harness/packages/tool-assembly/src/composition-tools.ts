@@ -137,11 +137,24 @@ export function buildDeterministicAssemblyHtml(brief: AssemblyBrief): string {
              data-start="${shot.start_s}" data-duration="${shot.duration_s}" data-track-index="0"></video>`).join('')
 
   const cues = groupWordsIntoCues(brief.word_timings)
-  const captionTimelineCalls = cues.map((cue) => `
+  const captionTimelineCalls = cues.map((cue) => {
+    // The sink here is `.textContent`, not `.innerHTML` -- HTML-entity escaping (escapeHtml)
+    // is never un-escaped by the browser at that sink, so it would render literally on screen
+    // (e.g. "R&D" -> "R&amp;D"). What actually needs escaping is the three characters that
+    // could break out of the generated <script> block ('</script>' specifically); JSON.stringify
+    // already produces a valid JS string literal, so further-escaping just those three
+    // characters as unicode escapes keeps the literal '</script>' string out of the emitted
+    // HTML without touching how the caption text renders.
+    const jsSafeText = JSON.stringify(cue.text)
+      .replace(/</g, '\\u003c')
+      .replace(/>/g, '\\u003e')
+      .replace(/&/g, '\\u0026')
+    return `
         tl.set(box, { visibility: 'visible' }, ${cue.start});
-        tl.to(box, { opacity: 1, duration: 0.1, onStart: () => { textEl.textContent = ${JSON.stringify(escapeHtml(cue.text))}; } }, ${cue.start});
+        tl.to(box, { opacity: 1, duration: 0.1, onStart: () => { textEl.textContent = ${jsSafeText}; } }, ${cue.start});
         tl.to(box, { opacity: 0, duration: 0.1 }, ${cue.end});
-        tl.set(box, { opacity: 0, visibility: 'hidden' }, ${cue.end + 0.1});`).join('')
+        tl.set(box, { opacity: 0, visibility: 'hidden' }, ${cue.end + 0.1});`
+  }).join('')
 
   const totalDuration = brief.target_duration_s
 
@@ -151,6 +164,7 @@ export function buildDeterministicAssemblyHtml(brief: AssemblyBrief): string {
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
   <style>
     body, html { margin: 0; padding: 0; width: 1080px; height: 1920px; overflow: hidden; background: #0a192f; }
+    video.clip { position: absolute; top: 0; left: 0; width: 1080px; height: 1920px; object-fit: cover; z-index: 0; }
     .brand-mark { position: absolute; top: 60px; left: 0; width: 1080px; text-align: center;
                   font-family: Georgia, "Times New Roman", serif; font-weight: 700; font-size: 44px;
                   letter-spacing: 2px; color: #d4af37; }
