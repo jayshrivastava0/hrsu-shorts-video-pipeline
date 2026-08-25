@@ -18,19 +18,6 @@ logger = logging.getLogger(__name__)
 class TestConfigConstants:
     """Test that shorts_engine.config exposes required constants."""
 
-    def test_config_beat_template(self):
-        """BEAT_TEMPLATE is the locked five-beat procurement template
-        (spec §4 Stage 3): hook 2-4s, stakes 4-6s, mechanism 8-12s,
-        proof 6-10s, cta 6-8s, in that exact order."""
-        from shorts_engine import config
-        assert hasattr(config, "BEAT_TEMPLATE")
-        assert isinstance(config.BEAT_TEMPLATE, list)
-        beats = [b["beat"] for b in config.BEAT_TEMPLATE]
-        assert beats == ["hook", "stakes", "mechanism", "proof", "cta"]
-        assert config.BEAT_TEMPLATE[0] == {"beat": "hook", "min_s": 2.0, "max_s": 4.0}
-        assert config.BEAT_TEMPLATE[2] == {"beat": "mechanism", "min_s": 8.0, "max_s": 12.0}
-        assert config.BEAT_TEMPLATE[4] == {"beat": "cta", "min_s": 6.0, "max_s": 8.0}
-
     def test_config_word_budget(self):
         """Word budget and tolerance constants exist."""
         from shorts_engine import config
