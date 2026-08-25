@@ -1,8 +1,8 @@
 """Tests for the SCRIPT stage's deterministic gates -- pure functions that
-enforce the never-unverified invariant, the locked five-beat template
-(spec §4 Stage 3), the banned-phrase/fear-filler/brand-banned-claims ban,
-card_text hygiene, and the exactly-one-differentiator-in-the-cta-beat rule
-(spec §7).
+enforce the never-unverified invariant, the free-form purpose-tagged beat
+structure (2026-08-26 creative-flow redesign, spec §4 Stage 3), the
+banned-phrase/fear-filler/brand-banned-claims ban, card_text hygiene, and
+the exactly-one-differentiator-in-the-cta-beat rule (spec §7).
 
 These gates are the last line of defense before a script.json is written:
 no LLM output reaches disk without passing every one of them (see Task 12 /
@@ -48,22 +48,25 @@ FACTSHEET = {
 
 
 def _beats(**over):
-    """Five spec-clean beats (hook/stakes/mechanism/proof/cta); `over` patches
-    beats by their positional index (as a string key, e.g. `_beats(**{"3": {...}})`
-    patches the proof beat) so each test only states what it changes."""
+    """Five spec-clean beats (hook/stakes/mechanism/proof/cta), each tagged
+    with a `purpose` matching its beat name; `over` patches beats by their
+    positional index (as a string key, e.g. `_beats(**{"3": {...}})` patches
+    the proof beat) so each test only states what it changes. Beat naming
+    and count are otherwise free-form since the 2026-08-26 creative-flow
+    redesign -- only `purpose` carries narrative-role meaning."""
     # Narration lengths sized for WORDS_PER_SECOND=1.7: per-beat integer
     # bounds hook [3,8], stakes [6,12], mechanism [11,24], proof [9,20],
-    # cta [9,16]; total 62 words, inside the aggregate [60, 85] window.
+    # cta [9,16]; total 62 words, comfortably over the 51-word (30s) floor.
     beats = [
-        {"beat": "hook", "narration": "EU nitrate discharge limits are tightening fast.",
+        {"beat": "hook", "purpose": "hook", "narration": "EU nitrate discharge limits are tightening fast.",
          "fact_ids": [], "card_text": "EU limits tightening", "broll_wish": ""},
-        {"beat": "stakes", "narration": "Non-compliance risks steep penalties and unplanned production downtime this quarter.",
+        {"beat": "stakes", "purpose": "stakes", "narration": "Non-compliance risks steep penalties and unplanned production downtime this quarter.",
          "fact_ids": [], "card_text": "Downtime risk", "broll_wish": ""},
-        {"beat": "mechanism", "narration": "Dosing calcium nitrate feeds denitrifying bacteria, converting nitrate into harmless nitrogen gas within the treatment train without any retrofit.",
+        {"beat": "mechanism", "purpose": "mechanism", "narration": "Dosing calcium nitrate feeds denitrifying bacteria, converting nitrate into harmless nitrogen gas within the treatment train without any retrofit.",
          "fact_ids": [], "card_text": "Nitrate to nitrogen gas", "broll_wish": ""},
-        {"beat": "proof", "narration": "Best practice suggests a dosage range of 1.5 to 3 kg per cubic meter.",
+        {"beat": "proof", "purpose": "proof", "narration": "Best practice suggests a dosage range of 1.5 to 3 kg per cubic meter.",
          "fact_ids": ["f1"], "card_text": "Dosing window", "broll_wish": ""},
-        {"beat": "cta", "narration": "HRSU supplies high-purity powder with batch QC. Visit hrsuindore.com for the guide.",
+        {"beat": "cta", "purpose": "cta", "narration": "HRSU supplies high-purity powder with batch QC. Visit hrsuindore.com for the guide.",
          "fact_ids": ["b_purity"], "card_text": "hrsuindore.com", "broll_wish": ""},
     ]
     for i, patch in over.items():
@@ -207,8 +210,9 @@ class TestGateBanned:
 
 
 class TestGateWordBudget:
-    """Per-beat word count vs. BEAT_TEMPLATE seconds x WORDS_PER_SECOND,
-    tolerated by WORD_BUDGET_TOLERANCE (spec §4 Stage 3: 2.6 words/s ±20%)."""
+    """Per-beat word count vs. its own `purpose`'s PURPOSE_TEMPLATE seconds x
+    WORDS_PER_SECOND, tolerated by WORD_BUDGET_TOLERANCE (spec §4 Stage 3:
+    2.6 words/s ±20%)."""
 
     def test_default_beats_are_within_budget(self) -> None:
         assert gate_word_budget(_beats()) == []
@@ -256,23 +260,23 @@ class TestGateWordBudget:
 
 
 class TestGateTotalDuration:
-    """Aggregate duration vs. SHOTLIST's total video window
-    (config.TOTAL_MIN_S..TOTAL_MAX_S). gate_word_budget only bounds each
-    beat individually -- BEAT_TEMPLATE's per-beat min_s values sum to well
-    under TOTAL_MIN_S (26.0s vs. a 35.0s floor), so a script where every
-    beat independently passes its own word budget can still, in aggregate,
-    be too short for a valid video. A live run hit exactly this: five
-    gate-compliant beats totaling only ~29s of narration, discovered only
-    at the SHOTLIST stage (which has no LLM and no retry path of its own)
-    with no way to recover. This gate catches it at SCRIPT time instead,
-    where the existing writer retry-with-echo loop can act on it."""
+    """Aggregate duration vs. the config.TOTAL_MIN_S floor -- no ceiling
+    (2026-08-26 creative-flow redesign: longer videos are fine). gate_word_
+    budget only bounds each beat individually -- PURPOSE_TEMPLATE's per-
+    purpose min_s values sum to well under TOTAL_MIN_S, so a script where
+    every beat independently passes its own word budget can still, in
+    aggregate, be too short for a valid video. A live run hit exactly this:
+    five gate-compliant beats totaling only ~29s of narration, discovered
+    only at the SHOTLIST stage (which has no LLM and no retry path of its
+    own) with no way to recover. This gate catches it at SCRIPT time
+    instead, where the existing writer retry-with-echo loop can act on it."""
 
     def test_default_beats_are_within_total_window(self) -> None:
         assert gate_total_duration(_beats()) == []
 
     def test_all_beats_at_their_minimum_is_flagged_too_short(self) -> None:
         # Mirrors the real failure: every beat individually legal (at or
-        # near its own BEAT_TEMPLATE min_s), but the sum falls under 35s.
+        # near its own purpose's min_s), but the sum falls under the floor.
         short = _beats(**{
             "0": {"narration": "EU nitrate limits are tightening fast."},  # 6 words
             "1": {"narration": "Non-compliance risks penalties for your plant."},  # 6 words
@@ -281,7 +285,7 @@ class TestGateTotalDuration:
             "4": {"narration": "HRSU supplies high-purity powder. Visit hrsuindore.com for the guide."},  # 9 words
         })
         # total = 6+6+13+12+9 = 46 words -> 27.1s at 1.7 w/s, under the
-        # 60-word (35s) floor while every beat is individually legal.
+        # 51-word (30s) floor while every beat is individually legal.
         errs = gate_total_duration(short)
         assert len(errs) == 1
         assert "total_duration" in errs[0]
@@ -302,22 +306,9 @@ class TestGateTotalDuration:
         errs = gate_total_duration(short)
         assert len(errs) == 1
         assert "AT LEAST" in errs[0]
-        assert "13" in errs[0]  # 60 - 50 + 3 buffer = 13
+        assert "4" in errs[0]  # 51 - 50 + 3 buffer = 4
         # names at least one beat with headroom and its current/max words
         assert "mechanism" in errs[0] or "proof" in errs[0]
-
-    def test_total_over_max_is_flagged_too_long(self) -> None:
-        # Exceeding TOTAL_MAX_S is only reachable by also busting individual
-        # beats' own budgets (per-beat ceilings sum below the 85-word gate
-        # top), which is irrelevant here since this test calls
-        # gate_total_duration directly, not the full run_gates aggregation.
-        long_ = _beats(**{
-            "2": {"narration": " ".join(["word"] * 60)},
-            "3": {"narration": " ".join(["word"] * 60)},
-        })
-        errs = gate_total_duration(long_)
-        assert len(errs) == 1
-        assert "total_duration" in errs[0]
 
     def test_run_gates_includes_total_duration_errors(self) -> None:
         short = _beats(**{
@@ -402,21 +393,34 @@ class TestRunGates:
     def test_clean_script_produces_no_errors(self) -> None:
         assert run_gates(_beats(), FACTSHEET, BRAND) == []
 
-    def test_wrong_beat_count_short_circuits_with_structure_error(self) -> None:
-        errs = run_gates(_beats()[:4], FACTSHEET, BRAND)
+    def test_fewer_than_min_beats_short_circuits_with_structure_error(self) -> None:
+        # Beats are free-form in count since the 2026-08-26 redesign, but a
+        # count below config.MIN_BEATS is still a hard structural failure.
+        errs = run_gates(_beats()[:2], FACTSHEET, BRAND)
         assert len(errs) == 1 and "structure" in errs[0]
 
-    def test_wrong_beat_order_short_circuits_with_structure_error(self) -> None:
+    def test_final_beat_not_cta_purpose_short_circuits_with_structure_error(self) -> None:
+        # Beat naming/order is free-form now, but the FINAL beat's purpose
+        # must still be "cta".
+        beats = _beats()
+        beats[-1]["purpose"] = "proof"
+        errs = run_gates(beats, FACTSHEET, BRAND)
+        assert len(errs) == 1 and "structure" in errs[0]
+
+    def test_reordered_beats_no_longer_short_circuit_on_structure(self) -> None:
+        # Beat order is no longer checked -- only MIN_BEATS and the final
+        # beat's purpose matter structurally.
         beats = _beats()
         beats[0], beats[1] = beats[1], beats[0]
         errs = run_gates(beats, FACTSHEET, BRAND)
-        assert len(errs) == 1 and "structure" in errs[0]
+        assert not any(e.startswith("structure:") for e in errs)
 
-    def test_unknown_beat_name_short_circuits_with_structure_error(self) -> None:
+    def test_nonstandard_beat_name_no_longer_short_circuits_on_structure(self) -> None:
+        # Beat names are free-form strings now -- only `purpose` matters.
         beats = _beats()
         beats[0]["beat"] = "intro"
         errs = run_gates(beats, FACTSHEET, BRAND)
-        assert len(errs) == 1 and "structure" in errs[0]
+        assert not any(e.startswith("structure:") for e in errs)
 
 
 class TestScriptSchemaDiagramLabels:
@@ -434,9 +438,9 @@ class TestScriptSchemaDiagramLabels:
         from shorts_engine.stages.script import SCRIPT_SCHEMA
 
         beats = [
-            {"beat": s["beat"], "narration": "n", "fact_ids": [],
+            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
              "card_text": "c", "broll_wish": "", "diagram_labels": []}
-            for s in config.BEAT_TEMPLATE
+            for purpose in config.PURPOSE_TEMPLATE
         ]
         jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
 
@@ -445,9 +449,9 @@ class TestScriptSchemaDiagramLabels:
         from shorts_engine.stages.script import SCRIPT_SCHEMA
 
         beats = [
-            {"beat": s["beat"], "narration": "n", "fact_ids": [],
+            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
              "card_text": "c", "broll_wish": ""}
-            for s in config.BEAT_TEMPLATE
+            for purpose in config.PURPOSE_TEMPLATE
         ]
         jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
 
@@ -457,10 +461,10 @@ class TestScriptSchemaDiagramLabels:
         from shorts_engine.stages.script import SCRIPT_SCHEMA
 
         beats = [
-            {"beat": s["beat"], "narration": "n", "fact_ids": [],
+            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
              "card_text": "c", "broll_wish": "",
              "diagram_labels": ["a", "b", "c", "d", "e"]}
-            for s in config.BEAT_TEMPLATE
+            for purpose in config.PURPOSE_TEMPLATE
         ]
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)

@@ -107,10 +107,10 @@ STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
 
 # ── LLM behavior ───────────────────────────────────────────────────────────
 # 5, not 3: SCRIPT's writer must satisfy both the per-beat word budget AND
-# the aggregate TOTAL_MIN_S..TOTAL_MAX_S window simultaneously (gate_total_
-# duration) -- live runs showed it converging (33.5s -> 34.2s -> beat-level
-# overshoot while fixing the aggregate) but needing more than 3 attempts to
-# land inside every constraint at once.
+# the aggregate TOTAL_MIN_S floor (there is no ceiling) simultaneously
+# (gate_total_duration) -- live runs showed it converging (33.5s -> 34.2s ->
+# beat-level overshoot while fixing the aggregate) but needing more than 3
+# attempts to land inside every constraint at once.
 LLM_MAX_RETRIES = 5
 LLM_RETRY_DELAY_S = 2  # exponential backoff: 2s, 4s, 8s
 LLM_TIMEOUT_S = 60
