@@ -347,7 +347,13 @@ def cmd_assemble_finalize(args: argparse.Namespace) -> int:
                     f"assemble-finalize: shot {shot['id']} source mp4 missing at "
                     f"{source_video} — cannot verify shot presence")
             source_png = workspace / "shots" / f"assembled_check_{shot['id']}_source.png"
-            sample_frame(source_video, shot["duration_s"] / 2, source_png)
+            # shot["duration_s"] is the POST-reflow slot duration; the source mp4 was
+            # rendered at the PRE-reflow shotlist duration, so reflow growth can make
+            # duration_s / 2 seek past the source file's actual end. Clamp to whichever
+            # is shorter so the seek always lands inside the real file.
+            source_duration = encoder.probe_duration(source_video)
+            sample_time = min(shot["duration_s"], source_duration) / 2
+            sample_frame(source_video, sample_time, source_png)
             diff = _thumbnail_mean_abs_diff(png, source_png)
             if diff > config.SHOT_CONTENT_MAX_MEAN_DIFF:
                 raise EngineError(
@@ -362,7 +368,7 @@ def cmd_assemble_finalize(args: argparse.Namespace) -> int:
             })
 
         report = {"voice_total_s": voice_total, "video_duration_s": round(vd, 3),
-                  "shots": report_shots, "music_used": brief["music_used"]}
+                  "shots": report_shots, "music_used": brief.get("music_used", False)}
         (workspace / "assemble_report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8")
     except Exception as exc:

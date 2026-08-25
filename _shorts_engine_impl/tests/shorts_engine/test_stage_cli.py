@@ -535,3 +535,76 @@ def test_assemble_finalize_catches_swapped_shot_content(tmp_path):
 
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["status"] == "failed"
+
+
+def test_assemble_finalize_handles_reflow_grown_shot_without_seek_past_eof(tmp_path):
+    # I1 regression #2: shot["duration_s"] in assembly_brief.json is the POST-reflow slot
+    # duration (computed by reflow() in cmd_assemble_prepare), but the shot's own source
+    # mp4 at shots/shot_<id>.mp4 was rendered at the PRE-reflow shotlist duration by the
+    # visuals stage. When reflow grows a shot to more than ~2x its originally-rendered
+    # length, sampling the source mp4 at duration_s / 2 seeks past its actual end and
+    # sample_frame() raises "frame sample failed" -- a confusing hard failure unrelated to
+    # actual shot content. The fix clamps the sample time to the source file's real
+    # duration. Build a shot whose source mp4 is short (1.5s) but whose brief duration_s
+    # is long (4.0s, > 2x), and assert we get either a clean pass or the legitimate
+    # content-mismatch message -- never the seek-past-EOF "frame sample failed" error.
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    workspace = Path(json.loads(init_result.stdout.strip().splitlines()[-1])["workspace"])
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "visuals"
+    manifest["last_ok_status"] = "visuals"
+    manifest_path.write_text(json.dumps(manifest))
+
+    voice_total_s = 3.0
+    target = voice_total_s + config.END_CARD_HOLD_S
+    shots_dir = workspace / "shots"
+    shots_dir.mkdir()
+
+    source_duration = 1.5  # pre-reflow render length
+    grown_duration_s = 4.0  # post-reflow slot duration, > 2x source_duration
+    # Shot 1's source mp4 is short (pre-reflow) and plain white -- same content as what
+    # the assembled video will show at shot 1's slot, so this should legitimately pass
+    # once the seek is clamped to the source's real duration.
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={source_duration}",
+        str(shots_dir / "shot_1.mp4"),
+    ], check=True, capture_output=True)
+    remaining = target - grown_duration_s
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={remaining}",
+        str(shots_dir / "shot_2.mp4"),
+    ], check=True, capture_output=True)
+
+    (workspace / "assembly_brief.json").write_text(json.dumps({
+        "shots": [
+            {"id": "1", "video_path": str(shots_dir / "shot_1.mp4"),
+             "start_s": 0.0, "duration_s": grown_duration_s, "beat": "hook"},
+            {"id": "2", "video_path": str(shots_dir / "shot_2.mp4"),
+             "start_s": grown_duration_s, "duration_s": remaining, "beat": "cta"},
+        ],
+        "word_timings": [], "audio_path": str(workspace / "voiceover.mp3"),
+        "logo_path": str(config.BRAND_LOGO_FILE),
+        "voice_total_s": voice_total_s, "target_duration_s": target,
+        "music_used": False,
+    }))
+    # The assembled video: plain white throughout, matching both shots' source content.
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=64x64:d={target}",
+        str(workspace / "video_short.mp4"),
+    ], check=True, capture_output=True)
+
+    result = run_cli(["assemble-finalize", "--workspace", str(workspace)])
+    if result.returncode != 0:
+        payload = json.loads(result.stderr.strip().splitlines()[-1])
+        assert "frame sample failed" not in payload["message"], (
+            f"seek past source mp4 EOF was not clamped: {payload['message']}")
+        assert "doesn't match its own source shot mp4" in payload["message"], payload["message"]
+    else:
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+        assert payload["status_after"] == "assembled"
+        report = json.loads((workspace / "assemble_report.json").read_text())
+        assert len(report["shots"]) == 2
