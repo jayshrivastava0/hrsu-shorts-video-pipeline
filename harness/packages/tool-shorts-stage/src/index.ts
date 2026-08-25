@@ -53,7 +53,23 @@ const STAGE_TOOLS: StageToolSpec[] = [
     cliVerb: 'visuals-finalize',
     noLocalOnly: true,
   },
-  { toolName: 'stage_assemble', description: 'Assemble shots, audio, and captions into one video.', stageName: 'assemble' },
+  {
+    toolName: 'stage_assemble_prepare',
+    description: 'Reflow shot durations onto real audio timing, mix music under the voiceover, and write assembly_brief.json.',
+    stageName: 'assemble-prepare',
+    cliVerb: 'assemble-prepare',
+    // Unlike `visuals-prepare`, `assemble-prepare`'s argparse subparser (`stage_cli.py`) does
+    // not accept `--local-only` at all — it does no model-tier work, only deterministic
+    // reflow/mix — so passing the flag would be an unrecognized-argument error.
+    noLocalOnly: true,
+  },
+  {
+    toolName: 'stage_assemble_finalize',
+    description: 'Verify the duration law and every shot\'s presence in the assembled video, and advance the workspace to assembled.',
+    stageName: 'assemble-finalize',
+    cliVerb: 'assemble-finalize',
+    noLocalOnly: true,
+  },
   { toolName: 'stage_verify', description: 'Run the vision-judge/grounding verification gates.', stageName: 'verify' },
   { toolName: 'stage_package', description: 'Package the verified video for publishing review.', stageName: 'package' },
   { toolName: 'publish', description: 'Publish the packaged video for real. Only after 3 human-approved dry runs.', stageName: 'publish' },

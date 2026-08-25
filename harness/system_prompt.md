@@ -29,10 +29,11 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
   stage tool call. Unless told otherwise, use `output/shorts` relative to the repository root as
   `workspace_root`.
 - Stage tools (`stage_ingest`, `stage_facts`, `stage_script`, `stage_shotlist`, `stage_audio`,
-  `stage_visuals_prepare`, `stage_visuals_finalize`, `stage_assemble`, `stage_verify`,
-  `stage_package`) each wrap existing, tested Python logic. Pass them exactly the JSON shape
-  they document; if a call fails, read the actual error in the JSON response before retrying —
-  don't retry blindly more than twice on the same stage without changing your input.
+  `stage_visuals_prepare`, `stage_visuals_finalize`, `stage_assemble_prepare`,
+  `stage_assemble_finalize`, `stage_verify`, `stage_package`) each wrap existing, tested Python
+  logic. Pass them exactly the JSON shape they document; if a call fails, read the actual error
+  in the JSON response before retrying — don't retry blindly more than twice on the same stage
+  without changing your input.
 - Visuals is a three-step flow, not one tool call. Call `stage_visuals_prepare` once — it writes
   `shot_briefs.json` into the workspace and returns its path. Read that file (the same way you
   already inspect other JSON artifacts the workspace produces) and call `author_visual_scene`
@@ -47,6 +48,15 @@ succeeded — do not assume success and do not paraphrase a failure into a succe
   to the HyperFrames safety-net template for that one shot, so it never returns without a usable
   visual. Once every shot has been authored, call `stage_visuals_finalize` once to verify the
   rendered shots and advance the workspace to `visuals`.
+- Assembly is a three-step flow too, mirroring visuals. Call `stage_assemble_prepare` once — it
+  reflows shot durations onto the real audio timing, mixes music under the voiceover, and writes
+  `assembly_brief.json`, returning its path. Call `author_assembly_composition` once (not once
+  per shot — this is the whole video's final assembly in one composition), passing the brief,
+  `stage_init`'s `run_id` as `workspace_id`, and `stage_init`'s `workspace` as `workspace` — same
+  two params, same meaning, as `author_visual_scene`. It authors, renders, and — on repeated
+  failure — falls back to a safety-net composition, so it never returns without a usable video.
+  Once it returns, call `stage_assemble_finalize` once to verify the duration law and every
+  shot's presence, and advance the workspace to `assembled`.
 - Use the local Ollama model for text and vision judging. If a judgment call is ambiguous, prefer
   the conservative outcome (reject the visual, cut the claim) over shipping something unverified.
 

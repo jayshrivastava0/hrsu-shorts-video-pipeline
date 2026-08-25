@@ -41,6 +41,9 @@ importers:
       '@hrsu/dsh-llm-ollama':
         specifier: workspace:*
         version: link:packages/llm-ollama
+      '@hrsu/dsh-tool-assembly':
+        specifier: workspace:*
+        version: link:packages/tool-assembly
       '@hrsu/dsh-tool-shorts-stage':
         specifier: workspace:*
         version: link:packages/tool-shorts-stage
