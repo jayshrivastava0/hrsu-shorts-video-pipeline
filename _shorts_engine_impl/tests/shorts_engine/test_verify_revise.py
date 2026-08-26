@@ -185,29 +185,54 @@ class TestRunLoop:
 
 
 class TestReassemble:
-    # C2 regression: _reassemble used to silently call the retired ffmpeg
-    # assemble.run(), which would overwrite the HyperFrames-composed
-    # video_short.mp4 with the old fixed-caption/progress-bar render. It must
-    # now fail loudly instead, and never import/invoke the retired module.
-    def test_reassemble_raises_engine_error(self, tmp_path):
+    # C2 regression: _reassemble used to unconditionally call the retired
+    # ffmpeg assemble.run(), which would overwrite a HyperFrames-composed
+    # video_short.mp4 with the old fixed-caption/progress-bar render. When
+    # THIS run's video really was HyperFrames-composed -- signalled by
+    # assembly_brief.json, which only stage_assemble_prepare ever writes --
+    # it must still fail loudly and never import/invoke the retired module.
+    def test_reassemble_raises_engine_error_for_hyperframes_run(self, tmp_path):
         from shorts_engine.stages import verify
         from shorts_engine.errors import EngineError
         ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
         class Ctx: workspace = ws; flags = {}
         with pytest.raises(EngineError, match="re-assemble"):
             verify._reassemble(Ctx())
 
-    def test_reassemble_does_not_call_retired_assemble_run(self, tmp_path, monkeypatch):
+    def test_reassemble_does_not_call_retired_assemble_run_for_hyperframes_run(
+        self, tmp_path, monkeypatch
+    ):
         from shorts_engine.stages import verify, assemble
         from shorts_engine.errors import EngineError
 
         called = []
         monkeypatch.setattr(assemble, "run", lambda ctx: called.append(1))
         ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
         class Ctx: workspace = ws; flags = {}
         with pytest.raises(EngineError):
             verify._reassemble(Ctx())
         assert called == []
+
+    # When this run's video was produced by plain assemble.run() (no
+    # assembly_brief.json -- true for every python -m shorts_engine run
+    # today, since HyperFrames is only reachable via the Node harness's own
+    # tool-call orchestration and --resume from that into this CLI is still
+    # a stub), there is no HyperFrames output at risk, so a revise cycle
+    # must be able to re-run the same assemble.run() it always could.
+    def test_reassemble_calls_assemble_run_when_no_hyperframes_brief(
+        self, tmp_path, monkeypatch
+    ):
+        from shorts_engine.stages import verify, assemble
+
+        called = []
+        monkeypatch.setattr(assemble, "run", lambda ctx: called.append(ctx))
+        ws = _ws(tmp_path)
+        class Ctx: workspace = ws; flags = {}
+        ctx = Ctx()
+        verify._reassemble(ctx)
+        assert called == [ctx]
 
 
 class TestBuildAssMargin:

@@ -188,14 +188,25 @@ def _render_shot(ctx, shot_id: str, rtype: str, payload: dict,
 
 
 def _reassemble(ctx) -> None:
-    raise EngineError(
-        "VERIFY: a revise cycle needs to re-assemble the video, but reassembly on the "
-        "HyperFrames composition path is not yet implemented (the retired ffmpeg "
-        "assemble.run() pipeline it used to call has been replaced and would silently "
-        "overwrite the HyperFrames-authored video with the old fixed-caption render). "
-        "This requires re-driving stage_assemble_prepare -> author_assembly_composition -> "
-        "stage_assemble_finalize, which needs the harness (Node) layer verify.py's "
-        "pure-Python revise loop cannot reach — tracked as follow-up work.")
+    # assembly_brief.json only exists when THIS run's video was produced via
+    # the HyperFrames composition path (stage_assemble_prepare writes it;
+    # assemble.run() never does). Only that path is unsafe to blindly
+    # re-run here — see the raise below. A plain assemble.run() video (the
+    # only path python -m shorts_engine's own STAGE_FUNCS ever drives
+    # end-to-end today, since --resume is still a stub) can be safely
+    # re-assembled the same way it always was.
+    ws = Path(ctx.workspace)
+    if (ws / "assembly_brief.json").exists():
+        raise EngineError(
+            "VERIFY: a revise cycle needs to re-assemble the video, but reassembly on the "
+            "HyperFrames composition path is not yet implemented (the retired ffmpeg "
+            "assemble.run() pipeline it used to call has been replaced and would silently "
+            "overwrite the HyperFrames-authored video with the old fixed-caption render). "
+            "This requires re-driving stage_assemble_prepare -> author_assembly_composition -> "
+            "stage_assemble_finalize, which needs the harness (Node) layer verify.py's "
+            "pure-Python revise loop cannot reach — tracked as follow-up work.")
+    from shorts_engine.stages import assemble
+    assemble.run(ctx)
 
 
 # Flat string fields the shrink-in-place fix can act on directly. Originally
