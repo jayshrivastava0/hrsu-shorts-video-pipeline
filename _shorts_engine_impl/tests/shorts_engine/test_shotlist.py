@@ -17,7 +17,7 @@ CITES = [{"marker": 2, "url": "https://www.mdpi.com/2073-4441/12/5/1234", "kind"
          {"marker": 5, "url": "https://example.com/report", "kind": "web"}]
 
 # Narration lengths sized for WORDS_PER_SECOND=1.7 so the planned total
-# lands inside [TOTAL_MIN_S, TOTAL_MAX_S] (62 words ~= 36.5s estimated).
+# clears the TOTAL_MIN_S floor (62 words ~= 36.5s estimated; no ceiling exists).
 BEATS = [
     {"beat": "hook", "purpose": "hook",
      "narration": "Your effluent nitrate is creeping toward the limit.",

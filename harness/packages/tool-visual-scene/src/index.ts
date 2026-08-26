@@ -56,6 +56,11 @@ export interface ShotBrief {
   payload: Record<string, unknown>
   duration_s: number
   fade_in_s: number
+  /** The narration text this shot accompanies (from shotlist.py's per-shot
+   * `narration_span`), carried into the brief by `cmd_visuals_prepare` so the scene-authoring
+   * subagent can pass it straight to `request_broll` without inventing it — see Fix 1 in the
+   * final whole-branch review. Optional for backward compatibility with older brief shapes. */
+  narration_span?: string
   provenance?: unknown
 }
 
@@ -125,6 +130,7 @@ export function pickFallbackCaption(shotBrief: ShotBrief): string {
 function buildPrompt(
   shotBrief: ShotBrief,
   workspaceId: string,
+  workspace: string,
   previousFailureReason: string | undefined,
 ): string {
   const briefJson = JSON.stringify(shotBrief, null, 2)
@@ -143,6 +149,9 @@ ${briefJson}
 
 - \`workspace_id\`: \`${workspaceId}\`
 - \`shot_id\`: \`${shotBrief.shot_id}\`
+- \`workspace\`: \`${workspace}\` (the run workspace, for reference only — no tool you have takes
+  this as an argument; \`render_scene\` decides the output path itself and \`request_broll\` is
+  keyed by \`workspace_id\` instead)
 
 Note: \`render_scene\` takes only \`workspace_id\` and \`shot_id\` — it never takes an output path.
 Where the rendered mp4 lands is decided by the pipeline, not by you.
@@ -186,6 +195,15 @@ export interface AuthorVisualSceneDeps {
    * attempt (idempotent — always the same value for a given shot).
    */
   registerOutputPath: (workspaceId: string, shotId: string, outputPath: string) => void
+  /**
+   * Records the exact, trusted run-workspace absolute path, keyed by `workspace_id` alone (one
+   * workspace per run, shared by every shot in it). `request_broll`'s tool `execute()` (registered
+   * in `apply()` below) looks this up via the `workspace_id` the child subagent already supplies,
+   * rather than trusting a free-form `workspace` path argument from the (prompt-injection-reachable)
+   * subagent — see Fix 3 in the final whole-branch review. Called once, before the subagent is
+   * spawned, on every attempt (idempotent — always the same value for a given run).
+   */
+  registerWorkspace: (workspaceId: string, workspace: string) => void
 }
 
 export async function authorVisualScene(
@@ -195,6 +213,7 @@ export async function authorVisualScene(
   const { shot_brief: shotBrief, workspace_id: workspaceId, workspace } = args
   const outputPath = resolveOutputPath(workspace, shotBrief.shot_id)
   deps.registerOutputPath(workspaceId, shotBrief.shot_id, outputPath)
+  deps.registerWorkspace(workspaceId, workspace)
 
   let previousFailureReason: string | undefined
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -205,7 +224,7 @@ export async function authorVisualScene(
     }
     const run = await deps.subagents.start(deps.subagentProviderName, {
       label: `author_visual_scene:${shotBrief.shot_id}:attempt${attempt}`,
-      prompt: [{ type: 'text', text: buildPrompt(shotBrief, workspaceId, previousFailureReason) }],
+      prompt: [{ type: 'text', text: buildPrompt(shotBrief, workspaceId, workspace, previousFailureReason) }],
       parent: deps.agent,
       signal: deps.signal,
       agentOptions: deps.agentOptions,
@@ -276,6 +295,12 @@ export function apply(ctx: Context, config: Config): void {
   const outputPathsByShot = new Map<string, string>()
   const shotKey = (workspaceId: string, shotId: string): string => `${workspaceId} ${shotId}`
 
+  // Trusted run-workspace registry (Fix 3): `author_visual_scene`'s own execute() registers the
+  // exact `workspace` path it was called with (never from subagent input), keyed by
+  // `workspace_id` alone. `request_broll`'s execute() below looks this up via the `workspace_id`
+  // the child subagent already supplies, instead of trusting a free-form `workspace` argument.
+  const workspaceByRunId = new Map<string, string>()
+
   ctx.tools.register(defineTool({
     name: 'write_scene_file',
     description: 'Write one HyperFrames scene composition (HTML/CSS/GSAP) to disk for later rendering.',
@@ -327,7 +352,7 @@ export function apply(ctx: Context, config: Config): void {
       '— treat that as "no real photo available," not an error, and fall back to a synthetic ' +
       'composition for this shot.',
     parameters: {
-      workspace: { type: 'string', required: true, description: 'Absolute path to the run workspace (from your shot brief\'s context).' },
+      workspace_id: { type: 'string', required: true, description: 'Run workspace id (matches the composition subdirectory) — same value you were given for write_scene_file/render_scene.' },
       wish: { type: 'string', required: true, description: 'Short description of the visual you want.' },
       narration_span: { type: 'string', required: true, description: 'The narration text this visual accompanies.' },
     },
@@ -336,9 +361,17 @@ export function apply(ctx: Context, config: Config): void {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args) {
+      const workspace = workspaceByRunId.get(args.workspace_id as string)
+      if (workspace === undefined) {
+        throw new Error(
+          `request_broll: no registered workspace for workspace_id=${JSON.stringify(args.workspace_id)} ` +
+          '— author_visual_scene must be the one starting this shot\'s subagent (it registers the ' +
+          'trusted workspace before spawning).',
+        )
+      }
       const runStageCli = config.runStageCli ?? defaultRunStageCli
       return (await runStageCli(
-        ['broll-request', '--workspace', args.workspace as string,
+        ['broll-request', '--workspace', workspace,
          '--wish', args.wish as string, '--narration-span', args.narration_span as string],
         { cwd: config.shortsEngineCwd },
       )) as Record<string, JsonValue>
@@ -383,6 +416,9 @@ export function apply(ctx: Context, config: Config): void {
         renderFallbackScene,
         registerOutputPath: (workspaceId, shotId, outputPath) => {
           outputPathsByShot.set(shotKey(workspaceId, shotId), outputPath)
+        },
+        registerWorkspace: (workspaceId, workspace) => {
+          workspaceByRunId.set(workspaceId, workspace)
         },
       })
       // Unlike `@hrsu/dsh-tool-shorts-stage` (whose output schema is an open

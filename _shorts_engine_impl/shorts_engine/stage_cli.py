@@ -170,6 +170,7 @@ def cmd_visuals_prepare(args: argparse.Namespace) -> int:
                 "shot_id": shot["id"], "beat": shot["beat"], "type": rtype,
                 "payload": payload, "duration_s": shot["duration_s"],
                 "fade_in_s": fade,
+                "narration_span": shot.get("narration_span", ""),
                 "provenance": prov,
             })
     except Exception as exc:
@@ -407,9 +408,13 @@ def cmd_assemble_finalize(args: argparse.Namespace) -> int:
 
 def cmd_broll_request(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace)
-    from shorts_engine.sourcing.ladder import acquire
-    post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
-    result = acquire(args.wish, args.narration_span, workspace, post.get("images", []))
+    try:
+        from shorts_engine.sourcing.ladder import acquire
+        post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
+        result = acquire(args.wish, args.narration_span, workspace, post.get("images", []))
+    except Exception as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
     print(json.dumps(result))
     return 0
 

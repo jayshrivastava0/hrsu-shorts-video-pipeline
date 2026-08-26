@@ -33,6 +33,7 @@ function makeFakeCtx() {
               token: Symbol('test-token') as never,
               deferContext: () => {},
               concludeTurn: () => {},
+              agent: {} as never,
             }),
         }
       },
@@ -47,6 +48,7 @@ const HEADLINE_BRIEF: ShotBrief = {
   payload: { text: 'Cold weather pours do not have to wait for spring.' },
   duration_s: 2.5,
   fade_in_s: 0.4,
+  narration_span: 'Cold weather pours do not have to wait for spring.',
 }
 
 const STAT_BRIEF: ShotBrief = {
@@ -121,6 +123,7 @@ describe('authorVisualScene', () => {
         existsSync: existsSyncMock,
         renderFallbackScene,
         registerOutputPath,
+        registerWorkspace: vi.fn(),
       },
     )
 
@@ -140,6 +143,10 @@ describe('authorVisualScene', () => {
       attempts: 1,
       used_fallback: false,
     })
+    // Fix 1: the shot brief's narration_span must reach the subagent's prompt (carried in the
+    // brief JSON) so request_broll can be called without hallucinating it.
+    const firstCallPrompt = start.mock.calls[0][1].prompt[0].text as string
+    expect(firstCallPrompt).toContain('"narration_span": "Cold weather pours do not have to wait for spring."')
   })
 
   it('falls back after two failed subagent-spawn attempts and calls renderFallbackScene with the right caption and duration', async () => {
@@ -166,6 +173,7 @@ describe('authorVisualScene', () => {
         existsSync: existsSyncMock,
         renderFallbackScene,
         registerOutputPath,
+        registerWorkspace: vi.fn(),
       },
     )
 
@@ -174,6 +182,9 @@ describe('authorVisualScene', () => {
     // Second attempt's prompt carries the first attempt's failure reason forward.
     const secondCallPrompt = start.mock.calls[1][1].prompt[0].text as string
     expect(secondCallPrompt).toContain('render_scene: missing data-duration')
+    // Fix 1: the prompt must surface the run workspace as a concrete value (previously the
+    // subagent had no way to know it, since `workspace` was never mentioned in the prompt text).
+    expect(secondCallPrompt).toContain('/workspace')
     const expectedMp4Path = join('/workspace', 'shots', 'shot_4.mp4')
     expect(renderFallbackScene).toHaveBeenCalledWith(
       'run-42',
@@ -214,6 +225,7 @@ describe('authorVisualScene', () => {
         existsSync: existsSyncMock,
         renderFallbackScene,
         registerOutputPath: vi.fn(),
+        registerWorkspace: vi.fn(),
       },
     )
 
@@ -236,6 +248,7 @@ describe('authorVisualScene', () => {
         existsSync: vi.fn(),
         renderFallbackScene: vi.fn(),
         registerOutputPath: vi.fn(),
+        registerWorkspace: vi.fn(),
       },
     )).rejects.toThrow(/no parent agent/i)
     expect(start).not.toHaveBeenCalled()
@@ -243,18 +256,56 @@ describe('authorVisualScene', () => {
 })
 
 describe('request_broll tool', () => {
-  it('invokes broll-request via runStageCli with the exact wish/narration_span/workspace', async () => {
+  it('invokes broll-request via runStageCli with the trusted workspace registered by author_visual_scene, keyed by workspace_id', async () => {
+    // Real temp workspace with the shot's mp4 already present, so author_visual_scene's real
+    // existsSync check (unstubbed inside apply()) takes the success path instead of falling
+    // back — this test only cares about registerWorkspace's wiring into request_broll.
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const workspace = mkdtempSync(join(tmpdir(), 'tool-visual-scene-'))
+    mkdirSync(join(workspace, 'shots'), { recursive: true })
+    writeFileSync(join(workspace, 'shots', 'shot_3.mp4'), '')
+
     const runStageCli = vi.fn().mockResolvedValue({ image_path: null, focal_hint: 'center', provenance: {} })
     const ctx = makeFakeCtx()
     apply(ctx, {
       projectRoot: '/tmp/project', shortsEngineCwd: '/tmp/engine',
       agentOptions: { model: 'gemma4:31b-cloud' }, runStageCli,
     })
-    const tool = ctx.tools.getRegistered('request_broll')
-    await tool.execute({ workspace: '/tmp/ws', wish: 'white powder', narration_span: 'It dissolves.' })
+    // request_broll has no `ctx.subagents` on this fake ctx, so authorVisualScene itself can't
+    // run here — drive author_visual_scene's own registered tool first (the way the real
+    // pipeline does), so its execute() registers the trusted workspace exactly as production
+    // wiring would, then call request_broll and assert it picked that registered value up.
+    const start = vi.fn().mockResolvedValue({
+      id: 'child-1',
+      result: Promise.resolve({ output: [], stopReason: 'completed' }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    })
+    ;(ctx as unknown as { subagents: unknown }).subagents = { start }
+    const authorTool = ctx.tools.getRegistered('author_visual_scene')
+    await authorTool.execute({
+      shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42', workspace,
+    })
+
+    const brollTool = ctx.tools.getRegistered('request_broll')
+    await brollTool.execute({ workspace_id: 'run-42', wish: 'white powder', narration_span: 'It dissolves.' })
     expect(runStageCli).toHaveBeenCalledWith(
-      ['broll-request', '--workspace', '/tmp/ws', '--wish', 'white powder', '--narration-span', 'It dissolves.'],
+      ['broll-request', '--workspace', workspace, '--wish', 'white powder', '--narration-span', 'It dissolves.'],
       { cwd: '/tmp/engine' },
     )
+  })
+
+  it('throws a clear error when workspace_id has no registered workspace (never trusts a subagent-supplied path)', async () => {
+    const runStageCli = vi.fn()
+    const ctx = makeFakeCtx()
+    apply(ctx, {
+      projectRoot: '/tmp/project', shortsEngineCwd: '/tmp/engine',
+      agentOptions: { model: 'gemma4:31b-cloud' }, runStageCli,
+    })
+    const tool = ctx.tools.getRegistered('request_broll')
+    await expect(tool.execute({
+      workspace_id: 'never-registered', wish: 'white powder', narration_span: 'It dissolves.',
+    })).rejects.toThrow(/no registered workspace/i)
+    expect(runStageCli).not.toHaveBeenCalled()
   })
 })

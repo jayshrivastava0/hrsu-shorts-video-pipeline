@@ -396,6 +396,19 @@ def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts) -> list[str
     if not beats or beats[-1].get("purpose") != "cta":
         return ['structure: the final beat must have purpose "cta"']
 
+    seen: set[str] = set()
+    dupes: set[str] = set()
+    for b in beats:
+        name = b.get("beat")
+        if name in seen:
+            dupes.add(name)
+        seen.add(name)
+    if dupes:
+        return [
+            "structure: beat names must be unique, found duplicate(s): "
+            f"{sorted(dupes)}"
+        ]
+
     return (
         gate_numbers(beats, factsheet, brand)
         + gate_banned(beats, brand)

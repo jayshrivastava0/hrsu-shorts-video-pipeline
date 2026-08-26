@@ -110,6 +110,7 @@ Your prompt includes one JSON object with this shape (from the pipeline's `shot_
   "payload": { "text": "Cold weather concrete pours don't have to wait for spring." },
   "duration_s": 2.5,
   "fade_in_s": 0.4,
+  "narration_span": "Cold weather concrete pours don't have to wait for spring.",
   "provenance": { "...": "..." }
 }
 ```
@@ -132,12 +133,15 @@ Your prompt includes one JSON object with this shape (from the pipeline's `shot_
   use it as the duration of your GSAP `.from()` entrance tween on the main element (if it is `0`,
   the primary element should already be at its resting state at time `0` — no entrance tween
   needed).
+- `narration_span` — the narration text this shot accompanies; pass this verbatim as
+  `request_broll`'s `narration_span` argument if you call it for this shot.
 - `provenance` — sourcing/attribution metadata; informational only, never render it on screen.
 
 ## Real photos: `request_broll`
 
 If a shot calls for a real photograph or footage frame rather than a synthetic composition, call
-`request_broll` with a short `wish` description and the shot's `narration_span`. It returns
+`request_broll` with the exact `workspace_id` you were given, a short `wish` description, and the
+shot's `narration_span` (from the shot brief's own `narration_span` field). It returns
 `image_path` (a local file path to embed as an `<img>`/`<video>` source in your composition, or
 `null` if nothing matched closely enough — vision-judged against your wish and the narration, so a
 `null` result means no real photo is available, not that you did something wrong) and `focal_hint`

@@ -34,6 +34,94 @@ def test_broll_request_calls_acquisition_ladder(tmp_path, monkeypatch, capsys):
     assert called["wish"] == "close-up of white powder"
 
 
+def test_broll_request_fails_loud_on_missing_post_json(tmp_path, capsys):
+    # cmd_broll_request previously let an exception (e.g. a missing post.json) escape as a
+    # raw Python traceback instead of the {"status": "error", ...} JSON contract every
+    # sibling cmd_* function follows -- runStageCli on the Node side parses stderr for that
+    # JSON shape, so an unhandled traceback there is an opaque failure for the subagent
+    # instead of the documented "no photo available" fallback path.
+    from shorts_engine import stage_cli
+    # Deliberately no post.json written in tmp_path.
+    args = stage_cli.build_parser().parse_args([
+        "broll-request", "--workspace", str(tmp_path),
+        "--wish", "close-up of white powder", "--narration-span", "The powder dissolves.",
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 1
+    err = json.loads(capsys.readouterr().err.strip().split("\n")[-1])
+    assert err["status"] == "error"
+    assert "post.json" in err["message"] or "No such file" in err["message"]
+
+
+def test_visuals_prepare_carries_narration_span_into_shot_briefs(tmp_path):
+    # Fix 1: shot_briefs.json must carry narration_span through from shotlist.json so the
+    # scene-authoring subagent can pass it to request_broll without inventing it -- the brief
+    # previously dropped this field even though shotlist.py always produces it per shot.
+    from shorts_engine import stage_cli
+    init_result_workspace = json.loads(
+        subprocess.run(
+            [sys.executable, "-m", "shorts_engine.stage_cli", "init",
+             "https://blog.hrsuindore.com/test-post", "--workspace-root", str(tmp_path)],
+            capture_output=True, text=True,
+            cwd=Path(__file__).parent.parent.parent,
+        ).stdout.strip().splitlines()[-1]
+    )["workspace"]
+    workspace = Path(init_result_workspace)
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    (workspace / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "type": "HEADLINE_CARD",
+         "payload": {"text": "Test headline"}, "duration_s": 2.5,
+         "narration_span": "Cold weather concrete pours don't have to wait for spring."},
+    ]}))
+    (workspace / "post.json").write_text(json.dumps({"images": []}))
+
+    args = stage_cli.build_parser().parse_args([
+        "visuals-prepare", "--workspace", str(workspace),
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+
+    briefs = json.loads((workspace / "shot_briefs.json").read_text())
+    assert briefs[0]["narration_span"] == (
+        "Cold weather concrete pours don't have to wait for spring.")
+
+
+def test_visuals_prepare_defaults_narration_span_to_empty_string_when_missing(tmp_path):
+    from shorts_engine import stage_cli
+    init_result_workspace = json.loads(
+        subprocess.run(
+            [sys.executable, "-m", "shorts_engine.stage_cli", "init",
+             "https://blog.hrsuindore.com/test-post", "--workspace-root", str(tmp_path)],
+            capture_output=True, text=True,
+            cwd=Path(__file__).parent.parent.parent,
+        ).stdout.strip().splitlines()[-1]
+    )["workspace"]
+    workspace = Path(init_result_workspace)
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    (workspace / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "type": "HEADLINE_CARD",
+         "payload": {"text": "Test headline"}, "duration_s": 2.5},
+    ]}))
+    (workspace / "post.json").write_text(json.dumps({"images": []}))
+
+    args = stage_cli.build_parser().parse_args([
+        "visuals-prepare", "--workspace", str(workspace),
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+
+    briefs = json.loads((workspace / "shot_briefs.json").read_text())
+    assert briefs[0]["narration_span"] == ""
+
+
 def run_cli(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "shorts_engine.stage_cli", *args],

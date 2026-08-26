@@ -422,6 +422,31 @@ class TestRunGates:
         errs = run_gates(beats, FACTSHEET, BRAND)
         assert not any(e.startswith("structure:") for e in errs)
 
+    def test_duplicate_beat_names_short_circuit_with_structure_error(self) -> None:
+        # Free-form beat naming means two beats can plausibly get the same name (e.g. an
+        # LLM naming two different beats "proof"). assemble.reflow() keys a dict by beat
+        # name, so a duplicate silently collides -- one beat's audio span vanishes and both
+        # beats' shots get grouped under the survivor's span. This must fail loudly and
+        # clearly at script-gate time, not surface later as a confusing assemble-finalize
+        # duration-law failure.
+        beats = _beats()
+        beats[2]["beat"] = beats[1]["beat"]
+        errs = run_gates(beats, FACTSHEET, BRAND)
+        assert len(errs) == 1
+        assert "structure" in errs[0]
+        assert "unique" in errs[0]
+        assert beats[1]["beat"] in errs[0]
+
+    def test_duplicate_beat_names_short_circuits_before_content_gates(self) -> None:
+        # The structural checks run BEFORE the five content gates (per run_gates' own
+        # docstring) -- a script with both a duplicate beat name AND a content-gate
+        # failure (e.g. an untraceable number) must report only the structure error.
+        beats = _beats(**{"3": {"narration": "Reduces nitrate by 150 mg per liter."}})
+        beats[2]["beat"] = beats[1]["beat"]
+        errs = run_gates(beats, FACTSHEET, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("structure:")
+
 
 class TestScriptSchemaDiagramLabels:
     """Regression: a live run showed the writer including an empty
