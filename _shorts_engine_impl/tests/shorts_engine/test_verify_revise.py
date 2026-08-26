@@ -83,6 +83,26 @@ class TestApplyFixes:
         verify.apply_fixes(Ctx(), [{"id": "s00", "kind": "legibility", "issues": []}])
         assert len(captured["text"].split()) == 7  # 10 * 0.7
 
+    def test_legibility_skips_render_for_hyperframes_authored_shot(self, tmp_path, monkeypatch):
+        """assembly_brief.json present means this run's shots were HyperFrames-authored (Task 3's
+        freeform payload shape), which the retired PIL RENDERERS[rtype](...) call cannot handle --
+        must degrade gracefully instead of calling _render_shot (which would KeyError/EngineError
+        on a payload shape it doesn't recognize)."""
+        from shorts_engine.stages import verify
+        ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
+        vis = json.loads((ws / "visuals_report.json").read_text(encoding="utf-8"))
+        vis["shots"][0]["rendered_type"] = "HEADLINE_CARD"
+        vis["shots"][0]["payload"] = {"text": "one two three four five six seven eight nine ten"}
+        (ws / "visuals_report.json").write_text(json.dumps(vis), encoding="utf-8")
+        rendered = []
+        monkeypatch.setattr(verify, "_render_shot",
+                            lambda ctx, sid, rtype, payload, duration: rendered.append(1))
+        class Ctx: workspace = ws; flags = {}
+        fixes = verify.apply_fixes(Ctx(), [{"id": "s00", "kind": "legibility", "issues": []}])
+        assert rendered == []
+        assert "HyperFrames-authored" in fixes[0]
+
     def test_legibility_shortens_logo_cta_fields(self, tmp_path, monkeypatch):
         """Regression: _TEXT_FIELDS originally covered only HEADLINE/STAT/
         QUOTE/PAPER's flat text fields -- a legibility failure on a LOGO_CTA

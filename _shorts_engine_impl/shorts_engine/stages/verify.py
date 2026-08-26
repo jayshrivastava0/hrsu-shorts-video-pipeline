@@ -264,11 +264,26 @@ def apply_fixes(ctx, failures: list[dict]) -> list[str]:
                 payload["labels"] = [" ".join(str(l).split()[:keep_words])
                                      for l in labels]
                 shrunk_field = "labels"
-            if shrunk_field is not None:
+            # assembly_brief.json only exists when this run's shots were authored via the
+            # HyperFrames path (stage_visuals_prepare writes shot_briefs.json but the retired
+            # visuals.py.run() never writes assembly_brief.json at all -- see _reassemble's
+            # identical check above). Every real run today is HyperFrames-authored (Task 5
+            # retired the old direct dispatch), so _render_shot's RENDERERS[rtype](...) call --
+            # which expects the OLD shotlist.py payload shape (e.g. DIAGRAM's "template"/
+            # "reveal_stage") -- would KeyError/EngineError on Task 3's new freeform payload
+            # shape (fact_text/fact_value/diagram_labels) every time. Degrade gracefully instead
+            # of crashing, mirroring the broll_mismatch branch's identical reasoning above.
+            hyperframes_run = (ws / "assembly_brief.json").exists()
+            if shrunk_field is not None and not hyperframes_run:
                 entry["payload"] = payload
                 _render_shot(ctx, sid, entry["rendered_type"], payload,
                              entry["duration_s"])
                 applied.append(f"{sid}: shortened {shrunk_field} for legibility")
+            elif shrunk_field is not None:
+                applied.append(f"{sid}: legibility fix for {shrunk_field} skipped -- "
+                               f"this shot was HyperFrames-authored, and the deterministic "
+                               f"re-render path is only compatible with the retired PIL "
+                               f"renderer's payload shape")
             else:
                 # No known on-screen text field for this shot's payload
                 # shape -- log honestly instead of claiming a fix that
