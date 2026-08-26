@@ -1,6 +1,27 @@
-import { spawn as nodeSpawn } from 'node:child_process'
+import { spawn as nodeSpawn, spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+
+/**
+ * Windows does not kill a spawned child's process tree when its parent dies — a killed/crashed
+ * bridge script (this repo's own run-visual-authoring.mts among them) leaves `cmd.exe -> npx ->
+ * node -> chrome-headless-shell` running as an orphan forever. Confirmed live: orphaned
+ * chrome-headless-shell trees from runs whose parent no longer existed piled up over hours,
+ * eventually exhausting Windows desktop-heap resources (`0x800700e8`, "insufficient system
+ * resources") and causing the very hyperframes-render failures this file's stdout-drain fix
+ * (above) was written to prevent. `process.on('exit', ...)` handlers may only run synchronous
+ * code, so cleanup uses `spawnSync('taskkill', ['/F', '/T', '/PID', ...])`, not the async
+ * `child_process.exec`. Registered per render call and removed once that call settles, so a
+ * long-running process (many renders per pipeline run) doesn't accumulate listeners.
+ */
+function killTreeOnOurExit(childPid: number | undefined): () => void {
+  if (process.platform !== 'win32' || childPid === undefined) return () => {}
+  const handler = () => {
+    spawnSync('taskkill', ['/F', '/T', '/PID', String(childPid)])
+  }
+  process.on('exit', handler)
+  return () => process.off('exit', handler)
+}
 
 function compositionsRoot(projectRoot: string): string {
   return join(projectRoot, 'compositions')
@@ -92,6 +113,7 @@ function runHyperframesRender(
       args,
       { cwd: projectRoot },
     )
+    const unregisterKillOnExit = killTreeOnOurExit(child.pid)
     let stderr = ''
     // Drain stdout — see the identical comment in tool-assembly's composition-tools.ts. Piped
     // stdio that nobody reads fills its OS buffer and blocks the child forever on its next
@@ -99,8 +121,9 @@ function runHyperframesRender(
     // assembly render deadlocked in practice; the hazard is the same on this path.
     child.stdout?.on('data', () => {})
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    child.on('error', reject)
+    child.on('error', (err) => { unregisterKillOnExit(); reject(err) })
     child.on('close', (code: number) => {
+      unregisterKillOnExit()
       if (code === 0) resolvePromise(outputPath)
       else reject(new Error(stderr.trim() || `hyperframes render exited ${code}`))
     })

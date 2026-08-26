@@ -89,6 +89,39 @@ describe('renderComposition', () => {
       { spawn: fakeSpawn as never })
     expect(stdoutDrained).toBe(true)
   })
+
+  // A killed/crashed parent Node process leaves Windows child process trees running forever
+  // (confirmed live: orphaned chrome-headless-shell trees from earlier crashed runs piled up
+  // over hours and exhausted system resources, causing the very render failures the stdout-drain
+  // fix above was written to prevent). renderComposition registers a process-exit cleanup
+  // handler for the render's own pid, and removes it once the render settles normally.
+  test('registers a process-exit cleanup handler for the child pid and removes it after a normal close', async () => {
+    const originalPlatform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const onSpy = vi.spyOn(process, 'on')
+    const offSpy = vi.spyOn(process, 'off')
+    try {
+      const projectRoot = tempProject()
+      writeCompositionFile('run-123', '<html></html>', projectRoot)
+      const fakeSpawn = vi.fn((_command: string, _args: string[], _opts: unknown) => ({
+        pid: 4242,
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (event: string, cb: (...a: unknown[]) => void) => {
+          if (event === 'close') setTimeout(() => cb(0), 0)
+        },
+      } as unknown as ReturnType<typeof import('node:child_process').spawn>))
+      await renderComposition('run-123', projectRoot, join(projectRoot, 'out.mp4'),
+        { spawn: fakeSpawn as never })
+      const exitHandler = onSpy.mock.calls.find((call) => call[0] === 'exit')?.[1]
+      expect(exitHandler).toBeDefined()
+      expect(offSpy).toHaveBeenCalledWith('exit', exitHandler)
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform })
+      onSpy.mockRestore()
+      offSpy.mockRestore()
+    }
+  })
 })
 
 describe('groupWordsIntoCues', () => {
