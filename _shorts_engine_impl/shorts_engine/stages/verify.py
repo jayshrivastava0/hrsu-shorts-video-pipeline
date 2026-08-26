@@ -223,13 +223,27 @@ def apply_fixes(ctx, failures: list[dict]) -> list[str]:
         kind, sid = f["kind"], f.get("id")
         if kind == "broll_mismatch":
             fb = shotlist[sid].get("fallback") or {}
-            entry = by_id[sid]
-            entry["rendered_type"] = fb["type"]
-            entry["payload"] = fb["payload"]
-            entry["provenance"] = {"resolved": "fallback",
-                                   "reason": "verify_rejected"}
-            _render_shot(ctx, sid, fb["type"], fb["payload"], entry["duration_s"])
-            applied.append(f"{sid}: swapped to fallback {fb['type']}")
+            if "type" in fb and "payload" in fb:
+                entry = by_id[sid]
+                entry["rendered_type"] = fb["type"]
+                entry["payload"] = fb["payload"]
+                entry["provenance"] = {"resolved": "fallback",
+                                       "reason": "verify_rejected"}
+                _render_shot(ctx, sid, fb["type"], fb["payload"], entry["duration_s"])
+                applied.append(f"{sid}: swapped to fallback {fb['type']}")
+            else:
+                # shotlist.py's freeform planner (Task 3) no longer emits a
+                # "fallback" key on any shot -- suggested_type is advisory
+                # only, and a shot can still be authored/rendered as BROLL
+                # (Task 4's authoring subagent may choose it) with nothing
+                # declared to swap to on rejection. Log honestly instead of
+                # crashing on a missing key or claiming a fix that didn't
+                # happen -- mirrors the legibility branch's "no
+                # deterministic fix available" path below. The revise loop
+                # still re-gates and, if this was the only failure, still
+                # exhausts its cycle budget and raises loudly.
+                applied.append(f"{sid}: no fallback declared for "
+                               f"broll_mismatch, cannot swap")
         elif kind == "legibility":
             entry = by_id[sid]
             payload = dict(entry["payload"])

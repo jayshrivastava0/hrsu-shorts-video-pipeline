@@ -48,6 +48,27 @@ class TestApplyFixes:
         assert vis["shots"][0]["provenance"]["reason"] == "verify_rejected"
         assert any("fallback" in f for f in fixes)
 
+    def test_broll_mismatch_without_fallback_degrades_gracefully(self, tmp_path, monkeypatch):
+        """Regression: Task 3's freeform shotlist planner no longer emits a
+        "fallback" key on any shot (suggested_type is advisory only), so
+        `shotlist[sid].get("fallback") or {}` is now always `{}` for a shot
+        that was never given one. apply_fixes must log honestly instead of
+        crashing with KeyError('type') on `fb["type"]`."""
+        from shorts_engine.stages import verify
+        ws = _ws(tmp_path)
+        shotlist = json.loads((ws / "shotlist.json").read_text(encoding="utf-8"))
+        del shotlist["shots"][0]["fallback"]
+        (ws / "shotlist.json").write_text(json.dumps(shotlist), encoding="utf-8")
+        rendered = []
+        monkeypatch.setattr(verify, "_render_shot",
+                            lambda ctx, sid, rtype, payload, duration: rendered.append((sid, rtype)))
+        class Ctx: workspace = ws; flags = {}
+        fixes = verify.apply_fixes(Ctx(), [{"id": "s00", "kind": "broll_mismatch", "score": 3}])
+        assert rendered == []  # nothing re-rendered -- no fallback to swap to
+        vis = json.loads((ws / "visuals_report.json").read_text(encoding="utf-8"))
+        assert vis["shots"][0]["rendered_type"] == "BROLL"  # unchanged
+        assert any("no fallback" in f for f in fixes)
+
     def test_legibility_shortens_dominant_text(self, tmp_path, monkeypatch):
         from shorts_engine.stages import verify
         ws = _ws(tmp_path)
