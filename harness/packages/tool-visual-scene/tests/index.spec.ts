@@ -1,6 +1,44 @@
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
-import { authorVisualScene, pickFallbackCaption, type ShotBrief } from '../src/index.ts'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
+import { authorVisualScene, pickFallbackCaption, apply, type ShotBrief } from '../src/index.ts'
+
+/**
+ * Minimal fake Cordis `Context` sufficient for exercising `apply()`'s tool registration: a
+ * `ctx.tools.register` that records definitions in a map, and a `getRegistered` test helper (not
+ * part of the real `ToolRuntime` API) that resolves a registered tool's `execute()` with a
+ * throwaway `ToolRunContext`. `apply()` itself only touches `ctx.tools` (and, inside
+ * `author_visual_scene`'s own `execute()`, `ctx.subagents` — not exercised by this test), so
+ * nothing else needs stubbing.
+ */
+function makeFakeCtx() {
+  const registry = new Map<string, ToolDefinition>()
+  return {
+    tools: {
+      register(def: ToolDefinition) {
+        registry.set(def.name, def)
+        return () => registry.delete(def.name)
+      },
+      getRegistered(name: string) {
+        const def = registry.get(name)
+        if (def === undefined) throw new Error(`tool not registered: ${name}`)
+        return {
+          execute: (args: Record<string, unknown>) =>
+            def.execute(args, {
+              callId: 'test-call' as never,
+              rootCallId: 'test-call' as never,
+              name,
+              arguments: args,
+              signal: new AbortController().signal,
+              token: Symbol('test-token') as never,
+              deferContext: () => {},
+              concludeTurn: () => {},
+            }),
+        }
+      },
+    },
+  } as never
+}
 
 const HEADLINE_BRIEF: ShotBrief = {
   shot_id: '3',
@@ -89,7 +127,7 @@ describe('authorVisualScene', () => {
     expect(start).toHaveBeenCalledTimes(1)
     expect(start).toHaveBeenCalledWith('spawn', expect.objectContaining({
       agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
-      toolFilter: { allow: ['write_scene_file', 'render_scene'] },
+      toolFilter: { allow: ['write_scene_file', 'render_scene', 'request_broll'] },
     }))
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(renderFallbackScene).not.toHaveBeenCalled()
@@ -201,5 +239,22 @@ describe('authorVisualScene', () => {
       },
     )).rejects.toThrow(/no parent agent/i)
     expect(start).not.toHaveBeenCalled()
+  })
+})
+
+describe('request_broll tool', () => {
+  it('invokes broll-request via runStageCli with the exact wish/narration_span/workspace', async () => {
+    const runStageCli = vi.fn().mockResolvedValue({ image_path: null, focal_hint: 'center', provenance: {} })
+    const ctx = makeFakeCtx()
+    apply(ctx, {
+      projectRoot: '/tmp/project', shortsEngineCwd: '/tmp/engine',
+      agentOptions: { model: 'gemma4:31b-cloud' }, runStageCli,
+    })
+    const tool = ctx.tools.getRegistered('request_broll')
+    await tool.execute({ workspace: '/tmp/ws', wish: 'white powder', narration_span: 'It dissolves.' })
+    expect(runStageCli).toHaveBeenCalledWith(
+      ['broll-request', '--workspace', '/tmp/ws', '--wish', 'white powder', '--narration-span', 'It dissolves.'],
+      { cwd: '/tmp/engine' },
+    )
   })
 })

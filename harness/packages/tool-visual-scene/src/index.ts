@@ -2,9 +2,10 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SubagentResult, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
+import { runStageCli as defaultRunStageCli, type RunStageCliOptions } from '@hrsu/dsh-tool-shorts-stage'
 import { writeSceneFile, renderScene, renderFallbackScene } from './scene-tools.ts'
 
 export { writeSceneFile, renderScene, renderFallbackScene } from './scene-tools.ts'
@@ -37,6 +38,10 @@ export interface Config {
    * Defaults to `'spawn'`, the in-process provider's conventional registry name.
    */
   subagentProviderName?: string
+  /** Absolute path to `_shorts_engine_impl/` — same value tool-shorts-stage's own config uses. */
+  shortsEngineCwd: string
+  /** Injectable for tests; defaults to the real @hrsu/dsh-tool-shorts-stage runStageCli. */
+  runStageCli?: (args: string[], options: RunStageCliOptions) => Promise<Record<string, unknown>>
 }
 
 /**
@@ -80,8 +85,8 @@ const PERSONA_TEXT = readFileSync(PERSONA_PATH, 'utf8')
 
 const MAX_ATTEMPTS = 2
 
-/** The two tools the child subagent is scoped to via `toolFilter.allow`. */
-const CHILD_TOOL_NAMES = ['write_scene_file', 'render_scene'] as const
+/** The tools the child subagent is scoped to via `toolFilter.allow`. */
+const CHILD_TOOL_NAMES = ['write_scene_file', 'render_scene', 'request_broll'] as const
 
 /**
  * A shot's rendered output MUST land at `<workspace>/shots/shot_<shot_id>.mp4` — exactly what the
@@ -311,6 +316,32 @@ export function apply(ctx: Context, config: Config): void {
       }
       const path = await renderScene(args.workspace_id, args.shot_id, config.projectRoot, outputPath)
       return { path }
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'request_broll',
+    description:
+      'Acquire a real photo/footage frame matching a text description, vision-judged against ' +
+      'the narration it accompanies. Returns image_path: null if nothing matched closely enough ' +
+      '— treat that as "no real photo available," not an error, and fall back to a synthetic ' +
+      'composition for this shot.',
+    parameters: {
+      workspace: { type: 'string', required: true, description: 'Absolute path to the run workspace (from your shot brief\'s context).' },
+      wish: { type: 'string', required: true, description: 'Short description of the visual you want.' },
+      narration_span: { type: 'string', required: true, description: 'The narration text this visual accompanies.' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const runStageCli = config.runStageCli ?? defaultRunStageCli
+      return (await runStageCli(
+        ['broll-request', '--workspace', args.workspace as string,
+         '--wish', args.wish as string, '--narration-span', args.narration_span as string],
+        { cwd: config.shortsEngineCwd },
+      )) as Record<string, JsonValue>
     },
   }))
 

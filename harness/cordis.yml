@@ -72,6 +72,10 @@
     # above (`!!js require(...)` confirmed broken in this harness version — see that entry's
     # comment). Points at the HyperFrames project Task 1 initialized under `harness/`.
     projectRoot: !!js "process.cwd() + '/hyperframes_scenes_project'"
+    # Same `!!js "process.cwd() + '/...'"` fallback pattern as `tool-shorts-stage.shortsEngineCwd`
+    # above — `request_broll` bridges to the same Python `broll-request` subcommand via
+    # `runStageCli`, so it needs the identical resolved path.
+    shortsEngineCwd: !!js "process.cwd() + '/../_shorts_engine_impl'"
     agentOptions:
       provider: ollama-local
       # kimi-k2.7-code:cloud requires an Ollama subscription this account doesn't have (confirmed

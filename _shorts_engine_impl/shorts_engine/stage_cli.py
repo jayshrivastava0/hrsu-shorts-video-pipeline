@@ -384,7 +384,16 @@ def cmd_assemble_finalize(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def cmd_broll_request(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    from shorts_engine.sourcing.ladder import acquire
+    post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
+    result = acquire(args.wish, args.narration_span, workspace, post.get("images", []))
+    print(json.dumps(result))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="shorts_engine.stage_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -422,6 +431,17 @@ def main(argv: list[str] | None = None) -> int:
     assemble_finalize_parser.add_argument("--workspace", required=True)
     assemble_finalize_parser.set_defaults(func=cmd_assemble_finalize)
 
+    p_broll = subparsers.add_parser("broll-request")
+    p_broll.add_argument("--workspace", required=True)
+    p_broll.add_argument("--wish", required=True)
+    p_broll.add_argument("--narration-span", required=True)
+    p_broll.set_defaults(func=cmd_broll_request)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 

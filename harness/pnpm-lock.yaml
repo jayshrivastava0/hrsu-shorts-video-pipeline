@@ -132,6 +132,9 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(dtthkc7s3brp3rjqemx4ruguvu)
+      '@hrsu/dsh-tool-shorts-stage':
+        specifier: workspace:*
+        version: link:../tool-shorts-stage
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: '*'

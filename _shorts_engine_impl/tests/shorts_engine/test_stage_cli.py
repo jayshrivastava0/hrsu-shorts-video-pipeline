@@ -13,6 +13,27 @@ from shorts_engine import config
 FIXTURE_HTML = Path(__file__).parent / "fixtures" / "nitrate_post.html"
 
 
+def test_broll_request_calls_acquisition_ladder(tmp_path, monkeypatch, capsys):
+    from shorts_engine import stage_cli
+    (tmp_path / "post.json").write_text(json.dumps({"images": []}), encoding="utf-8")
+    called = {}
+
+    def fake_acquire(wish, narration_span, workspace, post_images, torture=False):
+        called.update(wish=wish, narration_span=narration_span)
+        return {"image_path": None, "focal_hint": "center", "provenance": {"reason": "no_wish"}}
+
+    monkeypatch.setattr("shorts_engine.sourcing.ladder.acquire", fake_acquire)
+    args = stage_cli.build_parser().parse_args([
+        "broll-request", "--workspace", str(tmp_path),
+        "--wish", "close-up of white powder", "--narration-span", "The powder dissolves.",
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out.strip().split("\n")[-1])
+    assert out["provenance"]["reason"] == "no_wish"
+    assert called["wish"] == "close-up of white powder"
+
+
 def run_cli(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "shorts_engine.stage_cli", *args],
