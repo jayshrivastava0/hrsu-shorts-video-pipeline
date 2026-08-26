@@ -157,9 +157,10 @@
         in the JSON response before retrying — don't retry blindly more than twice on the same stage
         without changing your input.
       - Visuals is a three-step flow, not one tool call. Call `stage_visuals_prepare` once — it writes
-        `shot_briefs.json` into the workspace and returns its path. Read that file (the same way you
-        already inspect other JSON artifacts the workspace produces) and call `author_visual_scene`
-        once per entry in it, passing that entry as `shot_brief`, `stage_init`'s `run_id` as
+        `shot_briefs.json` into the workspace and returns the brief array itself inline as `briefs` in
+        its own response (plus `run_id`). Use those returned values directly — you have no file-read
+        tool, so do not try to open `shot_briefs.json`. Call `author_visual_scene` once per entry in
+        `briefs`, passing that entry as `shot_brief`, `stage_init`'s `run_id` as
         `workspace_id` (this only namespaces the shot's HyperFrames composition files), and
         `stage_init`'s `workspace` (the same absolute path you passed to every stage tool call) as
         `workspace`. `author_visual_scene` needs both: `workspace_id` to namespace the composition it
@@ -172,9 +173,11 @@
         rendered shots and advance the workspace to `visuals`.
       - Assembly is a three-step flow too, mirroring visuals. Call `stage_assemble_prepare` once — it
         reflows shot durations onto the real audio timing, mixes music under the voiceover, and writes
-        `assembly_brief.json`, returning its path. Call `author_assembly_composition` once (not once
-        per shot — this is the whole video's final assembly in one composition), passing the brief,
-        `stage_init`'s `run_id` as `workspace_id`, and `stage_init`'s `workspace` as `workspace` — same
+        `assembly_brief.json`, returning the brief itself inline as `brief` in its own response (plus
+        `run_id`) — use that directly, don't try to open the file. Call `author_assembly_composition`
+        once (not once per shot — this is the whole video's final assembly in one composition), passing
+        that returned `brief` as `assembly_brief`, `stage_init`'s `run_id` as `workspace_id`, and
+        `stage_init`'s `workspace` as `workspace` — same
         two params, same meaning, as `author_visual_scene`. It authors, renders, and — on repeated
         failure — falls back to a safety-net composition, so it never returns without a usable video.
         Once it returns, call `stage_assemble_finalize` once to verify the duration law and every

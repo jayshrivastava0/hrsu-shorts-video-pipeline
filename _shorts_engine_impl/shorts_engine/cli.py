@@ -53,10 +53,14 @@ def _run_creative_stage(ctx, phase: str) -> dict[str, str]:
     )
     if result.returncode != 0:
         raise EngineError(f"{phase}: harness bridge failed: {result.stderr[-2000:]}")
+    # Must mirror exactly what stage_cli.py's visuals-finalize/assemble-finalize checkpoint —
+    # the runner records these as the run's artifacts, so anything listed here that the bridge
+    # doesn't actually write makes run_manifest.json lie. (`captions.ass` used to be listed for
+    # assemble; it was an ffmpeg-ASS artifact of the retired assemble.py and the HyperFrames
+    # path never produces it. package.py builds its own subtitles.srt.)
     if phase == "visuals":
         return {"shots_dir": "shots", "visuals_report": "visuals_report.json"}
-    return {"video": "video_short.mp4", "captions": "captions.ass",
-            "assemble_report": "assemble_report.json"}
+    return {"video": "video_short.mp4", "assemble_report": "assemble_report.json"}
 
 
 def _visuals_stage(ctx) -> dict[str, str]:
