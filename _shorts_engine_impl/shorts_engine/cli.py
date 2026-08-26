@@ -21,17 +21,50 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 from shorts_engine import config, runner
+from shorts_engine.errors import EngineError
 from shorts_engine.stages import (
-    facts, ingest, script, shotlist, audio, visuals, assemble,
+    facts, ingest, script, shotlist, audio,
     verify, package, publish,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Creative stages (headless-agent bridge) ───────────────────────────────
+def _run_creative_stage(ctx, phase: str) -> dict[str, str]:
+    """Run the `visuals` or `assemble` phase through the real harness agent.
+
+    `author_visual_scene`/`author_assembly_composition` require a live parent agent to spawn
+    their scene-authoring subagent from, so this shells out to `harness/scripts/
+    run-visual-authoring.mts`, which boots `harness/cordis.yml` and drives one real agent turn.
+    """
+    workspace = Path(ctx.workspace)
+    harness_dir = Path(config.PROJECT_ROOT) / "harness"
+    bridge = harness_dir / "scripts" / "run-visual-authoring.mts"
+    result = subprocess.run(
+        ["node", "--import", "tsx/esm", str(bridge), phase, str(workspace.resolve())],
+        cwd=harness_dir, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise EngineError(f"{phase}: harness bridge failed: {result.stderr[-2000:]}")
+    if phase == "visuals":
+        return {"shots_dir": "shots", "visuals_report": "visuals_report.json"}
+    return {"video": "video_short.mp4", "captions": "captions.ass",
+            "assemble_report": "assemble_report.json"}
+
+
+def _visuals_stage(ctx) -> dict[str, str]:
+    return _run_creative_stage(ctx, "visuals")
+
+
+def _assemble_stage(ctx) -> dict[str, str]:
+    return _run_creative_stage(ctx, "assemble")
 
 
 # ── Build Stages ──────────────────────────────────────────────────────────
@@ -50,8 +83,8 @@ def build_stages() -> list[runner.Stage]:
         ("script", "scripted", script.run),
         ("shotlist", "shotlisted", shotlist.run),
         ("audio", "audio", audio.run),
-        ("visuals", "visuals", visuals.run),
-        ("assemble", "assembled", assemble.run),
+        ("visuals", "visuals", _visuals_stage),
+        ("assemble", "assembled", _assemble_stage),
         ("verify", "verified", verify.run),
         ("package", "packaged", package.run),
         ("publish", "published", publish.run),
@@ -156,7 +189,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.local_only:
         flags["local_only"] = True
     if args.html_override:
-        flags["html_override"] = str(args.html_override)
+        # ingest.run() treats flags["html_override"] as literal HTML content (it hands it
+        # straight to BeautifulSoup), not a path — so read the file here, exactly as
+        # stage_cli.py's own _flags_from_args() already does.
+        flags["html_override"] = Path(args.html_override).read_text(encoding="utf-8")
     if args.torture:
         flags["torture"] = True
     if args.publish:

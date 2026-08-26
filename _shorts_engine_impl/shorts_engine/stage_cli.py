@@ -180,7 +180,13 @@ def cmd_visuals_prepare(args: argparse.Namespace) -> int:
         return 1
 
     (workspace / "shot_briefs.json").write_text(json.dumps(briefs, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "ok", "shot_briefs": "shot_briefs.json"}))
+    # `briefs`/`run_id` are returned INLINE, not just as a filename: the orchestrating harness
+    # agent has no file-read tool (verified live — it tried `skill{name:"read_file"}` and got
+    # "invalid skill name"), and `author_visual_scene` requires the brief OBJECT plus the run id
+    # as `workspace_id`. Without these in the tool result the agent cannot enumerate the shots
+    # at all and skips straight to `stage_visuals_finalize`, which then fails never-blank.
+    print(json.dumps({"status": "ok", "shot_briefs": "shot_briefs.json",
+                      "run_id": manifest.run_id, "briefs": briefs}))
     return 0
 
 
@@ -291,7 +297,11 @@ def cmd_assemble_prepare(args: argparse.Namespace) -> int:
         return 1
 
     (workspace / "assembly_brief.json").write_text(json.dumps(brief, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "ok", "assembly_brief": "assembly_brief.json"}))
+    # Inline `brief`/`run_id` for the same reason as cmd_visuals_prepare above —
+    # `author_assembly_composition` takes the brief object and the run id, and the agent has
+    # no way to read the file off disk itself.
+    print(json.dumps({"status": "ok", "assembly_brief": "assembly_brief.json",
+                      "run_id": manifest.run_id, "brief": brief}))
     return 0
 
 

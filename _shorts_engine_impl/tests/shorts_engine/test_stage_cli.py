@@ -169,6 +169,38 @@ def test_visuals_prepare_writes_shot_briefs_without_checkpointing(tmp_path):
     assert manifest_after["last_ok_status"] == "audio"
 
 
+def test_visuals_prepare_returns_briefs_and_run_id_inline(tmp_path):
+    """The orchestrating agent has NO file-read tool, so returning only the
+    `shot_briefs.json` filename left it unable to enumerate shots or to supply
+    `author_visual_scene`'s required `shot_brief`/`workspace_id` arguments (observed live:
+    it tried `skill{name:"read_file"}`, got "invalid skill name", and skipped straight to
+    `stage_visuals_finalize`). The briefs and the run id must come back in the tool result."""
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    init_payload = json.loads(init_result.stdout.strip().splitlines()[-1])
+    workspace = init_payload["workspace"]
+    manifest_path = Path(workspace) / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    (Path(workspace) / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "suggested_type": "HEADLINE_CARD",
+         "payload": {"text": "Test headline"}, "duration_s": 2.5},
+    ]}))
+    (Path(workspace) / "post.json").write_text(json.dumps({"images": []}))
+
+    result = run_cli(["visuals-prepare", "--workspace", workspace])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["run_id"] == init_payload["run_id"]
+    assert payload["briefs"] == json.loads(
+        (Path(workspace) / "shot_briefs.json").read_text())
+    assert payload["briefs"][0]["shot_id"] == "1"
+
+
 def test_visuals_prepare_fade_in_s_only_fades_on_real_beat_transitions(tmp_path):
     # Regression test: fade_in_s must be computed by tracking the *previous* shot's
     # beat across the loop (matching shots_engine/stages/visuals.py:run()'s prev_beat
@@ -365,6 +397,12 @@ def test_assemble_prepare_writes_brief_without_checkpointing(tmp_path):
     # Not checkpointed yet — still "visuals" (mirrors visuals-prepare's own contract).
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["last_ok_status"] == "visuals"
+
+    # Same reason as test_visuals_prepare_returns_briefs_and_run_id_inline: the agent has no
+    # file-read tool, and author_assembly_composition requires the brief OBJECT plus the run id.
+    assert payload["run_id"] == json.loads(
+        init_result.stdout.strip().splitlines()[-1])["run_id"]
+    assert payload["brief"] == brief
 
 
 def test_assemble_finalize_checkpoints_when_duration_law_holds_and_shots_present(tmp_path):

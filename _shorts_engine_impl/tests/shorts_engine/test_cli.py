@@ -233,10 +233,12 @@ class TestMainArgumentParsing:
 
             main([blog_url, "--html-override", str(html_file)])
 
-            # Verify runner.run was called with html_override in flags
+            # Verify runner.run was called with html_override in flags. ingest.run() hands
+            # flags["html_override"] straight to BeautifulSoup, so it must be the file's
+            # CONTENTS, not its path (the same contract stage_cli.py already implements).
             call_kwargs = mock_run.call_args[1]
             flags = call_kwargs.get("flags", {})
-            assert flags.get("html_override") == str(html_file)
+            assert flags.get("html_override") == "<html></html>"
 
 
 class TestMainStages:
