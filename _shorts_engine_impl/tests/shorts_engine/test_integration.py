@@ -41,23 +41,23 @@ SIBLING_POISON_MARKER = "150,000 metric tons"
 # hook [3,8], stakes [6,12], mechanism [11,24], proof [9,20], cta [9,16];
 # total 62 words, inside the aggregate [60, 85] window.
 GOOD_BEATS = [
-    {"beat": "hook",
+    {"beat": "hook", "purpose": "hook",
      "narration": "EU nitrate discharge limits are tightening fast.",
      "fact_ids": [], "card_text": "EU limits tightening", "broll_wish": ""},
-    {"beat": "stakes",
+    {"beat": "stakes", "purpose": "stakes",
      "narration": "Non-compliance risks steep penalties and unplanned production "
                   "downtime this quarter.",
      "fact_ids": [], "card_text": "Downtime risk", "broll_wish": ""},
-    {"beat": "mechanism",
+    {"beat": "mechanism", "purpose": "mechanism",
      "narration": "Dosing calcium nitrate feeds denitrifying bacteria, converting "
                   "nitrate into harmless nitrogen gas within the treatment train "
                   "without any retrofit.",
      "fact_ids": [], "card_text": "Nitrate to nitrogen gas", "broll_wish": ""},
-    {"beat": "proof",
+    {"beat": "proof", "purpose": "proof",
      "narration": "Best practice suggests a dosage range of 1.5 to 3 kg per cubic "
                   "meter.",
      "fact_ids": ["f1"], "card_text": "Dosing window", "broll_wish": ""},
-    {"beat": "cta",
+    {"beat": "cta", "purpose": "cta",
      "narration": "HRSU supplies high-purity powder with batch QC. Visit "
                   "hrsuindore.com for the guide.",
      "fact_ids": ["b_purity"], "card_text": "hrsuindore.com", "broll_wish": ""},
