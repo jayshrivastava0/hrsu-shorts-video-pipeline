@@ -192,6 +192,88 @@ class TestIsolatePost:
         assert all(isinstance(img, dict) for img in result.images)
 
 
+SITE_POST_HTML = """
+<html><body>
+<main class="lrn-main">
+<h1>Calcium Nitrate Solubility in Precision Foliar Blends</h1>
+<div class="lrn-post-body">
+<link rel="stylesheet" href="x.css">
+<style>.x{color:red}</style>
+<div class="hrsu-meta">USA region &middot; 6 min read</div>
+<div class="hrsu-blog-container">
+<p class="hrsu-author-byline">By HRSU Technical Team</p>
+<div class="hrsu-executive-summary"><p>Solubility issues cause nozzle clogging.</p></div>
+<h2>Formulation Guidance</h2>
+<p>Use a dosage range of 1.5 to 3 kg per cubic meter for stability<sup class="hrsu-citation">
+<a href="https://epa.gov/example" target="_blank">1</a></sup>.</p>
+<div style="background:#0a1428;border-left:4px solid #d4af37;padding:20px;">
+<p>Sourcing calcium nitrate for this application?</p>
+<a href="https://hrsuindore.com/contact">Contact us</a>
+</div>
+<h2>References</h2>
+<ol>
+<li><a href="https://epa.gov/example">EPA fertilizer guidance</a></li>
+</ol>
+<div class="hrsu-related-posts"><h3>Related Technical Articles</h3>
+<ul><li><a href="https://hrsuindore.com/blog/other-post/">150,000 metric tons sibling post</a></li></ul>
+</div>
+<div class="hrsu-product-links"><a href="https://hrsuindore.com/products">Calcium Nitrate</a></div>
+</div>
+<script>console.log('x')</script>
+</div>
+</main>
+</body></html>
+"""
+
+SITE_POST_URL = "https://hrsuindore.com/blog/calcium-nitrate-solubility-in-precision/"
+
+
+class TestIsolateSitePost:
+    """Test post isolation from the on-domain hrsuindore.com/blog/ template."""
+
+    def test_isolate_site_post_extracts_title(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert result.title == "Calcium Nitrate Solubility in Precision Foliar Blends"
+
+    def test_isolate_site_post_contains_article_content(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert "dosage range of 1.5 to 3 kg per cubic meter" in result.canonical_text
+
+    def test_isolate_site_post_strips_author_byline(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert "By HRSU Technical Team" not in result.canonical_text
+
+    def test_isolate_site_post_strips_related_posts(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert "150,000 metric tons sibling post" not in result.canonical_text
+
+    def test_isolate_site_post_strips_mid_cta(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert "Sourcing calcium nitrate for this application" not in result.canonical_text
+
+    def test_isolate_site_post_strips_product_links(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert "hrsuindore.com/products" not in result.body_html
+
+    def test_isolate_site_post_extracts_citations(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert len(result.citations) == 1
+        assert result.citations[0].url == "https://epa.gov/example"
+
+    def test_isolate_site_post_strips_style_and_script(self) -> None:
+        result = isolate_post(SITE_POST_HTML, SITE_POST_URL)
+
+        assert "<style" not in result.body_html.lower()
+        assert "<script" not in result.body_html.lower()
+
+
 class TestIsolationStrategyLadder:
     """Test the 3-strategy ladder for post selection."""
 

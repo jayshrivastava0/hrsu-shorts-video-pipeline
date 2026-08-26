@@ -126,6 +126,11 @@ def isolate_post(page_html: str, url: str) -> IsolatedPost:
     post_containers.extend(soup.find_all("div", class_="post-outer"))
 
     if not post_containers:
+        # Not a Blogger page — try the on-domain hrsuindore.com/blog/ template
+        # (site_publisher.py / blog_migration/render.py), live since 2026-08-25.
+        site_post = _isolate_site_post(soup)
+        if site_post:
+            return site_post
         raise ValueError("No post containers found in HTML")
 
     # ── Strategy Ladder ──────────────────────────────────────────────────
@@ -188,6 +193,68 @@ def isolate_post(page_html: str, url: str) -> IsolatedPost:
         canonical_text=canonical_text,
         citations=citations,
         images=images,
+    )
+
+
+# ── On-Domain Site Post Isolation ────────────────────────────────────────────
+def _isolate_site_post(soup: Any) -> IsolatedPost | None:
+    """
+    Isolate a post rendered by the on-domain hrsuindore.com/blog/ template
+    (blog_migration/render.py, live since 2026-08-25), as opposed to the
+    retired Blogger template.
+
+    Returns None if the page doesn't match this template, so isolate_post()
+    can fall through to its Blogger-not-found error.
+    """
+    post_body = soup.find("div", class_="lrn-post-body")
+    if not post_body:
+        return None
+
+    container = post_body.find("div", class_="hrsu-blog-container") or post_body
+
+    # Title: the page's single <h1>, scoped to <main> to avoid any stray
+    # header/logo h1 elsewhere on the page.
+    main = post_body.find_parent("main") or soup
+    title = ""
+    h1 = main.find("h1")
+    if h1:
+        title = h1.get_text(strip=True)
+    if not title:
+        for heading in container.find_all(["h1", "h2"]):
+            text = heading.get_text(strip=True)
+            if text:
+                title = text
+                break
+
+    # Strip non-article chrome injected by seo_optimizer.decorate_for_site():
+    # author byline, region/reading-time meta, related-posts block, product
+    # links footer, and the mid-article CTA (no stable class — matched by its
+    # fixed inline style, see seo_optimizer.py:_inject_mid_cta).
+    body_copy = BeautifulSoup(str(container), "html.parser")
+    elements_to_remove = [
+        ("style", {}),
+        ("script", {}),
+        ("link", {}),
+        ("meta", {}),
+        ("p", {"class": re.compile("hrsu-author-byline")}),
+        ("div", {"class": re.compile("hrsu-meta")}),
+        ("div", {"class": re.compile("hrsu-related-posts")}),
+        ("div", {"class": re.compile("hrsu-product-links")}),
+    ]
+    for tag_name, attrs in elements_to_remove:
+        for elem in body_copy.find_all(tag_name, **attrs):
+            elem.decompose()
+    for div in body_copy.find_all("div", style=re.compile(r"background:#0a1428")):
+        div.decompose()
+
+    inner_html = "".join(str(child) for child in body_copy.children)
+
+    return IsolatedPost(
+        title=title,
+        body_html=inner_html,
+        canonical_text=_extract_canonical_text(inner_html),
+        citations=_extract_citations(inner_html),
+        images=_extract_images(inner_html),
     )
 
 
