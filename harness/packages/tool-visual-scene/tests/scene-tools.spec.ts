@@ -80,6 +80,29 @@ describe('writeSceneFile', () => {
 })
 
 describe('renderScene', () => {
+  // Same regression guarded in tool-assembly's composition-tools.spec.ts: the child is spawned
+  // with piped stdio, so an unread `stdout` fills the OS pipe buffer and the render blocks
+  // forever on its next write. Short per-shot renders stayed under the buffer and hid this;
+  // the assembly render (same spawn strategy) deadlocked live for 3+ hours because of it.
+  it('drains the child stdout so a chatty render cannot deadlock on a full pipe', async () => {
+    let stdoutDrained = false
+    const spawnMock = vi.fn().mockImplementation(() => {
+      const { EventEmitter } = require('node:events')
+      const child = new EventEmitter() as never as
+        { stdout: InstanceType<typeof EventEmitter>; stderr: InstanceType<typeof EventEmitter> }
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.stdout.on('newListener', (event: string) => {
+        if (event === 'data') stdoutDrained = true
+      })
+      queueMicrotask(() => { (child as never as EventEmitter).emit('close', 0) })
+      return child
+    })
+
+    await renderScene('run-42', 'shot-1', '/project', '/out/shot-1.mp4', { spawn: spawnMock as never })
+    expect(stdoutDrained).toBe(true)
+  })
+
   it('spawns the hyperframes CLI with the expected composition/output/resolution args', async () => {
     const spawnMock = vi.fn().mockImplementation(() => {
       const { EventEmitter } = require('node:events')

@@ -273,6 +273,17 @@ def test_visuals_finalize_checkpoints_when_all_shots_present_and_nonblank(tmp_pa
     assert manifest_after["last_ok_status"] == "visuals"
     assert manifest_after["artifacts"]["shots_dir"] == "shots"
 
+    # visuals_report.json must keep the schema its downstream consumers read: verify.py's
+    # run_gates()/apply_fixes() and review/contact_sheet.py index shots by `id` and display
+    # `rendered_type` (the keys the retired visuals.py run() wrote). shot_briefs.json uses
+    # `shot_id`/`type`, so finalize must emit both spellings or verify dies with KeyError('id')
+    # — which is exactly what the first end-to-end harness run did.
+    report = json.loads((Path(workspace) / "visuals_report.json").read_text())
+    assert report["shots"][0]["id"] == "1"
+    assert report["shots"][0]["rendered_type"] == "HEADLINE_CARD"
+    assert report["shots"][0]["payload"] == {"text": "Test headline"}
+    assert report["shots"][0]["provenance"] == {"resolved": "designed"}
+
 
 def test_visuals_finalize_out_of_order_fails_loud(tmp_path):
     # Mirrors test_run_stage_out_of_order_fails_loud: cmd_visuals_prepare and cmd_run_stage both

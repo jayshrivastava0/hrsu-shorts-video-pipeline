@@ -93,6 +93,11 @@ function runHyperframesRender(
       { cwd: projectRoot },
     )
     let stderr = ''
+    // Drain stdout — see the identical comment in tool-assembly's composition-tools.ts. Piped
+    // stdio that nobody reads fills its OS buffer and blocks the child forever on its next
+    // write. Short per-shot renders happen to stay under the buffer, which is why only the long
+    // assembly render deadlocked in practice; the hazard is the same on this path.
+    child.stdout?.on('data', () => {})
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
     child.on('error', reject)
     child.on('close', (code: number) => {

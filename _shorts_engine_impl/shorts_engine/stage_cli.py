@@ -220,7 +220,18 @@ def cmd_visuals_finalize(args: argparse.Namespace) -> int:
                     f"visuals-finalize: shot {shot_id} ({brief['type']}) rendered without "
                     f"visible content ({pixels} bright px < {config.MIN_CONTENT_PIXELS}) — "
                     f"never-blank violated")
-            report["shots"].append({**brief, "content_pixels": pixels})
+            # Emit BOTH spellings. shot_briefs.json speaks `shot_id`/`type`, but
+            # visuals_report.json's consumers — verify.py's run_gates()/apply_fixes() and
+            # review/contact_sheet.py — index by `id` and display `rendered_type`, the schema
+            # the retired visuals.py run() wrote. Without this, the first stage after
+            # `assembled` dies with KeyError('id').
+            # NOTE: `rendered_type` is only the SUGGESTED archetype here. On this path the
+            # scene-authoring subagent may compose something else entirely and the pipeline
+            # has no record of what it actually chose, so treat it as a hint, not ground truth.
+            report["shots"].append({
+                **brief, "id": shot_id, "rendered_type": brief["type"],
+                "content_pixels": pixels,
+            })
         (workspace / "visuals_report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8")
     except Exception as exc:

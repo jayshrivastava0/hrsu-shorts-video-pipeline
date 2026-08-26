@@ -67,6 +67,28 @@ describe('renderComposition', () => {
       expect(args).toContain('run-123'.length > 0 ? join('compositions', 'run-123', 'assembly.html') : '')
     }
   })
+
+  // Regression: the child is spawned with piped stdio, so an unread `stdout` fills the OS pipe
+  // buffer (a few KB on Windows) and the child blocks forever on its next write. `hyperframes
+  // render` emits per-frame trace lines, so a long composition (the 35s / 1050-frame assembly)
+  // deadlocked indefinitely, while the short per-shot renders stayed under the buffer and passed.
+  // Observed live: the assembly render hung for 3+ hours, yet the identical composition rendered
+  // in 54.8s when run straight from a shell with stdout going to a file.
+  test('drains the child stdout so a chatty render cannot deadlock on a full pipe', async () => {
+    const projectRoot = tempProject()
+    writeCompositionFile('run-123', '<html></html>', projectRoot)
+    let stdoutDrained = false
+    const fakeSpawn = vi.fn((_command: string, _args: string[], _opts: unknown) => ({
+      stdout: { on: (event: string) => { if (event === 'data') stdoutDrained = true } },
+      stderr: { on: () => {} },
+      on: (event: string, cb: (...a: unknown[]) => void) => {
+        if (event === 'close') setTimeout(() => cb(0), 0)
+      },
+    } as unknown as ReturnType<typeof import('node:child_process').spawn>))
+    await renderComposition('run-123', projectRoot, join(projectRoot, 'out.mp4'),
+      { spawn: fakeSpawn as never })
+    expect(stdoutDrained).toBe(true)
+  })
 })
 
 describe('groupWordsIntoCues', () => {

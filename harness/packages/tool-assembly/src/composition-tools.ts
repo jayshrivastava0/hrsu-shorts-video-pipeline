@@ -51,6 +51,13 @@ function runHyperframesRender(
   return new Promise((resolvePromise, reject) => {
     const child = spawnFn(command, args, { cwd: projectRoot })
     let stderr = ''
+    // stdout MUST be drained, not merely ignored: the child is spawned with piped stdio, so an
+    // unread pipe fills its OS buffer (a few KB on Windows) and the child then blocks forever on
+    // its next write. `hyperframes render` emits per-frame progress/trace lines, so the 35s /
+    // 1050-frame assembly composition deadlocked here indefinitely, while the identical file
+    // rendered in 54.8s from a shell with stdout redirected to a file. Nothing reads this text,
+    // so discard it rather than accumulate it — a long render's stdout runs to megabytes.
+    child.stdout?.on('data', () => {})
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
     child.on('error', reject)
     child.on('close', (code: number) => {
