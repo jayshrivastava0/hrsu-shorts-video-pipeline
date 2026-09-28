@@ -66,10 +66,20 @@ Do not omit any of these on a clip element — a missing `data-start`, `data-dur
   color, position, delay, or duration. Every render of the same input must produce byte-identical
   timing. If you want per-shot variation, derive it deterministically from the shot brief's own
   fields (e.g. hash `shot_id`), never from an RNG.
-- GSAP is already loaded on the page via a `<script src="https://cdn.jsdelivr.net/npm/gsap@.../gsap.min.js">`
-  tag — do not add your own `<script src>` import for it, and do not use any GSAP plugin that
-  isn't the core `gsap` global (no ScrollTrigger, no SplitText, etc. — this is a headless render,
-  not a browser session with a scrolling viewport).
+- You MUST include this exact `<script>` tag yourself, verbatim, before your own animation
+  `<script>` block — the renderer waits on THIS composition's own copy to load and does not
+  supply GSAP any other way:
+  ```html
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>
+  ```
+  Note the `/dist/` segment — `gsap@3.12.2/gsap.min.js` (no `dist/`) 404s. This is not a
+  hypothetical: every shot in a real run once used that exact wrong URL, the renderer's own log
+  reported `sub_timeline_script_failure` ("script resource(s) failed to load ... the timeline
+  registration they carry can never arrive"), and every one of those shots rendered as a
+  garbled pile of overlapping elements instead of the composition you designed — because without
+  GSAP, your timeline never registers and the renderer has no idea when/where anything on this
+  page belongs. Do not use any GSAP plugin that isn't the core `gsap` global (no ScrollTrigger, no
+  SplitText, etc. — this is a headless render, not a browser session with a scrolling viewport).
 
 ## Brand facts (HRSU Indore Pvt. Ltd.)
 

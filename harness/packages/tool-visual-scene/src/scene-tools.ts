@@ -171,6 +171,53 @@ export function findDuplicateAttributeIssues(html: string): string[] {
   return issues
 }
 
+/**
+ * Detects the exact composition-wide failure mode that produced overlapping/garbled shots
+ * across two separate real runs: a `<script src>` tag for GSAP pointing at a 404 URL. The real
+ * npm package publishes its minified bundle under `dist/` (`gsap@3.12.2/dist/gsap.min.js`), not
+ * at the package root -- every shot in a real run wrote `gsap@3.12.2/gsap.min.js` (no `dist/`),
+ * which 404s. Confirmed directly against HyperFrames' own render log for one of those shots:
+ * `[Browser:PAGEERROR] Cannot read properties of null (reading 'timeline')` followed by
+ * `sub_timeline_script_failure` ("script resource(s) failed to load ... the timeline
+ * registration they carry can never arrive ... the render proceeds without those animations").
+ * Without a registered timeline the renderer has no idea when/where anything belongs, which is
+ * what collapsed every element toward the same overlapping region. A prompt instruction alone
+ * (scene-author-persona.md) is not enough -- the model wrote the wrong URL despite the persona
+ * telling it not to write one at all, so this is caught mechanically the same way
+ * `findDuplicateAttributeIssues` catches its defect, before a render is ever attempted.
+ */
+export function findGsapScriptIssues(html: string): string[] {
+  const scriptSrcPattern = /<script\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>/gi
+  const gsapScripts: string[] = []
+  let match: RegExpExecArray | null
+  while ((match = scriptSrcPattern.exec(html)) !== null) {
+    const src = match[1] ?? match[2] ?? ''
+    if (/\bgsap\b/i.test(src)) gsapScripts.push(src)
+  }
+  if (gsapScripts.length === 0) {
+    return ['no <script src="..."> tag for GSAP found -- window.__timelines will never be ' +
+      'registered and the renderer will render this composition with no animation/layout ' +
+      'information at all. Add <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/' +
+      'gsap.min.js"></script> before your own animation <script> block.']
+  }
+  const issues: string[] = []
+  for (const src of gsapScripts) {
+    // The confirmed-broken shape: a gsap CDN/package URL with no `dist/` segment before the
+    // final .js filename. Matches jsdelivr (`cdn.jsdelivr.net/npm/gsap@...`) and the equivalent
+    // unpkg shape, not just the one CDN seen in the real failure.
+    if (/gsap@[^/]+\/(?!dist\/)[^/]*\.m?js/i.test(src) && !/\/dist\//i.test(src)) {
+      issues.push(
+        `GSAP script src "${src}" is missing the "dist/" path segment and will 404 (the real ` +
+        `npm package publishes its bundle at dist/gsap.min.js, not at the package root) -- ` +
+        `this exact URL shape already produced a real broken render (renderer log: ` +
+        `sub_timeline_script_failure, "script resource(s) failed to load"). Use ` +
+        `"https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js" instead.`,
+      )
+    }
+  }
+  return issues
+}
+
 export async function renderScene(
   workspaceId: string,
   shotId: string,
@@ -203,7 +250,7 @@ export async function renderScene(
     html = undefined
   }
   if (html !== undefined) {
-    const issues = findDuplicateAttributeIssues(html)
+    const issues = [...findDuplicateAttributeIssues(html), ...findGsapScriptIssues(html)]
     if (issues.length > 0) {
       throw new Error(`render_scene: composition has broken markup:\n- ${issues.join('\n- ')}`)
     }

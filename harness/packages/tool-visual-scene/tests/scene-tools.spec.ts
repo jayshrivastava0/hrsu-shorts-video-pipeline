@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues } from '../src/scene-tools.ts'
+import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues, findGsapScriptIssues } from '../src/scene-tools.ts'
 
 function fakeSpawn() {
   return vi.fn().mockImplementation(() => {
@@ -111,6 +111,34 @@ describe('findDuplicateAttributeIssues', () => {
   it('does not flag two different attributes that happen to share a substring', () => {
     const html = `<div data-start="0" data-duration="1">x</div>`
     expect(findDuplicateAttributeIssues(html)).toEqual([])
+  })
+})
+
+describe('findGsapScriptIssues', () => {
+  it('flags the exact broken URL shape that caused a real broken render (no dist/ segment)', () => {
+    const html = '<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/gsap.min.js"></script>'
+    const issues = findGsapScriptIssues(html)
+    expect(issues.length).toBe(1)
+    expect(issues[0]).toContain('dist/')
+    expect(issues[0]).toContain('gsap.min.js')
+  })
+
+  it('does not flag the correct dist/ URL', () => {
+    const html = '<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>'
+    expect(findGsapScriptIssues(html)).toEqual([])
+  })
+
+  it('flags a composition with no GSAP script tag at all', () => {
+    const html = '<div id="root"><script>window.__timelines = {};</script></div>'
+    const issues = findGsapScriptIssues(html)
+    expect(issues.length).toBe(1)
+    expect(issues[0]).toContain('no <script')
+  })
+
+  it('does not false-positive on an unrelated script tag', () => {
+    const html = '<script src="https://cdn.jsdelivr.net/npm/some-other-lib@1.0.0/dist/lib.min.js"></script>' +
+      '<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>'
+    expect(findGsapScriptIssues(html)).toEqual([])
   })
 })
 
@@ -265,11 +293,26 @@ describe('renderScene', () => {
 
   it('still renders a real written composition with no duplicate attributes', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
-    writeSceneFile('run-42', 'shot-1', '<div id="x" class="clip headline">fine</div>', projectRoot)
+    writeSceneFile('run-42', 'shot-1',
+      '<div id="x" class="clip headline">fine</div>' +
+      '<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>',
+      projectRoot)
     const spawnMock = fakeSpawn()
     const result = await renderScene('run-42', 'shot-1', projectRoot, '/out/shot-1.mp4', { spawn: spawnMock as never })
     expect(result).toBe('/out/shot-1.mp4')
     expect(spawnMock).toHaveBeenCalled()
+  })
+
+  it('rejects a written composition whose GSAP script URL is missing dist/ BEFORE spawning', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    writeSceneFile('run-42', 'shot-1',
+      '<div id="x" class="clip headline">fine</div>' +
+      '<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/gsap.min.js"></script>',
+      projectRoot)
+    const spawnMock = fakeSpawn()
+    await expect(renderScene('run-42', 'shot-1', projectRoot, '/out/shot-1.mp4', { spawn: spawnMock as never }))
+      .rejects.toThrow(/dist\//)
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 })
 
