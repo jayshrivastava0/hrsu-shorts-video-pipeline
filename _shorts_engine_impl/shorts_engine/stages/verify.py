@@ -188,14 +188,19 @@ def _render_shot(ctx, shot_id: str, rtype: str, payload: dict,
 
 
 def _reassemble(ctx) -> None:
-    raise EngineError(
-        "VERIFY: a revise cycle needs to re-assemble the video, but reassembly on the "
-        "HyperFrames composition path is not yet implemented (the retired ffmpeg "
-        "assemble.run() pipeline it used to call has been replaced and would silently "
-        "overwrite the HyperFrames-authored video with the old fixed-caption render). "
-        "This requires re-driving stage_assemble_prepare -> author_assembly_composition -> "
-        "stage_assemble_finalize, which needs the harness (Node) layer verify.py's "
-        "pure-Python revise loop cannot reach — tracked as follow-up work.")
+    # assembly_brief.json only exists when THIS run's video was produced via the HyperFrames
+    # composition path (stage_assemble_prepare writes it; the retired assemble.run() never
+    # does) — same detection this file's apply_fixes() already uses for the identical question.
+    # A plain assemble.run() video (only reachable today via direct unit-test calls to that
+    # retired module, never via the live cli.py pipeline since Task 5) can be safely re-run the
+    # same way it always could.
+    ws = Path(ctx.workspace)
+    if not (ws / "assembly_brief.json").exists():
+        from shorts_engine.stages import assemble
+        assemble.run(ctx)
+        return
+    from shorts_engine.harness_bridge import run_creative_stage
+    run_creative_stage(ctx, "assemble")
 
 
 # Flat string fields the shrink-in-place fix can act on directly. Originally

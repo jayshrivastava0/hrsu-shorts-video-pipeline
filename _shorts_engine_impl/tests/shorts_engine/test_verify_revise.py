@@ -226,29 +226,47 @@ class TestRunLoop:
 
 
 class TestReassemble:
-    # C2 regression: _reassemble used to silently call the retired ffmpeg
-    # assemble.run(), which would overwrite the HyperFrames-composed
-    # video_short.mp4 with the old fixed-caption/progress-bar render. It must
-    # now fail loudly instead, and never import/invoke the retired module.
-    def test_reassemble_raises_engine_error(self, tmp_path):
+    # _reassemble now actually re-drives assembly instead of raising "not yet implemented" --
+    # via the real headless-agent bridge for a HyperFrames-authored run (detected the same way
+    # apply_fixes() already does, via assembly_brief.json), or via the retired assemble.run()
+    # directly for a plain (non-HyperFrames) run, exactly as it always safely could.
+    def test_reassemble_calls_harness_bridge_for_hyperframes_run(self, tmp_path, monkeypatch):
         from shorts_engine.stages import verify
-        from shorts_engine.errors import EngineError
-        ws = _ws(tmp_path)
-        class Ctx: workspace = ws; flags = {}
-        with pytest.raises(EngineError, match="re-assemble"):
-            verify._reassemble(Ctx())
 
-    def test_reassemble_does_not_call_retired_assemble_run(self, tmp_path, monkeypatch):
+        called = []
+        monkeypatch.setattr("shorts_engine.harness_bridge.run_creative_stage",
+                            lambda ctx, phase: called.append(phase))
+        ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
+        class Ctx: workspace = ws; flags = {}
+        verify._reassemble(Ctx())
+        assert called == ["assemble"]
+
+    def test_reassemble_does_not_call_retired_assemble_run_for_hyperframes_run(
+        self, tmp_path, monkeypatch
+    ):
         from shorts_engine.stages import verify, assemble
-        from shorts_engine.errors import EngineError
 
         called = []
         monkeypatch.setattr(assemble, "run", lambda ctx: called.append(1))
+        monkeypatch.setattr("shorts_engine.harness_bridge.run_creative_stage",
+                            lambda ctx, phase: None)
+        ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
+        class Ctx: workspace = ws; flags = {}
+        verify._reassemble(Ctx())
+        assert called == []
+
+    def test_reassemble_calls_assemble_run_when_no_hyperframes_brief(self, tmp_path, monkeypatch):
+        from shorts_engine.stages import verify, assemble
+
+        called = []
+        monkeypatch.setattr(assemble, "run", lambda ctx: called.append(ctx))
         ws = _ws(tmp_path)
         class Ctx: workspace = ws; flags = {}
-        with pytest.raises(EngineError):
-            verify._reassemble(Ctx())
-        assert called == []
+        ctx = Ctx()
+        verify._reassemble(ctx)
+        assert called == [ctx]
 
 
 class TestBuildAssMargin:

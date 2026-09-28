@@ -278,7 +278,7 @@ class TestCreativeStageBridge:
             self, phase, finalize_cmd):
         """The manifest must not claim artifacts the bridge never produces.
 
-        `_run_creative_stage` reports artifacts on the runner's behalf, but the files are
+        `run_creative_stage` reports artifacts on the runner's behalf, but the files are
         actually written by `stage_cli.py`'s `visuals-finalize`/`assemble-finalize`, which
         checkpoint their own artifact dicts. The two must agree exactly. A stale entry --
         e.g. `captions.ass`, an ffmpeg-ASS artifact of the retired assemble.py that the
@@ -286,7 +286,7 @@ class TestCreativeStageBridge:
         """
         import inspect
         import re
-        from shorts_engine import cli, stage_cli
+        from shorts_engine import harness_bridge, stage_cli
 
         # Read the expected set straight from the finalize command's own source, so this
         # test tracks stage_cli.py rather than duplicating its dict.
@@ -296,9 +296,9 @@ class TestCreativeStageBridge:
         expected = set(re.findall(r'"(\w+)":', match.group(1)))
         assert expected, f"parsed an empty artifacts dict from {finalize_cmd}"
 
-        with mock.patch("shorts_engine.cli.subprocess.run") as mock_run:
+        with mock.patch("shorts_engine.harness_bridge.subprocess.run") as mock_run:
             mock_run.return_value = mock.Mock(returncode=0, stderr="")
-            reported = cli._run_creative_stage(mock.Mock(workspace="/ws"), phase)
+            reported = harness_bridge.run_creative_stage(mock.Mock(workspace="/ws"), phase)
 
         assert set(reported) == expected
 
