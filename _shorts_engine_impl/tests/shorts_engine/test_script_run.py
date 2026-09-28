@@ -23,17 +23,19 @@ URL = "https://blog.hrsuindore.com/2026/06/optimizing-nitrate-removal-via-granul
 
 # Narration lengths sized for WORDS_PER_SECOND=1.7: per-beat integer bounds
 # hook [3,8], stakes [6,12], mechanism [11,24], proof [9,20], cta [9,16];
-# total 62 words, inside the aggregate [60, 85] window.
+# total 62 words, comfortably over the 51-word (30s) floor (no ceiling).
+# `beat` and `purpose` match here, but beats are otherwise free-form since
+# the 2026-08-26 creative-flow redesign -- purpose is what the gates key off.
 GOOD_BEATS = [
-    {"beat": "hook", "narration": "EU nitrate discharge limits are tightening fast.",
+    {"beat": "hook", "purpose": "hook", "narration": "EU nitrate discharge limits are tightening fast.",
      "fact_ids": [], "card_text": "EU limits tightening", "broll_wish": "wastewater aeration basin"},
-    {"beat": "stakes", "narration": "Non-compliance risks steep penalties and unplanned production downtime this quarter.",
+    {"beat": "stakes", "purpose": "stakes", "narration": "Non-compliance risks steep penalties and unplanned production downtime this quarter.",
      "fact_ids": [], "card_text": "Downtime risk", "broll_wish": ""},
-    {"beat": "mechanism", "narration": "Dosing calcium nitrate feeds denitrifying bacteria, converting nitrate into harmless nitrogen gas within the treatment train without any retrofit.",
+    {"beat": "mechanism", "purpose": "mechanism", "narration": "Dosing calcium nitrate feeds denitrifying bacteria, converting nitrate into harmless nitrogen gas within the treatment train without any retrofit.",
      "fact_ids": [], "card_text": "Nitrate to nitrogen gas", "broll_wish": ""},
-    {"beat": "proof", "narration": "Best practice suggests a dosage range of 1.5 to 3 kg per cubic meter.",
+    {"beat": "proof", "purpose": "proof", "narration": "Best practice suggests a dosage range of 1.5 to 3 kg per cubic meter.",
      "fact_ids": ["f1"], "card_text": "Dosing window", "broll_wish": ""},
-    {"beat": "cta", "narration": "HRSU supplies high-purity powder with batch QC. Visit hrsuindore.com for the guide.",
+    {"beat": "cta", "purpose": "cta", "narration": "HRSU supplies high-purity powder with batch QC. Visit hrsuindore.com for the guide.",
      "fact_ids": ["b_purity"], "card_text": "hrsuindore.com", "broll_wish": ""},
 ]
 BAD_BEATS = json.loads(json.dumps(GOOD_BEATS))
@@ -363,12 +365,13 @@ class TestWriterPromptAndBeatRules:
                           differentiators=[{"id": "b_purity", "text": "High purity"}],
                           cta_lines=["Visit hrsuindore.com"], banned_claims=[])
 
-    def test_beat_rules_lists_all_five_beats_in_order(self) -> None:
+    def test_beat_rules_lists_all_six_purposes_in_order(self) -> None:
         rules = script_stage._beat_rules()
         lines = rules.splitlines()
-        assert len(lines) == 5
+        assert len(lines) == 6
         assert lines[0].startswith("- hook:")
         assert lines[4].startswith("- cta:")
+        assert lines[5].startswith("- other:")
 
     def test_beat_rules_show_the_true_tolerance_widened_word_ranges(self) -> None:
         """Regression: the prompt showed each beat's no-tolerance nominal
@@ -405,18 +408,19 @@ class TestWriterPromptAndBeatRules:
         assert "b_purity" in prompt  # first differentiator id, used as the example
         assert "brand_differentiator" in prompt  # named as what NOT to invent
 
-    def test_writer_prompt_tells_writer_to_aim_for_the_total_duration_window(self) -> None:
+    def test_writer_prompt_tells_writer_to_aim_for_the_total_duration_floor(self) -> None:
         """Regression: a live run showed gate_total_duration rejecting
         three consecutive drafts for being too short in aggregate (26.9s,
         33.1s, 34.2s -- each beat individually legal, but every beat trended
         toward the short end of its own range). The prompt must tell the
         writer the aggregate word-count target up front, not just react
-        after the first failure."""
+        after the first failure. There is no ceiling to state -- only the
+        floor (2026-08-26 creative-flow redesign)."""
         prompt = script_stage._writer_prompt(
             {"title": "T"}, self._factsheet(), self._brand())
         assert "SUM" in prompt
-        assert "60" in prompt  # TOTAL_MIN_S(35) * WORDS_PER_SECOND(1.7), rounded
-        assert "85" in prompt  # TOTAL_MAX_S(50) * WORDS_PER_SECOND(1.7)
+        assert "51" in prompt  # TOTAL_MIN_S(30) * WORDS_PER_SECOND(1.7), rounded
+        assert "no maximum" in prompt.lower()
 
     def test_writer_prompt_omits_gate_errors_block_when_none_given(self) -> None:
         prompt = script_stage._writer_prompt(
@@ -440,13 +444,16 @@ class TestWriterPromptAndBeatRules:
 
 
 class TestScriptSchema:
-    """Structural correctness of the writer LLM response schema."""
+    """Structural correctness of the writer LLM response schema. Beats are
+    free-form in count/order/naming since the 2026-08-26 creative-flow
+    redesign -- `beat` is a plain string and only `purpose` is enum-
+    constrained; the schema enforces a MIN_BEATS floor and no ceiling."""
 
-    GOOD_BEAT = {"beat": "hook", "narration": "n", "fact_ids": [],
+    GOOD_BEAT = {"beat": "hook", "purpose": "hook", "narration": "n", "fact_ids": [],
                  "card_text": "c", "broll_wish": ""}
 
     def _five(self, **overrides):
-        beats = [{**self.GOOD_BEAT, "beat": s} for s in
+        beats = [{**self.GOOD_BEAT, "beat": s, "purpose": s} for s in
                  ("hook", "stakes", "mechanism", "proof", "cta")]
         for idx, patch in overrides.items():
             beats[int(idx)].update(patch)
@@ -455,17 +462,24 @@ class TestScriptSchema:
     def test_validates_five_well_formed_beats(self) -> None:
         jsonschema.validate({"beats": self._five()}, script_stage.SCRIPT_SCHEMA)
 
-    def test_rejects_fewer_than_five_beats(self) -> None:
+    def test_rejects_fewer_than_min_beats(self) -> None:
         with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate({"beats": self._five()[:4]}, script_stage.SCRIPT_SCHEMA)
+            jsonschema.validate({"beats": self._five()[:2]}, script_stage.SCRIPT_SCHEMA)
 
-    def test_rejects_more_than_five_beats(self) -> None:
-        six = self._five() + [dict(self.GOOD_BEAT)]
-        with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate({"beats": six}, script_stage.SCRIPT_SCHEMA)
+    def test_accepts_more_than_five_beats(self) -> None:
+        # No ceiling -- an extra "other"-purpose beat is schema-valid.
+        seven = self._five() + [dict(self.GOOD_BEAT, beat="extra1", purpose="other"),
+                                 dict(self.GOOD_BEAT, beat="extra2", purpose="other")]
+        jsonschema.validate({"beats": seven}, script_stage.SCRIPT_SCHEMA)
 
-    def test_rejects_unknown_beat_name(self) -> None:
+    def test_accepts_free_form_beat_name(self) -> None:
+        # `beat` is a plain string now -- any name is schema-valid as long
+        # as `purpose` is one of the enum values.
         beats = self._five(**{"0": {"beat": "outro"}})
+        jsonschema.validate({"beats": beats}, script_stage.SCRIPT_SCHEMA)
+
+    def test_rejects_unknown_purpose(self) -> None:
+        beats = self._five(**{"0": {"purpose": "outro"}})
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate({"beats": beats}, script_stage.SCRIPT_SCHEMA)
 

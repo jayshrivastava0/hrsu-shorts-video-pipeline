@@ -13,6 +13,115 @@ from shorts_engine import config
 FIXTURE_HTML = Path(__file__).parent / "fixtures" / "nitrate_post.html"
 
 
+def test_broll_request_calls_acquisition_ladder(tmp_path, monkeypatch, capsys):
+    from shorts_engine import stage_cli
+    (tmp_path / "post.json").write_text(json.dumps({"images": []}), encoding="utf-8")
+    called = {}
+
+    def fake_acquire(wish, narration_span, workspace, post_images, torture=False):
+        called.update(wish=wish, narration_span=narration_span)
+        return {"image_path": None, "focal_hint": "center", "provenance": {"reason": "no_wish"}}
+
+    monkeypatch.setattr("shorts_engine.sourcing.ladder.acquire", fake_acquire)
+    args = stage_cli.build_parser().parse_args([
+        "broll-request", "--workspace", str(tmp_path),
+        "--wish", "close-up of white powder", "--narration-span", "The powder dissolves.",
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out.strip().split("\n")[-1])
+    assert out["provenance"]["reason"] == "no_wish"
+    assert called["wish"] == "close-up of white powder"
+
+
+def test_broll_request_fails_loud_on_missing_post_json(tmp_path, capsys):
+    # cmd_broll_request previously let an exception (e.g. a missing post.json) escape as a
+    # raw Python traceback instead of the {"status": "error", ...} JSON contract every
+    # sibling cmd_* function follows -- runStageCli on the Node side parses stderr for that
+    # JSON shape, so an unhandled traceback there is an opaque failure for the subagent
+    # instead of the documented "no photo available" fallback path.
+    from shorts_engine import stage_cli
+    # Deliberately no post.json written in tmp_path.
+    args = stage_cli.build_parser().parse_args([
+        "broll-request", "--workspace", str(tmp_path),
+        "--wish", "close-up of white powder", "--narration-span", "The powder dissolves.",
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 1
+    err = json.loads(capsys.readouterr().err.strip().split("\n")[-1])
+    assert err["status"] == "error"
+    assert "post.json" in err["message"] or "No such file" in err["message"]
+
+
+def test_visuals_prepare_carries_narration_span_into_shot_briefs(tmp_path):
+    # Fix 1: shot_briefs.json must carry narration_span through from shotlist.json so the
+    # scene-authoring subagent can pass it to request_broll without inventing it -- the brief
+    # previously dropped this field even though shotlist.py always produces it per shot.
+    from shorts_engine import stage_cli
+    init_result_workspace = json.loads(
+        subprocess.run(
+            [sys.executable, "-m", "shorts_engine.stage_cli", "init",
+             "https://blog.hrsuindore.com/test-post", "--workspace-root", str(tmp_path)],
+            capture_output=True, text=True,
+            cwd=Path(__file__).parent.parent.parent,
+        ).stdout.strip().splitlines()[-1]
+    )["workspace"]
+    workspace = Path(init_result_workspace)
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    (workspace / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "type": "HEADLINE_CARD",
+         "payload": {"text": "Test headline"}, "duration_s": 2.5,
+         "narration_span": "Cold weather concrete pours don't have to wait for spring."},
+    ]}))
+    (workspace / "post.json").write_text(json.dumps({"images": []}))
+
+    args = stage_cli.build_parser().parse_args([
+        "visuals-prepare", "--workspace", str(workspace),
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+
+    briefs = json.loads((workspace / "shot_briefs.json").read_text())
+    assert briefs[0]["narration_span"] == (
+        "Cold weather concrete pours don't have to wait for spring.")
+
+
+def test_visuals_prepare_defaults_narration_span_to_empty_string_when_missing(tmp_path):
+    from shorts_engine import stage_cli
+    init_result_workspace = json.loads(
+        subprocess.run(
+            [sys.executable, "-m", "shorts_engine.stage_cli", "init",
+             "https://blog.hrsuindore.com/test-post", "--workspace-root", str(tmp_path)],
+            capture_output=True, text=True,
+            cwd=Path(__file__).parent.parent.parent,
+        ).stdout.strip().splitlines()[-1]
+    )["workspace"]
+    workspace = Path(init_result_workspace)
+    manifest_path = workspace / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    (workspace / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "type": "HEADLINE_CARD",
+         "payload": {"text": "Test headline"}, "duration_s": 2.5},
+    ]}))
+    (workspace / "post.json").write_text(json.dumps({"images": []}))
+
+    args = stage_cli.build_parser().parse_args([
+        "visuals-prepare", "--workspace", str(workspace),
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+
+    briefs = json.loads((workspace / "shot_briefs.json").read_text())
+    assert briefs[0]["narration_span"] == ""
+
+
 def run_cli(args: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-m", "shorts_engine.stage_cli", *args],
@@ -148,6 +257,38 @@ def test_visuals_prepare_writes_shot_briefs_without_checkpointing(tmp_path):
     assert manifest_after["last_ok_status"] == "audio"
 
 
+def test_visuals_prepare_returns_briefs_and_run_id_inline(tmp_path):
+    """The orchestrating agent has NO file-read tool, so returning only the
+    `shot_briefs.json` filename left it unable to enumerate shots or to supply
+    `author_visual_scene`'s required `shot_brief`/`workspace_id` arguments (observed live:
+    it tried `skill{name:"read_file"}`, got "invalid skill name", and skipped straight to
+    `stage_visuals_finalize`). The briefs and the run id must come back in the tool result."""
+    init_result = run_cli([
+        "init", "https://blog.hrsuindore.com/test-post",
+        "--workspace-root", str(tmp_path),
+    ])
+    init_payload = json.loads(init_result.stdout.strip().splitlines()[-1])
+    workspace = init_payload["workspace"]
+    manifest_path = Path(workspace) / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["status"] = "audio"
+    manifest["last_ok_status"] = "audio"
+    manifest_path.write_text(json.dumps(manifest))
+    (Path(workspace) / "shotlist.json").write_text(json.dumps({"shots": [
+        {"id": "1", "beat": "hook", "suggested_type": "HEADLINE_CARD",
+         "payload": {"text": "Test headline"}, "duration_s": 2.5},
+    ]}))
+    (Path(workspace) / "post.json").write_text(json.dumps({"images": []}))
+
+    result = run_cli(["visuals-prepare", "--workspace", workspace])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["run_id"] == init_payload["run_id"]
+    assert payload["briefs"] == json.loads(
+        (Path(workspace) / "shot_briefs.json").read_text())
+    assert payload["briefs"][0]["shot_id"] == "1"
+
+
 def test_visuals_prepare_fade_in_s_only_fades_on_real_beat_transitions(tmp_path):
     # Regression test: fade_in_s must be computed by tracking the *previous* shot's
     # beat across the loop (matching shots_engine/stages/visuals.py:run()'s prev_beat
@@ -219,6 +360,17 @@ def test_visuals_finalize_checkpoints_when_all_shots_present_and_nonblank(tmp_pa
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["last_ok_status"] == "visuals"
     assert manifest_after["artifacts"]["shots_dir"] == "shots"
+
+    # visuals_report.json must keep the schema its downstream consumers read: verify.py's
+    # run_gates()/apply_fixes() and review/contact_sheet.py index shots by `id` and display
+    # `rendered_type` (the keys the retired visuals.py run() wrote). shot_briefs.json uses
+    # `shot_id`/`type`, so finalize must emit both spellings or verify dies with KeyError('id')
+    # — which is exactly what the first end-to-end harness run did.
+    report = json.loads((Path(workspace) / "visuals_report.json").read_text())
+    assert report["shots"][0]["id"] == "1"
+    assert report["shots"][0]["rendered_type"] == "HEADLINE_CARD"
+    assert report["shots"][0]["payload"] == {"text": "Test headline"}
+    assert report["shots"][0]["provenance"] == {"resolved": "designed"}
 
 
 def test_visuals_finalize_out_of_order_fails_loud(tmp_path):
@@ -344,6 +496,12 @@ def test_assemble_prepare_writes_brief_without_checkpointing(tmp_path):
     # Not checkpointed yet — still "visuals" (mirrors visuals-prepare's own contract).
     manifest_after = json.loads(manifest_path.read_text())
     assert manifest_after["last_ok_status"] == "visuals"
+
+    # Same reason as test_visuals_prepare_returns_briefs_and_run_id_inline: the agent has no
+    # file-read tool, and author_assembly_composition requires the brief OBJECT plus the run id.
+    assert payload["run_id"] == json.loads(
+        init_result.stdout.strip().splitlines()[-1])["run_id"]
+    assert payload["brief"] == brief
 
 
 def test_assemble_finalize_checkpoints_when_duration_law_holds_and_shots_present(tmp_path):

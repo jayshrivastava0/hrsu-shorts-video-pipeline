@@ -16,7 +16,8 @@ class TestPhase2Constants:
         assert (config.SHOT_MIN_S, config.SHOT_MAX_S) == (1.8, 4.5)
         assert (config.SHOT_TARGET_MIN_S, config.SHOT_TARGET_MAX_S) == (2.0, 3.5)
         assert config.LOGO_CTA_MAX_S == 10.0
-        assert (config.TOTAL_MIN_S, config.TOTAL_MAX_S) == (35.0, 50.0)
+        assert config.TOTAL_MIN_S == 30.0
+        assert not hasattr(config, "TOTAL_MAX_S")
         assert config.END_CARD_HOLD_S == 1.5
         assert config.AUDIO_COMPLETENESS_MARGIN_S == 1.4
         assert config.AUDIO_DURATION_TOLERANCE == 0.65

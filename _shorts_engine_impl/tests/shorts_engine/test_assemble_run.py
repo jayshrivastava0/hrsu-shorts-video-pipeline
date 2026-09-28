@@ -6,14 +6,12 @@ import pytest
 from pydub import AudioSegment
 
 SHOTS = {"shots": [
-    {"id": "s00", "beat": "hook", "type": "HEADLINE_CARD", "duration_s": 2.5,
-     "narration_span": "", "payload": {"text": "Nitrate limits tighten"},
-     "fallback": None},
-    {"id": "s01", "beat": "cta", "type": "LOGO_CTA", "duration_s": 3.0,
+    {"id": "s00", "beat": "hook", "beat_purpose": "hook", "type": "HEADLINE_CARD",
+     "duration_s": 2.5, "narration_span": "", "payload": {"text": "Nitrate limits tighten"}},
+    {"id": "s01", "beat": "cta", "beat_purpose": "cta", "type": "LOGO_CTA", "duration_s": 3.0,
      "narration_span": "", "payload": {"differentiator": "high-purity",
                                        "cta_line": "guide",
-                                       "domain": "hrsuindore.com"},
-     "fallback": None},
+                                       "domain": "hrsuindore.com"}},
 ], "total_s": 5.5}
 BEATS_AUDIO = [{"beat": "hook", "start_s": 0.0, "duration_s": 2.4},
                {"beat": "cta", "start_s": 2.7, "duration_s": 2.8}]

@@ -55,17 +55,22 @@ except ImportError as e:
     BRAND_TEXT_MUTED = "#8892b0"
 
 # ── Beat/Scene structure ────────────────────────────────────────────────────
-# Fixed five-beat procurement template (spec §4 Stage 3) -- LOCKED durations.
-# First real consumer: shorts_engine.stages.script (gate_word_budget,
-# run_gates's structure check, and the writer prompt's beat rules). Order is
-# significant: gates validate beats against this exact sequence.
-BEAT_TEMPLATE: list[dict] = [
-    {"beat": "hook",      "min_s": 2.0, "max_s": 4.0},
-    {"beat": "stakes",    "min_s": 4.0, "max_s": 6.0},
-    {"beat": "mechanism", "min_s": 8.0, "max_s": 12.0},
-    {"beat": "proof",     "min_s": 6.0, "max_s": 10.0},
-    {"beat": "cta",       "min_s": 6.0, "max_s": 8.0},
-]
+# Per-PURPOSE pacing guidance (not per fixed beat name/position) -- beats are
+# now free-form in count/order/naming (2026-08-26 creative-flow redesign); a
+# beat's `purpose` tag is what carries pacing intent forward, consumed by
+# shorts_engine.stages.script (gate_word_budget, gate_total_duration,
+# apply_word_topup, the writer prompt's beat rules) and shotlist.py (type
+# suggestion, CTA-length cap). "other" is the fallback for any beat whose
+# purpose isn't one of the five named ones.
+PURPOSE_TEMPLATE: dict[str, dict] = {
+    "hook":      {"min_s": 2.0, "max_s": 4.0},
+    "stakes":    {"min_s": 4.0, "max_s": 6.0},
+    "mechanism": {"min_s": 8.0, "max_s": 12.0},
+    "proof":     {"min_s": 6.0, "max_s": 10.0},
+    "cta":       {"min_s": 6.0, "max_s": 8.0},
+    "other":     {"min_s": 3.0, "max_s": 8.0},
+}
+MIN_BEATS = 3
 
 # ── Narration timing ────────────────────────────────────────────────────────
 # 1.7, not the spec's 2.6: measured empirically on real output. A live run
@@ -102,10 +107,10 @@ STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
 
 # ── LLM behavior ───────────────────────────────────────────────────────────
 # 5, not 3: SCRIPT's writer must satisfy both the per-beat word budget AND
-# the aggregate TOTAL_MIN_S..TOTAL_MAX_S window simultaneously (gate_total_
-# duration) -- live runs showed it converging (33.5s -> 34.2s -> beat-level
-# overshoot while fixing the aggregate) but needing more than 3 attempts to
-# land inside every constraint at once.
+# the aggregate TOTAL_MIN_S floor (there is no ceiling) simultaneously
+# (gate_total_duration) -- live runs showed it converging (33.5s -> 34.2s ->
+# beat-level overshoot while fixing the aggregate) but needing more than 3
+# attempts to land inside every constraint at once.
 LLM_MAX_RETRIES = 5
 LLM_RETRY_DELAY_S = 2  # exponential backoff: 2s, 4s, 8s
 LLM_TIMEOUT_S = 60
@@ -124,8 +129,7 @@ SHOT_MAX_S = 4.5
 SHOT_TARGET_MIN_S = 2.0
 SHOT_TARGET_MAX_S = 3.5
 LOGO_CTA_MAX_S = 10.0   # CTA beat is a single end-card shot; exempt from 4.5s
-TOTAL_MIN_S = 35.0
-TOTAL_MAX_S = 50.0
+TOTAL_MIN_S = 30.0
 
 # ── Audio (spec §4 Stage 5) ────────────────────────────────────────────────
 MIN_SEGMENT_BYTES = 1024          # F10 guard: no zero/near-zero-byte voice files

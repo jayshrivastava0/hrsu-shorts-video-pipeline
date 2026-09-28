@@ -41,7 +41,11 @@ def run(ctx) -> dict[str, str]:
     beat_files: list[Path] = []
     beat_durs: list[float] = []
     for i, beat in enumerate(beats):
-        prosody = config.PROSODY_BY_BEAT.get(beat["beat"], "conversational")
+        # Keyed by `purpose` (hook/stakes/mechanism/proof/cta), not the free-form `beat`
+        # name -- since the 2026-08-26 creative-flow redesign, `beat` is an LLM-chosen
+        # string with no fixed vocabulary, so keying on it silently missed
+        # PROSODY_BY_BEAT for almost every beat and fell through to "conversational".
+        prosody = config.PROSODY_BY_BEAT.get(beat.get("purpose"), "conversational")
         out = ws / f"voice_beat_{i:02d}.mp3"
         res = synth([VoiceSegment(beat["narration"], prosody)], out, region)
         if not out.exists() or out.stat().st_size < config.MIN_SEGMENT_BYTES:

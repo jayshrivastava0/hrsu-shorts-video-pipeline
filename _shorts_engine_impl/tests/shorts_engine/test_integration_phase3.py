@@ -28,24 +28,24 @@ FACTS_RESPONSE = {"facts": [
 #   - stakes: brief's 13-word narration busted the stakes ceiling of
 #     floor(6s * 1.7 * 1.2) = 12 words. Retuned to 11 words.
 BEATS = [
-    {"beat": "hook", "narration": "Effluent nitrate creeping up, "
+    {"beat": "hook", "purpose": "hook", "narration": "Effluent nitrate creeping up, "
      "discharge limit looming again.", "fact_ids": [],
      "card_text": "Nitrate limits are tightening",
      "broll_wish": "wastewater aeration basin"},
-    {"beat": "stakes", "narration": "European plants dose at 1.5 to "
+    {"beat": "stakes", "purpose": "stakes", "narration": "European plants dose at 1.5 to "
      "3 kg per cubic meter.", "fact_ids": ["f1"],
      "card_text": "The dosing window that works", "broll_wish": ""},
-    {"beat": "mechanism", "narration": "Calcium nitrate feeds denitrifying "
+    {"beat": "mechanism", "purpose": "mechanism", "narration": "Calcium nitrate feeds denitrifying "
      "bacteria, converting nitrate into harmless nitrogen gas inside the "
      "treatment train without a retrofit.", "fact_ids": ["f1"],
      "card_text": "Bacteria do the removal", "broll_wish": "",
      "diagram_labels": ["Effluent in", "Dosing", "Denitrifying bacteria",
                         "Nitrogen out"]},
-    {"beat": "proof", "narration": "The published dosing window of 1.5 to 3 "
+    {"beat": "proof", "purpose": "proof", "narration": "The published dosing window of 1.5 to 3 "
      "kilograms per cubic meter comes from the cited guide.",
      "fact_ids": ["f1"], "card_text": "A proven dosing window",
      "broll_wish": ""},
-    {"beat": "cta", "narration": "HRSU supplies high purity powder with batch "
+    {"beat": "cta", "purpose": "cta", "narration": "HRSU supplies high purity powder with batch "
      "level QC. Read the guide at hrsuindore dot com.",
      "fact_ids": ["b_purity"], "card_text": "Get the dosing guide",
      "broll_wish": ""},

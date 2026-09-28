@@ -80,6 +80,84 @@ describe('writeSceneFile', () => {
 })
 
 describe('renderScene', () => {
+  // Same regression guarded in tool-assembly's composition-tools.spec.ts: the child is spawned
+  // with piped stdio, so an unread `stdout` fills the OS pipe buffer and the render blocks
+  // forever on its next write. Short per-shot renders stayed under the buffer and hid this;
+  // the assembly render (same spawn strategy) deadlocked live for 3+ hours because of it.
+  it('drains the child stdout so a chatty render cannot deadlock on a full pipe', async () => {
+    let stdoutDrained = false
+    const spawnMock = vi.fn().mockImplementation(() => {
+      const { EventEmitter } = require('node:events')
+      const child = new EventEmitter() as never as
+        { stdout: InstanceType<typeof EventEmitter>; stderr: InstanceType<typeof EventEmitter> }
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.stdout.on('newListener', (event: string) => {
+        if (event === 'data') stdoutDrained = true
+      })
+      queueMicrotask(() => { (child as never as EventEmitter).emit('close', 0) })
+      return child
+    })
+
+    await renderScene('run-42', 'shot-1', '/project', '/out/shot-1.mp4', { spawn: spawnMock as never })
+    expect(stdoutDrained).toBe(true)
+  })
+
+  // A killed/crashed parent Node process leaves Windows child process trees running forever
+  // (confirmed live: orphaned chrome-headless-shell trees from earlier crashed runs piled up
+  // over hours and exhausted system resources). renderScene registers a process-exit cleanup
+  // handler for the render's own pid, and removes it once the render settles normally, so a
+  // long-running process (many renders per pipeline run) doesn't accumulate listeners.
+  it('registers a process-exit cleanup handler for the child pid and removes it after a normal close', async () => {
+    const originalPlatform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const onSpy = vi.spyOn(process, 'on')
+    const offSpy = vi.spyOn(process, 'off')
+    try {
+      const spawnMock = vi.fn().mockImplementation(() => {
+        const { EventEmitter } = require('node:events')
+        const child = new EventEmitter() as never as
+          { pid: number; stdout: InstanceType<typeof EventEmitter>; stderr: InstanceType<typeof EventEmitter> }
+        child.pid = 4242
+        child.stdout = new EventEmitter()
+        child.stderr = new EventEmitter()
+        queueMicrotask(() => { (child as never as EventEmitter).emit('close', 0) })
+        return child
+      })
+      await renderScene('run-42', 'shot-1', '/project', '/out/shot-1.mp4', { spawn: spawnMock as never })
+      const exitHandler = onSpy.mock.calls.find((call) => call[0] === 'exit')?.[1]
+      expect(exitHandler).toBeDefined()
+      expect(offSpy).toHaveBeenCalledWith('exit', exitHandler)
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform })
+      onSpy.mockRestore()
+      offSpy.mockRestore()
+    }
+  })
+
+  it('does not register a cleanup handler on non-Windows platforms', async () => {
+    const originalPlatform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'linux' })
+    const onSpy = vi.spyOn(process, 'on')
+    try {
+      const spawnMock = vi.fn().mockImplementation(() => {
+        const { EventEmitter } = require('node:events')
+        const child = new EventEmitter() as never as
+          { pid: number; stdout: InstanceType<typeof EventEmitter>; stderr: InstanceType<typeof EventEmitter> }
+        child.pid = 4242
+        child.stdout = new EventEmitter()
+        child.stderr = new EventEmitter()
+        queueMicrotask(() => { (child as never as EventEmitter).emit('close', 0) })
+        return child
+      })
+      await renderScene('run-42', 'shot-1', '/project', '/out/shot-1.mp4', { spawn: spawnMock as never })
+      expect(onSpy.mock.calls.some((call) => call[0] === 'exit')).toBe(false)
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform })
+      onSpy.mockRestore()
+    }
+  })
+
   it('spawns the hyperframes CLI with the expected composition/output/resolution args', async () => {
     const spawnMock = vi.fn().mockImplementation(() => {
       const { EventEmitter } = require('node:events')

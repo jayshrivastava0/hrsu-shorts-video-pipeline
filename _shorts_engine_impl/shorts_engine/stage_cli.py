@@ -170,6 +170,7 @@ def cmd_visuals_prepare(args: argparse.Namespace) -> int:
                 "shot_id": shot["id"], "beat": shot["beat"], "type": rtype,
                 "payload": payload, "duration_s": shot["duration_s"],
                 "fade_in_s": fade,
+                "narration_span": shot.get("narration_span", ""),
                 "provenance": prov,
             })
     except Exception as exc:
@@ -180,7 +181,13 @@ def cmd_visuals_prepare(args: argparse.Namespace) -> int:
         return 1
 
     (workspace / "shot_briefs.json").write_text(json.dumps(briefs, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "ok", "shot_briefs": "shot_briefs.json"}))
+    # `briefs`/`run_id` are returned INLINE, not just as a filename: the orchestrating harness
+    # agent has no file-read tool (verified live — it tried `skill{name:"read_file"}` and got
+    # "invalid skill name"), and `author_visual_scene` requires the brief OBJECT plus the run id
+    # as `workspace_id`. Without these in the tool result the agent cannot enumerate the shots
+    # at all and skips straight to `stage_visuals_finalize`, which then fails never-blank.
+    print(json.dumps({"status": "ok", "shot_briefs": "shot_briefs.json",
+                      "run_id": manifest.run_id, "briefs": briefs}))
     return 0
 
 
@@ -214,7 +221,18 @@ def cmd_visuals_finalize(args: argparse.Namespace) -> int:
                     f"visuals-finalize: shot {shot_id} ({brief['type']}) rendered without "
                     f"visible content ({pixels} bright px < {config.MIN_CONTENT_PIXELS}) — "
                     f"never-blank violated")
-            report["shots"].append({**brief, "content_pixels": pixels})
+            # Emit BOTH spellings. shot_briefs.json speaks `shot_id`/`type`, but
+            # visuals_report.json's consumers — verify.py's run_gates()/apply_fixes() and
+            # review/contact_sheet.py — index by `id` and display `rendered_type`, the schema
+            # the retired visuals.py run() wrote. Without this, the first stage after
+            # `assembled` dies with KeyError('id').
+            # NOTE: `rendered_type` is only the SUGGESTED archetype here. On this path the
+            # scene-authoring subagent may compose something else entirely and the pipeline
+            # has no record of what it actually chose, so treat it as a hint, not ground truth.
+            report["shots"].append({
+                **brief, "id": shot_id, "rendered_type": brief["type"],
+                "content_pixels": pixels,
+            })
         (workspace / "visuals_report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8")
     except Exception as exc:
@@ -291,7 +309,11 @@ def cmd_assemble_prepare(args: argparse.Namespace) -> int:
         return 1
 
     (workspace / "assembly_brief.json").write_text(json.dumps(brief, indent=2), encoding="utf-8")
-    print(json.dumps({"status": "ok", "assembly_brief": "assembly_brief.json"}))
+    # Inline `brief`/`run_id` for the same reason as cmd_visuals_prepare above —
+    # `author_assembly_composition` takes the brief object and the run id, and the agent has
+    # no way to read the file off disk itself.
+    print(json.dumps({"status": "ok", "assembly_brief": "assembly_brief.json",
+                      "run_id": manifest.run_id, "brief": brief}))
     return 0
 
 
@@ -384,7 +406,20 @@ def cmd_assemble_finalize(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def cmd_broll_request(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    try:
+        from shorts_engine.sourcing.ladder import acquire
+        post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
+        result = acquire(args.wish, args.narration_span, workspace, post.get("images", []))
+    except Exception as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="shorts_engine.stage_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -422,6 +457,17 @@ def main(argv: list[str] | None = None) -> int:
     assemble_finalize_parser.add_argument("--workspace", required=True)
     assemble_finalize_parser.set_defaults(func=cmd_assemble_finalize)
 
+    p_broll = subparsers.add_parser("broll-request")
+    p_broll.add_argument("--workspace", required=True)
+    p_broll.add_argument("--wish", required=True)
+    p_broll.add_argument("--narration-span", required=True)
+    p_broll.set_defaults(func=cmd_broll_request)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 

@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-subagent": "0.1.1-rc.2"
+    "@deepseek-ai/dsh-subagent": "0.1.1-rc.2",
+    "@hrsu/dsh-tool-shorts-stage": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "*",

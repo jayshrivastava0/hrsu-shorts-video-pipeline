@@ -26,12 +26,22 @@ from pathlib import Path
 from typing import Any
 
 from shorts_engine import config, runner
+from shorts_engine.harness_bridge import run_creative_stage
 from shorts_engine.stages import (
-    facts, ingest, script, shotlist, audio, visuals, assemble,
+    facts, ingest, script, shotlist, audio,
     verify, package, publish,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Creative stages (headless-agent bridge) ───────────────────────────────
+def _visuals_stage(ctx) -> dict[str, str]:
+    return run_creative_stage(ctx, "visuals")
+
+
+def _assemble_stage(ctx) -> dict[str, str]:
+    return run_creative_stage(ctx, "assemble")
 
 
 # ── Build Stages ──────────────────────────────────────────────────────────
@@ -50,8 +60,8 @@ def build_stages() -> list[runner.Stage]:
         ("script", "scripted", script.run),
         ("shotlist", "shotlisted", shotlist.run),
         ("audio", "audio", audio.run),
-        ("visuals", "visuals", visuals.run),
-        ("assemble", "assembled", assemble.run),
+        ("visuals", "visuals", _visuals_stage),
+        ("assemble", "assembled", _assemble_stage),
         ("verify", "verified", verify.run),
         ("package", "packaged", package.run),
         ("publish", "published", publish.run),
@@ -156,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.local_only:
         flags["local_only"] = True
     if args.html_override:
-        flags["html_override"] = str(args.html_override)
+        # ingest.run() treats flags["html_override"] as literal HTML content (it hands it
+        # straight to BeautifulSoup), not a path — so read the file here, exactly as
+        # stage_cli.py's own _flags_from_args() already does.
+        flags["html_override"] = Path(args.html_override).read_text(encoding="utf-8")
     if args.torture:
         flags["torture"] = True
     if args.publish:

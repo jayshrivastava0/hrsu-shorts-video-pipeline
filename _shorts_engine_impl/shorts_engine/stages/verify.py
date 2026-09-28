@@ -188,25 +188,19 @@ def _render_shot(ctx, shot_id: str, rtype: str, payload: dict,
 
 
 def _reassemble(ctx) -> None:
-    # assembly_brief.json only exists when THIS run's video was produced via
-    # the HyperFrames composition path (stage_assemble_prepare writes it;
-    # assemble.run() never does). Only that path is unsafe to blindly
-    # re-run here — see the raise below. A plain assemble.run() video (the
-    # only path python -m shorts_engine's own STAGE_FUNCS ever drives
-    # end-to-end today, since --resume is still a stub) can be safely
-    # re-assembled the same way it always was.
+    # assembly_brief.json only exists when THIS run's video was produced via the HyperFrames
+    # composition path (stage_assemble_prepare writes it; the retired assemble.run() never
+    # does) — same detection this file's apply_fixes() already uses for the identical question.
+    # A plain assemble.run() video (only reachable today via direct unit-test calls to that
+    # retired module, never via the live cli.py pipeline since Task 5) can be safely re-run the
+    # same way it always could.
     ws = Path(ctx.workspace)
-    if (ws / "assembly_brief.json").exists():
-        raise EngineError(
-            "VERIFY: a revise cycle needs to re-assemble the video, but reassembly on the "
-            "HyperFrames composition path is not yet implemented (the retired ffmpeg "
-            "assemble.run() pipeline it used to call has been replaced and would silently "
-            "overwrite the HyperFrames-authored video with the old fixed-caption render). "
-            "This requires re-driving stage_assemble_prepare -> author_assembly_composition -> "
-            "stage_assemble_finalize, which needs the harness (Node) layer verify.py's "
-            "pure-Python revise loop cannot reach — tracked as follow-up work.")
-    from shorts_engine.stages import assemble
-    assemble.run(ctx)
+    if not (ws / "assembly_brief.json").exists():
+        from shorts_engine.stages import assemble
+        assemble.run(ctx)
+        return
+    from shorts_engine.harness_bridge import run_creative_stage
+    run_creative_stage(ctx, "assemble")
 
 
 # Flat string fields the shrink-in-place fix can act on directly. Originally
@@ -234,13 +228,27 @@ def apply_fixes(ctx, failures: list[dict]) -> list[str]:
         kind, sid = f["kind"], f.get("id")
         if kind == "broll_mismatch":
             fb = shotlist[sid].get("fallback") or {}
-            entry = by_id[sid]
-            entry["rendered_type"] = fb["type"]
-            entry["payload"] = fb["payload"]
-            entry["provenance"] = {"resolved": "fallback",
-                                   "reason": "verify_rejected"}
-            _render_shot(ctx, sid, fb["type"], fb["payload"], entry["duration_s"])
-            applied.append(f"{sid}: swapped to fallback {fb['type']}")
+            if "type" in fb and "payload" in fb:
+                entry = by_id[sid]
+                entry["rendered_type"] = fb["type"]
+                entry["payload"] = fb["payload"]
+                entry["provenance"] = {"resolved": "fallback",
+                                       "reason": "verify_rejected"}
+                _render_shot(ctx, sid, fb["type"], fb["payload"], entry["duration_s"])
+                applied.append(f"{sid}: swapped to fallback {fb['type']}")
+            else:
+                # shotlist.py's freeform planner (Task 3) no longer emits a
+                # "fallback" key on any shot -- suggested_type is advisory
+                # only, and a shot can still be authored/rendered as BROLL
+                # (Task 4's authoring subagent may choose it) with nothing
+                # declared to swap to on rejection. Log honestly instead of
+                # crashing on a missing key or claiming a fix that didn't
+                # happen -- mirrors the legibility branch's "no
+                # deterministic fix available" path below. The revise loop
+                # still re-gates and, if this was the only failure, still
+                # exhausts its cycle budget and raises loudly.
+                applied.append(f"{sid}: no fallback declared for "
+                               f"broll_mismatch, cannot swap")
         elif kind == "legibility":
             entry = by_id[sid]
             payload = dict(entry["payload"])
@@ -261,11 +269,26 @@ def apply_fixes(ctx, failures: list[dict]) -> list[str]:
                 payload["labels"] = [" ".join(str(l).split()[:keep_words])
                                      for l in labels]
                 shrunk_field = "labels"
-            if shrunk_field is not None:
+            # assembly_brief.json only exists when this run's shots were authored via the
+            # HyperFrames path (stage_visuals_prepare writes shot_briefs.json but the retired
+            # visuals.py.run() never writes assembly_brief.json at all -- see _reassemble's
+            # identical check above). Every real run today is HyperFrames-authored (Task 5
+            # retired the old direct dispatch), so _render_shot's RENDERERS[rtype](...) call --
+            # which expects the OLD shotlist.py payload shape (e.g. DIAGRAM's "template"/
+            # "reveal_stage") -- would KeyError/EngineError on Task 3's new freeform payload
+            # shape (fact_text/fact_value/diagram_labels) every time. Degrade gracefully instead
+            # of crashing, mirroring the broll_mismatch branch's identical reasoning above.
+            hyperframes_run = (ws / "assembly_brief.json").exists()
+            if shrunk_field is not None and not hyperframes_run:
                 entry["payload"] = payload
                 _render_shot(ctx, sid, entry["rendered_type"], payload,
                              entry["duration_s"])
                 applied.append(f"{sid}: shortened {shrunk_field} for legibility")
+            elif shrunk_field is not None:
+                applied.append(f"{sid}: legibility fix for {shrunk_field} skipped -- "
+                               f"this shot was HyperFrames-authored, and the deterministic "
+                               f"re-render path is only compatible with the retired PIL "
+                               f"renderer's payload shape")
             else:
                 # No known on-screen text field for this shot's payload
                 # shape -- log honestly instead of claiming a fix that

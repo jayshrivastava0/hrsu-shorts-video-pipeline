@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import pytest
 
-BEATS = [{"beat": b, "narration": ("word " * n).strip(), "fact_ids": [],
+BEATS = [{"beat": b, "purpose": b, "narration": ("word " * n).strip(), "fact_ids": [],
           "card_text": "c", "broll_wish": ""}
          for b, n in (("hook", 8), ("stakes", 13), ("mechanism", 26),
                       ("proof", 21), ("cta", 18))]  # 86 words ≈ 50.6s est at 1.7 w/s
@@ -89,6 +89,69 @@ class TestAudioStage:
         audio.run(_ctx(tmp_path))
         assert seen == ["hook_emphasis", "urgent_problem", "conversational",
                         "matter_of_fact", "warm_cta"]
+
+    def test_prosody_keyed_by_purpose_not_free_form_beat_name(self, tmp_path, monkeypatch):
+        # Regression: since the 2026-08-26 creative-flow redesign, `beat` is a free-form
+        # LLM-chosen string with no fixed vocabulary (e.g. "the cold snap"), while `purpose`
+        # keeps the fixed hook/stakes/mechanism/proof/cta enum PROSODY_BY_BEAT is keyed on.
+        # Keying off `beat` (the old behavior) meant PROSODY_BY_BEAT almost never matched and
+        # every beat silently fell through to the "conversational" default.
+        from shorts_engine.stages import audio
+        free_form_beats = [
+            {"beat": "the cold snap", "purpose": "hook",
+             "narration": ("word " * 8).strip(), "fact_ids": [], "card_text": "c", "broll_wish": ""},
+            {"beat": "why it matters", "purpose": "stakes",
+             "narration": ("word " * 13).strip(), "fact_ids": [], "card_text": "c", "broll_wish": ""},
+            {"beat": "how it works", "purpose": "mechanism",
+             "narration": ("word " * 26).strip(), "fact_ids": [], "card_text": "c", "broll_wish": ""},
+            {"beat": "the field result", "purpose": "proof",
+             "narration": ("word " * 21).strip(), "fact_ids": [], "card_text": "c", "broll_wish": ""},
+            {"beat": "reach out", "purpose": "cta",
+             "narration": ("word " * 18).strip(), "fact_ids": [], "card_text": "c", "broll_wish": ""},
+        ]
+        seen = []
+        base = _fake_synth_factory()
+
+        def spy(segments, output_path, region, voice_override=None):
+            seen.append(segments[0].prosody)
+            return base(segments, output_path, region, voice_override)
+        monkeypatch.setattr(audio, "_synthesize", spy)
+        monkeypatch.setattr(audio, "_transcribe", _fake_transcribe)
+
+        from shorts_engine.manifest import RunManifest
+        from shorts_engine.runner import StageContext
+        m = RunManifest.create("https://blog.hrsuindore.com/x.html", tmp_path)
+        ws = Path(m.workspace)
+        (ws / "script.json").write_text(json.dumps({"beats": free_form_beats}), encoding="utf-8")
+        (ws / "post.json").write_text(json.dumps({"region": "eu"}), encoding="utf-8")
+        audio.run(StageContext(manifest=m, workspace=ws, flags={}))
+
+        assert seen == ["hook_emphasis", "urgent_problem", "conversational",
+                        "matter_of_fact", "warm_cta"]
+
+    def test_prosody_falls_back_to_conversational_for_missing_purpose(self, tmp_path, monkeypatch):
+        from shorts_engine.stages import audio
+        beats = [{"beat": "some beat", "purpose": "other",
+                  "narration": ("word " * 8).strip(), "fact_ids": [], "card_text": "c",
+                  "broll_wish": ""}]
+        seen = []
+        base = _fake_synth_factory()
+
+        def spy(segments, output_path, region, voice_override=None):
+            seen.append(segments[0].prosody)
+            return base(segments, output_path, region, voice_override)
+        monkeypatch.setattr(audio, "_synthesize", spy)
+        monkeypatch.setattr(audio, "_transcribe", _fake_transcribe)
+
+        from shorts_engine.manifest import RunManifest
+        from shorts_engine.runner import StageContext
+        m = RunManifest.create("https://blog.hrsuindore.com/x.html", tmp_path)
+        ws = Path(m.workspace)
+        (ws / "script.json").write_text(json.dumps({"beats": beats}), encoding="utf-8")
+        (ws / "post.json").write_text(json.dumps({"region": "eu"}), encoding="utf-8")
+        audio.run(StageContext(manifest=m, workspace=ws, flags={}))
+
+        assert seen == ["conversational"]
 
 
 class TestTranscribeWordsExtension:

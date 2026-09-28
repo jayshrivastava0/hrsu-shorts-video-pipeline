@@ -233,10 +233,12 @@ class TestMainArgumentParsing:
 
             main([blog_url, "--html-override", str(html_file)])
 
-            # Verify runner.run was called with html_override in flags
+            # Verify runner.run was called with html_override in flags. ingest.run() hands
+            # flags["html_override"] straight to BeautifulSoup, so it must be the file's
+            # CONTENTS, not its path (the same contract stage_cli.py already implements).
             call_kwargs = mock_run.call_args[1]
             flags = call_kwargs.get("flags", {})
-            assert flags.get("html_override") == str(html_file)
+            assert flags.get("html_override") == "<html></html>"
 
 
 class TestMainStages:
@@ -263,6 +265,42 @@ class TestMainStages:
             assert stages[0][0] == "ingest"
             assert stages[1][0] == "facts"
             assert stages[2][0] == "script"
+
+
+class TestCreativeStageBridge:
+    """The visuals/assemble stages shell out to the harness agent bridge."""
+
+    @pytest.mark.parametrize("phase, finalize_cmd", [
+        ("visuals", "cmd_visuals_finalize"),
+        ("assemble", "cmd_assemble_finalize"),
+    ])
+    def test_reported_artifacts_match_what_stage_cli_actually_checkpoints(
+            self, phase, finalize_cmd):
+        """The manifest must not claim artifacts the bridge never produces.
+
+        `run_creative_stage` reports artifacts on the runner's behalf, but the files are
+        actually written by `stage_cli.py`'s `visuals-finalize`/`assemble-finalize`, which
+        checkpoint their own artifact dicts. The two must agree exactly. A stale entry --
+        e.g. `captions.ass`, an ffmpeg-ASS artifact of the retired assemble.py that the
+        HyperFrames path never writes -- makes run_manifest.json lie about what exists.
+        """
+        import inspect
+        import re
+        from shorts_engine import harness_bridge, stage_cli
+
+        # Read the expected set straight from the finalize command's own source, so this
+        # test tracks stage_cli.py rather than duplicating its dict.
+        src = inspect.getsource(getattr(stage_cli, finalize_cmd))
+        match = re.search(r"artifacts = \{(.*?)\}", src, re.S)
+        assert match, f"no `artifacts = {{...}}` literal found in {finalize_cmd}"
+        expected = set(re.findall(r'"(\w+)":', match.group(1)))
+        assert expected, f"parsed an empty artifacts dict from {finalize_cmd}"
+
+        with mock.patch("shorts_engine.harness_bridge.subprocess.run") as mock_run:
+            mock_run.return_value = mock.Mock(returncode=0, stderr="")
+            reported = harness_bridge.run_creative_stage(mock.Mock(workspace="/ws"), phase)
+
+        assert set(reported) == expected
 
 
 class TestMainErrorHandling:

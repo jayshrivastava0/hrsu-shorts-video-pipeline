@@ -45,16 +45,29 @@ _FOCAL_TO_LAYOUT = {"center": "auto", "left": "inset", "right": "inset",
                     "top": "inset", "bottom": "inset"}
 
 
+def _shot_type(shot: dict) -> str:
+    """The shot's visual archetype.
+
+    Since the creative-flow rework, `shotlist.py` writes `suggested_type` (advisory — the
+    scene-authoring subagent may override it). `type` is still accepted so shot dicts written
+    by the older schema keep resolving.
+    """
+    stype = shot.get("suggested_type") or shot.get("type")
+    if not stype:
+        raise EngineError(f"{shot['id']}: shot has neither 'suggested_type' nor 'type'")
+    return stype
+
+
 def _fallback_of(shot: dict, reason: str):
     fb = shot.get("fallback")
     if not fb or fb.get("type") not in RENDERERS:
-        raise EngineError(f"{shot['id']}: {shot['type']} has no renderable fallback")
+        raise EngineError(f"{shot['id']}: {_shot_type(shot)} has no renderable fallback")
     return fb["type"], fb["payload"], {"resolved": "fallback", "reason": reason,
-                                       "planned_type": shot["type"]}
+                                       "planned_type": _shot_type(shot)}
 
 
 def resolve_shot(shot: dict, ctx=None, post=None) -> tuple[str, dict, dict]:
-    stype = shot["type"]
+    stype = _shot_type(shot)
     if stype in RENDERERS and stype not in ("BROLL", "PAPER_CARD"):
         return stype, shot["payload"], {"resolved": "designed"}
     torture = bool(getattr(ctx, "flags", {}).get("torture", False)) if ctx else True

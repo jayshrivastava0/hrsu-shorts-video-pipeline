@@ -48,6 +48,27 @@ class TestApplyFixes:
         assert vis["shots"][0]["provenance"]["reason"] == "verify_rejected"
         assert any("fallback" in f for f in fixes)
 
+    def test_broll_mismatch_without_fallback_degrades_gracefully(self, tmp_path, monkeypatch):
+        """Regression: Task 3's freeform shotlist planner no longer emits a
+        "fallback" key on any shot (suggested_type is advisory only), so
+        `shotlist[sid].get("fallback") or {}` is now always `{}` for a shot
+        that was never given one. apply_fixes must log honestly instead of
+        crashing with KeyError('type') on `fb["type"]`."""
+        from shorts_engine.stages import verify
+        ws = _ws(tmp_path)
+        shotlist = json.loads((ws / "shotlist.json").read_text(encoding="utf-8"))
+        del shotlist["shots"][0]["fallback"]
+        (ws / "shotlist.json").write_text(json.dumps(shotlist), encoding="utf-8")
+        rendered = []
+        monkeypatch.setattr(verify, "_render_shot",
+                            lambda ctx, sid, rtype, payload, duration: rendered.append((sid, rtype)))
+        class Ctx: workspace = ws; flags = {}
+        fixes = verify.apply_fixes(Ctx(), [{"id": "s00", "kind": "broll_mismatch", "score": 3}])
+        assert rendered == []  # nothing re-rendered -- no fallback to swap to
+        vis = json.loads((ws / "visuals_report.json").read_text(encoding="utf-8"))
+        assert vis["shots"][0]["rendered_type"] == "BROLL"  # unchanged
+        assert any("no fallback" in f for f in fixes)
+
     def test_legibility_shortens_dominant_text(self, tmp_path, monkeypatch):
         from shorts_engine.stages import verify
         ws = _ws(tmp_path)
@@ -61,6 +82,26 @@ class TestApplyFixes:
         class Ctx: workspace = ws; flags = {}
         verify.apply_fixes(Ctx(), [{"id": "s00", "kind": "legibility", "issues": []}])
         assert len(captured["text"].split()) == 7  # 10 * 0.7
+
+    def test_legibility_skips_render_for_hyperframes_authored_shot(self, tmp_path, monkeypatch):
+        """assembly_brief.json present means this run's shots were HyperFrames-authored (Task 3's
+        freeform payload shape), which the retired PIL RENDERERS[rtype](...) call cannot handle --
+        must degrade gracefully instead of calling _render_shot (which would KeyError/EngineError
+        on a payload shape it doesn't recognize)."""
+        from shorts_engine.stages import verify
+        ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
+        vis = json.loads((ws / "visuals_report.json").read_text(encoding="utf-8"))
+        vis["shots"][0]["rendered_type"] = "HEADLINE_CARD"
+        vis["shots"][0]["payload"] = {"text": "one two three four five six seven eight nine ten"}
+        (ws / "visuals_report.json").write_text(json.dumps(vis), encoding="utf-8")
+        rendered = []
+        monkeypatch.setattr(verify, "_render_shot",
+                            lambda ctx, sid, rtype, payload, duration: rendered.append(1))
+        class Ctx: workspace = ws; flags = {}
+        fixes = verify.apply_fixes(Ctx(), [{"id": "s00", "kind": "legibility", "issues": []}])
+        assert rendered == []
+        assert "HyperFrames-authored" in fixes[0]
 
     def test_legibility_shortens_logo_cta_fields(self, tmp_path, monkeypatch):
         """Regression: _TEXT_FIELDS originally covered only HEADLINE/STAT/
@@ -185,35 +226,48 @@ class TestRunLoop:
 
 
 class TestReassemble:
-    # C2 regression: _reassemble used to unconditionally call the retired
-    # ffmpeg assemble.run(), which would overwrite a HyperFrames-composed
-    # video_short.mp4 with the old fixed-caption/progress-bar render. When
-    # THIS run's video really was HyperFrames-composed -- signalled by
-    # assembly_brief.json, which only stage_assemble_prepare ever writes --
-    # it must still fail loudly and never import/invoke the retired module.
-    def test_reassemble_raises_engine_error_for_hyperframes_run(self, tmp_path):
+    # _reassemble now actually re-drives assembly instead of raising "not yet implemented" --
+    # via the real headless-agent bridge for a HyperFrames-authored run (detected the same way
+    # apply_fixes() already does, via assembly_brief.json), or via the retired assemble.run()
+    # directly for a plain (non-HyperFrames) run, exactly as it always safely could.
+    def test_reassemble_calls_harness_bridge_for_hyperframes_run(self, tmp_path, monkeypatch):
         from shorts_engine.stages import verify
-        from shorts_engine.errors import EngineError
+
+        called = []
+        monkeypatch.setattr("shorts_engine.harness_bridge.run_creative_stage",
+                            lambda ctx, phase: called.append(phase))
         ws = _ws(tmp_path)
         (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
         class Ctx: workspace = ws; flags = {}
-        with pytest.raises(EngineError, match="re-assemble"):
-            verify._reassemble(Ctx())
+        verify._reassemble(Ctx())
+        assert called == ["assemble"]
 
     def test_reassemble_does_not_call_retired_assemble_run_for_hyperframes_run(
         self, tmp_path, monkeypatch
     ):
         from shorts_engine.stages import verify, assemble
-        from shorts_engine.errors import EngineError
 
         called = []
         monkeypatch.setattr(assemble, "run", lambda ctx: called.append(1))
+        monkeypatch.setattr("shorts_engine.harness_bridge.run_creative_stage",
+                            lambda ctx, phase: None)
         ws = _ws(tmp_path)
         (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
         class Ctx: workspace = ws; flags = {}
-        with pytest.raises(EngineError):
-            verify._reassemble(Ctx())
+        verify._reassemble(Ctx())
         assert called == []
+
+    def test_reassemble_calls_assemble_run_when_no_hyperframes_brief(self, tmp_path, monkeypatch):
+        from shorts_engine.stages import verify, assemble
+
+        called = []
+        monkeypatch.setattr(assemble, "run", lambda ctx: called.append(ctx))
+        ws = _ws(tmp_path)
+        (ws / "assembly_brief.json").write_text("{}", encoding="utf-8")
+        class Ctx: workspace = ws; flags = {}
+        ctx = Ctx()
+        verify._reassemble(ctx)
+        assert called == [ctx]
 
     # When this run's video was produced by plain assemble.run() (no
     # assembly_brief.json -- true for every python -m shorts_engine run

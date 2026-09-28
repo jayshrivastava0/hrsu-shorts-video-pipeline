@@ -9,14 +9,15 @@ This module provides:
   a referenced brand differentiator's text, a brand CTA line, or the domain
 - gate_banned(): rejects SCRIPT_BANNED_PHRASES (AI-isms), FEAR_FILLER_PATTERNS
   (hype/fear marketing), and brand.banned_claims anywhere in a beat
-- gate_word_budget(): per-beat word count vs. BEAT_TEMPLATE seconds x
-  WORDS_PER_SECOND, tolerated by WORD_BUDGET_TOLERANCE
+- gate_word_budget(): per-beat word count vs. its own `purpose`'s
+  PURPOSE_TEMPLATE seconds x WORDS_PER_SECOND, tolerated by
+  WORD_BUDGET_TOLERANCE
 - gate_card_text(): card_text must be <=7 words and must not echo a 5-gram
   of its own beat's narration
 - gate_differentiator(): exactly one brand differentiator id, cited in the
   cta beat's fact_ids only
-- run_gates(): structural check (beat count/order) + aggregation of the five
-  gates above
+- run_gates(): structural check (MIN_BEATS floor + final beat's purpose is
+  "cta") + aggregation of the five gates above
 - SCRIPT_SCHEMA / CRITIQUE_SCHEMA: JSON schema contracts for the writer and
   critic LLM calls
 - writer/critique/run(): the stage entry point (write -> gate, retrying with
@@ -169,33 +170,22 @@ def gate_banned(beats: list[dict], brand: BrandFacts) -> list[str]:
 # ── gate_word_budget ─────────────────────────────────────────────────────────
 def gate_word_budget(beats: list[dict]) -> list[str]:
     """
-    Check each beat's narration word count against BEAT_TEMPLATE's
-    per-beat seconds range, converted to words via WORDS_PER_SECOND and
-    tolerated by WORD_BUDGET_TOLERANCE (spec §4 Stage 3: 2.6 words/s ±20%).
-
-    Args:
-        beats: List of beat dicts, positionally aligned with
-            config.BEAT_TEMPLATE (structure is validated separately by
-            run_gates; this function just zips positionally).
-
-    Returns:
-        List of error strings, one per beat outside its word budget.
+    Check each beat's narration word count against its own `purpose`'s
+    config.PURPOSE_TEMPLATE seconds range (not positional alignment with a
+    fixed template -- beats are free-form in count/order since the
+    2026-08-26 creative-flow redesign), converted to words via
+    WORDS_PER_SECOND and tolerated by WORD_BUDGET_TOLERANCE.
     """
     errs: list[str] = []
     tol = config.WORD_BUDGET_TOLERANCE
-    for b, spec in zip(beats, config.BEAT_TEMPLATE):
+    for b in beats:
+        spec = config.PURPOSE_TEMPLATE.get(b.get("purpose"), config.PURPOSE_TEMPLATE["other"])
         words = len(b.get("narration", "").split())
         lo = spec["min_s"] * config.WORDS_PER_SECOND * (1 - tol)
         hi = spec["max_s"] * config.WORDS_PER_SECOND * (1 + tol)
         if not (lo <= words <= hi):
-            # ceil/floor, NOT {:.0f} rounding: word counts are integers, so
-            # the displayed bounds must be the integer-feasible range. A live
-            # run's {:.0f} formatting turned lo=8.32, hi=18.72 into the
-            # paradoxical "19 words outside [8, 19]" -- the retry-echoed
-            # message told the model 19 was simultaneously the maximum and
-            # too many, so it oscillated instead of converging.
             errs.append(
-                f"budget[{spec['beat']}]: {words} words outside "
+                f"budget[{b.get('beat')}]: {words} words outside "
                 f"[{math.ceil(lo)}, {math.floor(hi)}]"
             )
     return errs
@@ -204,68 +194,36 @@ def gate_word_budget(beats: list[dict]) -> list[str]:
 # ── gate_total_duration ──────────────────────────────────────────────────────
 def gate_total_duration(beats: list[dict]) -> list[str]:
     """
-    Check the script's AGGREGATE estimated duration against SHOTLIST's total
-    video window (config.TOTAL_MIN_S..TOTAL_MAX_S).
-
-    gate_word_budget only bounds each beat individually; BEAT_TEMPLATE's
-    per-beat min_s values sum to well under TOTAL_MIN_S, so a script where
-    every beat independently passes its own word budget can still be, in
-    aggregate, too short for a valid video -- SHOTLIST has no LLM and no
-    retry path of its own, so this must be caught here, before script.json
-    is finalized, where the existing writer retry-with-echo loop can act on
-    it exactly like any other gate failure.
-
-    The error message names an exact word deficit/surplus and which
-    specific beats have headroom, rather than a vague "lengthen the shorter
-    beats" -- live runs showed the writer repeatedly landing 1-6 words
-    short of the floor even after being told the aggregate target range, so
-    the retry-echoed error must do the arithmetic for it. A small buffer is
-    added on top of the bare deficit since the writer has shown a
-    consistent tendency to undershoot a stated target, not just a range.
-
-    Args:
-        beats: List of beat dicts, positionally aligned with
-            config.BEAT_TEMPLATE (structure is validated separately by
-            run_gates; this function just zips positionally).
-
-    Returns:
-        A single-element list with the aggregate error if the total falls
-        outside [TOTAL_MIN_S, TOTAL_MAX_S], else [].
+    Check the script's AGGREGATE estimated duration against the 30s floor
+    (config.TOTAL_MIN_S). No ceiling -- per the 2026-08-26 creative-flow
+    decision, longer videos are fine; only "too short" is a defect.
     """
     total_words = sum(len(b.get("narration", "").split()) for b in beats)
     total_s = total_words / config.WORDS_PER_SECOND
-    if config.TOTAL_MIN_S <= total_s <= config.TOTAL_MAX_S:
+    if total_s >= config.TOTAL_MIN_S:
         return []
 
     min_words = round(config.TOTAL_MIN_S * config.WORDS_PER_SECOND)
-    max_words = round(config.TOTAL_MAX_S * config.WORDS_PER_SECOND)
     tol = config.WORD_BUDGET_TOLERANCE
+    deficit = min_words - total_words + 3  # small buffer vs. undershoot (see apply_word_topup)
 
-    if total_words < min_words:
-        deficit = min_words - total_words + 3  # small buffer vs. undershoot
-        headroom = []
-        for b, spec in zip(beats, config.BEAT_TEMPLATE):
-            words = len(b.get("narration", "").split())
-            hi = int(spec["max_s"] * config.WORDS_PER_SECOND * (1 + tol))
-            if hi > words:
-                headroom.append((hi - words, spec["beat"], words, hi))
-        headroom.sort(reverse=True)
-        suggestion = "; ".join(
-            f"{beat} (currently {words} words, can go up to {hi})"
-            for _room, beat, words, hi in headroom[:3]
-        )
-        return [
-            f"total_duration: {total_s:.1f}s ({total_words} words) is short of "
-            f"the {config.TOTAL_MIN_S:.0f}s floor ({min_words} words). Add "
-            f"AT LEAST {deficit} more words total, distributed across the "
-            f"beats with the most room: {suggestion}."
-        ]
-
-    surplus = total_words - max_words + 3
+    headroom = []
+    for b in beats:
+        spec = config.PURPOSE_TEMPLATE.get(b.get("purpose"), config.PURPOSE_TEMPLATE["other"])
+        words = len(b.get("narration", "").split())
+        hi = int(spec["max_s"] * config.WORDS_PER_SECOND * (1 + tol))
+        if hi > words:
+            headroom.append((hi - words, b.get("beat"), words, hi))
+    headroom.sort(reverse=True)
+    suggestion = "; ".join(
+        f"{beat} (currently {words} words, can go up to {hi})"
+        for _room, beat, words, hi in headroom[:3]
+    )
     return [
-        f"total_duration: {total_s:.1f}s ({total_words} words) is over the "
-        f"{config.TOTAL_MAX_S:.0f}s ceiling ({max_words} words). Cut AT "
-        f"LEAST {surplus} words total across the beats."
+        f"total_duration: {total_s:.1f}s ({total_words} words) is short of "
+        f"the {config.TOTAL_MIN_S:.0f}s floor ({min_words} words). Add "
+        f"AT LEAST {deficit} more words total, distributed across the "
+        f"beats with the most room: {suggestion}."
     ]
 
 
@@ -287,24 +245,17 @@ _TOPUP_PHRASES: dict[str, list[str]] = {
               "conditions", "in", "the", "field"],
     "cta": ["reach", "out", "to", "discuss", "your", "specific", "sourcing",
             "requirements", "today"],
+    "other": ["this", "point", "matters", "for", "teams", "planning",
+               "their", "next", "sourcing", "decision"],
 }
 
 
 def apply_word_topup(beats: list[dict]) -> list[dict]:
     """
-    Deterministically pad narration word counts to clear the aggregate
-    TOTAL_MIN_S floor, without touching any beat's own gate_word_budget
-    ceiling. Only called when the LLM writer/rewriter has exhausted its
-    retries and the only remaining gate failure is a duration shortfall
-    (see run()) -- this never substitutes for the LLM on a content issue.
-
-    Args:
-        beats: List of beat dicts that failed only on aggregate duration.
-
-    Returns:
-        A new list of beat dicts (input is not mutated) with filler words
-        appended to the beats with the most headroom, largest-headroom
-        first, until the floor is met or headroom is exhausted.
+    Deterministically pad narration word counts to clear the 30s floor,
+    without touching any beat's own gate_word_budget ceiling. Keyed by each
+    beat's `purpose` (config.PURPOSE_TEMPLATE), not position -- beats are
+    free-form since the 2026-08-26 creative-flow redesign.
     """
     tol = config.WORD_BUDGET_TOLERANCE
     beats = [dict(b) for b in beats]
@@ -314,23 +265,25 @@ def apply_word_topup(beats: list[dict]) -> list[dict]:
     if deficit <= 0:
         return beats
 
-    specs = {s["beat"]: s for s in config.BEAT_TEMPLATE}
-    order = sorted(
-        beats,
-        key=lambda b: (specs[b["beat"]]["max_s"] * config.WORDS_PER_SECOND
-                       * (1 + tol)) - len(b.get("narration", "").split()),
-        reverse=True,
-    )
+    def _spec(b):
+        return config.PURPOSE_TEMPLATE.get(b.get("purpose"), config.PURPOSE_TEMPLATE["other"])
+
+    def _headroom(b):
+        spec = _spec(b)
+        hi = spec["max_s"] * config.WORDS_PER_SECOND * (1 + tol)
+        return hi - len(b.get("narration", "").split())
+
+    order = sorted(beats, key=_headroom, reverse=True)
     for b in order:
         if deficit <= 0:
             break
-        spec = specs[b["beat"]]
+        spec = _spec(b)
         hi = int(spec["max_s"] * config.WORDS_PER_SECOND * (1 + tol))
         words = b.get("narration", "").split()
         room = hi - len(words)
         if room <= 0:
             continue
-        pool = _TOPUP_PHRASES.get(b["beat"], _TOPUP_PHRASES["stakes"])
+        pool = _TOPUP_PHRASES.get(b.get("purpose"), _TOPUP_PHRASES["other"])
         take = min(room, deficit, len(pool))
         if take <= 0:
             continue
@@ -421,12 +374,14 @@ def gate_differentiator(beats: list[dict], brand: BrandFacts) -> list[str]:
 # ── run_gates: structure check + aggregation ────────────────────────────────
 def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts) -> list[str]:
     """
-    Validate beat structure (count and beat-name order against
-    config.BEAT_TEMPLATE), then run all five content gates.
+    Validate beat structure (at least config.MIN_BEATS beats, final beat's
+    purpose is "cta"), then run all five content gates.
 
     A structural mismatch short-circuits with a single error -- there is no
     point checking word budgets, differentiator placement, etc. against a
-    beat list that doesn't even match the locked template.
+    beat list that doesn't even satisfy the minimal shape. Beats are
+    otherwise free-form in count/order/naming since the 2026-08-26
+    creative-flow redesign -- only each beat's `purpose` tag matters.
 
     Args:
         beats: Candidate list of beat dicts (from the writer LLM).
@@ -436,11 +391,23 @@ def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts) -> list[str
     Returns:
         List of error strings (empty if the script passes every gate).
     """
-    expected_beats = [s["beat"] for s in config.BEAT_TEMPLATE]
-    if len(beats) != len(config.BEAT_TEMPLATE):
-        return [f"structure: expected {len(config.BEAT_TEMPLATE)} beats, got {len(beats)}"]
-    if [b.get("beat") for b in beats] != expected_beats:
-        return [f"structure: beat order must be {expected_beats}"]
+    if len(beats) < config.MIN_BEATS:
+        return [f"structure: expected at least {config.MIN_BEATS} beats, got {len(beats)}"]
+    if not beats or beats[-1].get("purpose") != "cta":
+        return ['structure: the final beat must have purpose "cta"']
+
+    seen: set[str] = set()
+    dupes: set[str] = set()
+    for b in beats:
+        name = b.get("beat")
+        if name in seen:
+            dupes.add(name)
+        seen.add(name)
+    if dupes:
+        return [
+            "structure: beat names must be unique, found duplicate(s): "
+            f"{sorted(dupes)}"
+        ]
 
     return (
         gate_numbers(beats, factsheet, brand)
@@ -458,12 +425,12 @@ SCRIPT_SCHEMA: dict = {
     "properties": {
         "beats": {
             "type": "array",
-            "minItems": 5,
-            "maxItems": 5,
+            "minItems": config.MIN_BEATS,
             "items": {
                 "type": "object",
                 "properties": {
-                    "beat": {"enum": [s["beat"] for s in config.BEAT_TEMPLATE]},
+                    "beat": {"type": "string"},
+                    "purpose": {"enum": ["hook", "stakes", "mechanism", "proof", "cta", "other"]},
                     "narration": {"type": "string"},
                     "fact_ids": {"type": "array", "items": {"type": "string"}},
                     "card_text": {"type": "string"},
@@ -471,7 +438,7 @@ SCRIPT_SCHEMA: dict = {
                     "diagram_labels": {"type": "array", "items": {"type": "string"},
                                        "maxItems": 4},
                 },
-                "required": ["beat", "narration", "fact_ids", "card_text",
+                "required": ["beat", "purpose", "narration", "fact_ids", "card_text",
                              "broll_wish"],
                 "additionalProperties": False,
             },
@@ -495,12 +462,14 @@ CRITIQUE_SCHEMA: dict = {
 }
 
 _WRITER_SYSTEM = (
-    "You write 35-50 second video scripts for procurement managers sourcing "
-    "industrial chemicals. Voice: concrete, technical, zero hype. HARD RULES: "
-    "every number you use MUST come from a provided fact's verbatim quote, and "
-    "that fact's id MUST be listed in the beat's fact_ids. Never invent "
-    "statistics. card_text is at most 7 words and must not repeat the "
-    "narration. The cta beat cites exactly one brand differentiator id."
+    "You write video scripts (at least 30 seconds) for procurement managers sourcing "
+    "industrial chemicals. Voice: concrete, technical, zero hype. You choose how many beats "
+    "to use and what to call them -- there is no fixed count or fixed set of names. Every "
+    "beat needs a `purpose` tag: hook, stakes, mechanism, proof, cta, or other. The FINAL "
+    "beat's purpose MUST be cta. HARD RULES: every number you use MUST come from a provided "
+    "fact's verbatim quote, and that fact's id MUST be listed in the beat's fact_ids. Never "
+    "invent statistics. card_text is at most 7 words and must not repeat the narration. The "
+    "cta beat cites exactly one brand differentiator id."
 )
 
 _CRITIC_SYSTEM = (
@@ -515,20 +484,15 @@ _CRITIQUE_PASS_THRESHOLD = 7
 
 
 def _beat_rules() -> str:
-    """Render config.BEAT_TEMPLATE as a human-readable seconds/words block
-    for the writer prompt. The word ranges shown are the ACTUAL integer
-    bounds gate_word_budget accepts (tolerance included, ceil/floor'd) --
-    showing the narrower no-tolerance nominal range understated each beat's
-    real ceiling, which mattered once the aggregate total-duration floor
-    forced beats toward their upper bounds: the model needs to know the
-    true room it has."""
+    """Render config.PURPOSE_TEMPLATE as a human-readable seconds/words block for the
+    writer prompt, one entry per purpose (not per fixed beat -- beats are free-form)."""
     tol = config.WORD_BUDGET_TOLERANCE
     return "\n".join(
-        f"- {s['beat']}: {s['min_s']:.0f}-{s['max_s']:.0f}s "
-        f"({math.ceil(s['min_s'] * config.WORDS_PER_SECOND * (1 - tol))}-"
-        f"{math.floor(s['max_s'] * config.WORDS_PER_SECOND * (1 + tol))} "
+        f"- {purpose}: {spec['min_s']:.0f}-{spec['max_s']:.0f}s "
+        f"({math.ceil(spec['min_s'] * config.WORDS_PER_SECOND * (1 - tol))}-"
+        f"{math.floor(spec['max_s'] * config.WORDS_PER_SECOND * (1 + tol))} "
         f"words allowed)"
-        for s in config.BEAT_TEMPLATE
+        for purpose, spec in config.PURPOSE_TEMPLATE.items()
     )
 
 
@@ -559,15 +523,15 @@ def _writer_prompt(post_meta: dict, factsheet: dict, brand: BrandFacts, *,
         f"To cite a differentiator, put its id directly in the cta beat's "
         f"fact_ids array (e.g. \"fact_ids\": [\"{example_diff_id}\"]). Do NOT "
         f"invent a new field such as \"brand_differentiator\" for it.\n\n"
-        f"Beat structure:\n{_beat_rules()}\n\n"
-        f"The five beats' narration word counts must SUM to between "
-        f"{config.TOTAL_MIN_S * config.WORDS_PER_SECOND:.0f} and "
-        f"{config.TOTAL_MAX_S * config.WORDS_PER_SECOND:.0f} words combined, "
-        f"while each beat stays inside its own word range above.\n\n"
+        f"Beat purpose guide (pick however many beats you need, name them freely, tag each "
+        f"with one of these purposes):\n{_beat_rules()}\n\n"
+        f"The FINAL beat's purpose MUST be \"cta\". All beats' narration word counts must SUM "
+        f"to AT LEAST {config.TOTAL_MIN_S * config.WORDS_PER_SECOND:.0f} words combined (no "
+        f"maximum), while each beat stays inside its own purpose's word range above.\n\n"
         f"On the mechanism beat you MAY add \"diagram_labels\": 2-4 short "
         f"process-step labels (3 words or fewer each, no numbers unless "
         f"quoted from a fact).\n\n"
-        f"Write the 5 beats now as JSON."
+        f"Write the beats now as JSON."
     )
     if gate_errors:
         prompt += (
