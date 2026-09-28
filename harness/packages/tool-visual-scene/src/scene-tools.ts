@@ -130,6 +130,47 @@ function runHyperframesRender(
   })
 }
 
+/**
+ * Detects an HTML anti-pattern `hyperframes lint` does not check for and that has already
+ * produced a real broken render: the same attribute name (most damagingly `class`) written
+ * twice on one opening tag, e.g. `<div class="clip" ... class="headline">`. A browser silently
+ * keeps only the FIRST occurrence and drops every later one -- the element loses whatever
+ * layout/styling the dropped `class` value carried, with no error anywhere in the render
+ * pipeline. Confirmed live: a scene-authoring subagent wrote this pattern on every element of a
+ * DIAGRAM shot (each element had `class="clip"` then a second `class="..."` for its real layout
+ * class), collapsing the whole composition into unstyled, overlapping default-flow text.
+ * Deliberately a plain regex scan, not a full HTML parser -- authored compositions are simple,
+ * single-file, LLM-generated markup, and a full parser dependency is not worth it for one
+ * well-defined, zero-legitimate-use defect.
+ */
+export function findDuplicateAttributeIssues(html: string): string[] {
+  const issues: string[] = []
+  const tagPattern = /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^<>]*?)?)\s*\/?>/g
+  let tagMatch: RegExpExecArray | null
+  while ((tagMatch = tagPattern.exec(html)) !== null) {
+    const tagName = tagMatch[1]
+    const attrsBlob = tagMatch[2]
+    const attrNamePattern = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:"[^"]*"|'[^']*')/g
+    const counts = new Map<string, number>()
+    let attrMatch: RegExpExecArray | null
+    while ((attrMatch = attrNamePattern.exec(attrsBlob)) !== null) {
+      const name = attrMatch[1].toLowerCase()
+      counts.set(name, (counts.get(name) ?? 0) + 1)
+    }
+    for (const [name, count] of counts) {
+      if (count > 1) {
+        issues.push(
+          `<${tagName}> has ${count} "${name}" attributes -- a browser only honors the FIRST ` +
+          `one and silently drops the rest, so any styling/layout the later ${name} value ` +
+          `carried never applies. Merge them into a single ${name} attribute instead (e.g. ` +
+          `class="clip headline"), never repeat the same attribute name on one tag.`,
+        )
+      }
+    }
+  }
+  return issues
+}
+
 export async function renderScene(
   workspaceId: string,
   shotId: string,
@@ -146,6 +187,27 @@ export async function renderScene(
   // `.rejects` this function regardless of which failure mode fires.
   const compositionAbsPath = resolveScopedPath(workspaceId, shotId, projectRoot, '.html')
   const compositionRelPath = relative(projectRoot, compositionAbsPath)
+  // Fail BEFORE spending a real render on a composition that is already known to render wrong —
+  // this throws into the same retry path `authorVisualScene` already has for any other
+  // `render_scene` failure (previousFailureReason carries this exact message into attempt 2), so
+  // a broken composition gets one real chance to be fixed by the authoring subagent before the
+  // never-blank fallback takes over. No new retry machinery needed. Reading the file can only
+  // fail if `write_scene_file` was never actually called for this shot (every real caller calls
+  // it first, at this exact resolved path) -- that case is left to `runHyperframesRender`'s own
+  // real CLI error below rather than duplicated here, so a missing-file failure still surfaces,
+  // just through the existing path instead of a second one.
+  let html: string | undefined
+  try {
+    html = readFileSync(compositionAbsPath, 'utf8')
+  } catch {
+    html = undefined
+  }
+  if (html !== undefined) {
+    const issues = findDuplicateAttributeIssues(html)
+    if (issues.length > 0) {
+      throw new Error(`render_scene: composition has broken markup:\n- ${issues.join('\n- ')}`)
+    }
+  }
   return runHyperframesRender(compositionRelPath, projectRoot, outputPath, options)
 }
 

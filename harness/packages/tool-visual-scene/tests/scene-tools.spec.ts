@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeSceneFile, renderScene, renderFallbackScene } from '../src/scene-tools.ts'
+import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues } from '../src/scene-tools.ts'
 
 function fakeSpawn() {
   return vi.fn().mockImplementation(() => {
@@ -76,6 +76,41 @@ describe('writeSceneFile', () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
     expect(() => writeSceneFile('run-42', 'D:evil', '<html></html>', projectRoot))
       .toThrow(/outside/i)
+  })
+})
+
+describe('findDuplicateAttributeIssues', () => {
+  it('flags a duplicate class attribute on one tag (the real defect that produced a broken render)', () => {
+    // Trimmed from a real authored composition (run-05a56f37/s05.html): every element repeated
+    // `class="clip"` then a second `class="..."` for its real layout class on the same tag.
+    // A browser keeps only the first `class` value, so `.label-1` etc. never applied and the
+    // whole composition rendered as overlapping, unstyled default-flow text.
+    const html = `<div id="label_1" class="clip" data-start="0.4" data-duration="2.39" data-track-index="4" class="label label-1">Substrate Mix</div>`
+    const issues = findDuplicateAttributeIssues(html)
+    expect(issues.length).toBe(1)
+    expect(issues[0]).toContain('<div>')
+    expect(issues[0]).toContain('"class"')
+  })
+
+  it('flags a duplicate id attribute the same way', () => {
+    const html = `<div id="a" data-start="0" id="b">x</div>`
+    expect(findDuplicateAttributeIssues(html).length).toBe(1)
+  })
+
+  it('does not flag ordinary well-formed markup (no false positives on a real good shot)', () => {
+    // Trimmed from run-05a56f37/s07.html, which rendered correctly.
+    const html = `
+      <div id="root" data-composition-id="s07_comp" data-width="1080" data-height="1920" data-duration="3.24">
+        <div id="card" class="clip stat-card" data-start="0" data-duration="3.24" data-track-index="0">
+          <div id="label" class="clip label" data-start="0" data-duration="3.24" data-track-index="1">PEAK EC</div>
+        </div>
+      </div>`
+    expect(findDuplicateAttributeIssues(html)).toEqual([])
+  })
+
+  it('does not flag two different attributes that happen to share a substring', () => {
+    const html = `<div data-start="0" data-duration="1">x</div>`
+    expect(findDuplicateAttributeIssues(html)).toEqual([])
   })
 })
 
@@ -216,6 +251,25 @@ describe('renderScene', () => {
   it('rejects a composition path that escapes compositions/ via a drive-relative workspaceId', async () => {
     await expect(renderScene('C:evil', 'shot-1', '/project', '/out/shot-1.mp4', { spawn: fakeSpawn() as never }))
       .rejects.toThrow(/outside/i)
+  })
+
+  it('rejects a written composition with duplicate attributes BEFORE spawning the real render', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    writeSceneFile('run-42', 'shot-1',
+      '<div id="x" class="clip" class="headline">broken</div>', projectRoot)
+    const spawnMock = fakeSpawn()
+    await expect(renderScene('run-42', 'shot-1', projectRoot, '/out/shot-1.mp4', { spawn: spawnMock as never }))
+      .rejects.toThrow(/duplicate|class/i)
+    expect(spawnMock).not.toHaveBeenCalled()
+  })
+
+  it('still renders a real written composition with no duplicate attributes', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'hf-project-'))
+    writeSceneFile('run-42', 'shot-1', '<div id="x" class="clip headline">fine</div>', projectRoot)
+    const spawnMock = fakeSpawn()
+    const result = await renderScene('run-42', 'shot-1', projectRoot, '/out/shot-1.mp4', { spawn: spawnMock as never })
+    expect(result).toBe('/out/shot-1.mp4')
+    expect(spawnMock).toHaveBeenCalled()
   })
 })
 

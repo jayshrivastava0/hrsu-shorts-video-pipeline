@@ -26,7 +26,14 @@ render will be blank, cut off, or throw a lint error.
 **Every visible element inside the root** (each thing that appears/animates on screen):
 
 - a unique `id`
-- `class="clip"` — required, this is how the renderer finds animatable elements
+- `class="clip"` — required, this is how the renderer finds animatable elements. If the element
+  also needs a layout/styling class (e.g. `headline`, `stat-card`), put BOTH class names in that
+  SAME `class` attribute, space-separated (`class="clip headline"`) — never write `class="clip"`
+  and then a second, separate `class="..."` later on the same tag. A browser silently keeps only
+  the first `class` attribute it sees and drops every later one, so the second value's styling
+  never applies at all — this has already produced a real broken render (unstyled, overlapping
+  text) once. The same rule applies to any other attribute: never repeat an attribute name on one
+  tag.
 - `data-start="<seconds>"` — when this element's own timeline segment begins, relative to the
   composition start
 - `data-duration="<seconds>"` — how long this element is relevant on screen
