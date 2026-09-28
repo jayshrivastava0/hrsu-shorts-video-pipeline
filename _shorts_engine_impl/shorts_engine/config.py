@@ -183,6 +183,8 @@ JUDGE_MIN_OWN = 5             # own asset_library footage (trust bonus)
 JUDGE_MIN_BLOG = 6            # blog's own images
 JUDGE_MIN_API = 6             # free license-aware APIs
 JUDGE_MIN_SCRAPE = 7          # scrape tier: must be CLEARLY right
+JUDGE_MIN_FIGURE = 6          # real chart/diagram lifted from an already-cited source
+FIGURE_MAX_PDF_PAGES = 5      # cap on PDF pages rendered hunting for a figure
 SOURCING_CACHE_DIR = OUTPUT_BASE / "_sourcing_cache"
 PAPER_CACHE_DIR = OUTPUT_BASE / "_paper_cache"
 

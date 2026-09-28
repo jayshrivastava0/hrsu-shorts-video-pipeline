@@ -53,6 +53,41 @@ def test_broll_request_fails_loud_on_missing_post_json(tmp_path, capsys):
     assert "post.json" in err["message"] or "No such file" in err["message"]
 
 
+def test_figure_request_calls_figure_acquisition(tmp_path, monkeypatch, capsys):
+    from shorts_engine import stage_cli
+    (tmp_path / "factsheet.json").write_text(
+        json.dumps({"facts": [{"id": "f1", "citation_marker": 1}]}), encoding="utf-8")
+    (tmp_path / "post.json").write_text(
+        json.dumps({"citations": [{"marker": 1, "url": "https://x/p.pdf"}]}), encoding="utf-8")
+    called = {}
+
+    def fake_acquire(fact_id, factsheet, post, workspace, torture=False):
+        called.update(fact_id=fact_id)
+        return {"image_path": None, "focal_hint": "center", "provenance": {"reason": "no_acceptance"}}
+
+    monkeypatch.setattr("shorts_engine.sourcing.figure_acquisition.acquire_figure", fake_acquire)
+    args = stage_cli.build_parser().parse_args([
+        "figure-request", "--workspace", str(tmp_path), "--fact-id", "f1",
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 0
+    out = json.loads(capsys.readouterr().out.strip().split("\n")[-1])
+    assert out["provenance"]["reason"] == "no_acceptance"
+    assert called["fact_id"] == "f1"
+
+
+def test_figure_request_fails_loud_on_missing_factsheet(tmp_path, capsys):
+    from shorts_engine import stage_cli
+    # Deliberately no factsheet.json written in tmp_path.
+    args = stage_cli.build_parser().parse_args([
+        "figure-request", "--workspace", str(tmp_path), "--fact-id", "f1",
+    ])
+    exit_code = args.func(args)
+    assert exit_code == 1
+    err = json.loads(capsys.readouterr().err.strip().split("\n")[-1])
+    assert err["status"] == "error"
+
+
 def test_visuals_prepare_carries_narration_span_into_shot_briefs(tmp_path):
     # Fix 1: shot_briefs.json must carry narration_span through from shotlist.json so the
     # scene-authoring subagent can pass it to request_broll without inventing it -- the brief

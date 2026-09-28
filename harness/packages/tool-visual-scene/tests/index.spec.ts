@@ -130,7 +130,7 @@ describe('authorVisualScene', () => {
     expect(start).toHaveBeenCalledTimes(1)
     expect(start).toHaveBeenCalledWith('spawn', expect.objectContaining({
       agentOptions: { provider: 'ollama-local', model: 'kimi-k2.7-code', maxTokens: 8192 },
-      toolFilter: { allow: ['write_scene_file', 'render_scene', 'request_broll'] },
+      toolFilter: { allow: ['write_scene_file', 'render_scene', 'request_broll', 'request_source_figure'] },
     }))
     expect(dispose).toHaveBeenCalledTimes(1)
     expect(renderFallbackScene).not.toHaveBeenCalled()
@@ -305,6 +305,54 @@ describe('request_broll tool', () => {
     const tool = ctx.tools.getRegistered('request_broll')
     await expect(tool.execute({
       workspace_id: 'never-registered', wish: 'white powder', narration_span: 'It dissolves.',
+    })).rejects.toThrow(/no registered workspace/i)
+    expect(runStageCli).not.toHaveBeenCalled()
+  })
+})
+
+describe('request_source_figure tool', () => {
+  it('invokes figure-request via runStageCli with the trusted workspace registered by author_visual_scene, keyed by workspace_id', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const workspace = mkdtempSync(join(tmpdir(), 'tool-visual-scene-'))
+    mkdirSync(join(workspace, 'shots'), { recursive: true })
+    writeFileSync(join(workspace, 'shots', 'shot_3.mp4'), '')
+
+    const runStageCli = vi.fn().mockResolvedValue({ image_path: null, focal_hint: 'center', provenance: {} })
+    const ctx = makeFakeCtx()
+    apply(ctx, {
+      projectRoot: '/tmp/project', shortsEngineCwd: '/tmp/engine',
+      agentOptions: { model: 'gemma4:31b-cloud' }, runStageCli,
+    })
+    const start = vi.fn().mockResolvedValue({
+      id: 'child-1',
+      result: Promise.resolve({ output: [], stopReason: 'completed' }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    })
+    ;(ctx as unknown as { subagents: unknown }).subagents = { start }
+    const authorTool = ctx.tools.getRegistered('author_visual_scene')
+    await authorTool.execute({
+      shot_brief: HEADLINE_BRIEF, workspace_id: 'run-42', workspace,
+    })
+
+    const figureTool = ctx.tools.getRegistered('request_source_figure')
+    await figureTool.execute({ workspace_id: 'run-42', fact_id: 'f1' })
+    expect(runStageCli).toHaveBeenCalledWith(
+      ['figure-request', '--workspace', workspace, '--fact-id', 'f1'],
+      { cwd: '/tmp/engine' },
+    )
+  })
+
+  it('throws a clear error when workspace_id has no registered workspace (never trusts a subagent-supplied path)', async () => {
+    const runStageCli = vi.fn()
+    const ctx = makeFakeCtx()
+    apply(ctx, {
+      projectRoot: '/tmp/project', shortsEngineCwd: '/tmp/engine',
+      agentOptions: { model: 'gemma4:31b-cloud' }, runStageCli,
+    })
+    const tool = ctx.tools.getRegistered('request_source_figure')
+    await expect(tool.execute({
+      workspace_id: 'never-registered', fact_id: 'f1',
     })).rejects.toThrow(/no registered workspace/i)
     expect(runStageCli).not.toHaveBeenCalled()
   })

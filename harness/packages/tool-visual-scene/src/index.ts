@@ -91,7 +91,8 @@ const PERSONA_TEXT = readFileSync(PERSONA_PATH, 'utf8')
 const MAX_ATTEMPTS = 2
 
 /** The tools the child subagent is scoped to via `toolFilter.allow`. */
-const CHILD_TOOL_NAMES = ['write_scene_file', 'render_scene', 'request_broll'] as const
+const CHILD_TOOL_NAMES = ['write_scene_file', 'render_scene', 'request_broll',
+  'request_source_figure'] as const
 
 /**
  * A shot's rendered output MUST land at `<workspace>/shots/shot_<shot_id>.mp4` — exactly what the
@@ -373,6 +374,42 @@ export function apply(ctx: Context, config: Config): void {
       return (await runStageCli(
         ['broll-request', '--workspace', workspace,
          '--wish', args.wish as string, '--narration-span', args.narration_span as string],
+        { cwd: config.shortsEngineCwd },
+      )) as Record<string, JsonValue>
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'request_source_figure',
+    description:
+      'Reuse a real chart/table/diagram already present in a citation the shot brief\'s own ' +
+      '`payload.fact_id` is grounded in — NOT an open-web image search. Only ever pass the ' +
+      'exact `fact_id` from this shot\'s own brief (never a different fact\'s id) — the ' +
+      'engine resolves it back to that fact\'s own citation, so a figure it returns can never ' +
+      'come from a source this run isn\'t already citing. Returns image_path: null if the ' +
+      'fact has no citation, or nothing in the source scored as a real match — treat that as ' +
+      '"no reusable figure available," not an error, and fall back to a synthetic ' +
+      'composition (e.g. a STAT_CARD built from the same fact_text/fact_value) for this shot.',
+    parameters: {
+      workspace_id: { type: 'string', required: true, description: 'Run workspace id (matches the composition subdirectory) — same value you were given for write_scene_file/render_scene.' },
+      fact_id: { type: 'string', required: true, description: 'The exact fact_id from this shot brief\'s own payload.fact_id — the fact you want a real source figure for.' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+    },
+    async execute(args) {
+      const workspace = workspaceByRunId.get(args.workspace_id as string)
+      if (workspace === undefined) {
+        throw new Error(
+          `request_source_figure: no registered workspace for workspace_id=${JSON.stringify(args.workspace_id)} ` +
+          '— author_visual_scene must be the one starting this shot\'s subagent (it registers the ' +
+          'trusted workspace before spawning).',
+        )
+      }
+      const runStageCli = config.runStageCli ?? defaultRunStageCli
+      return (await runStageCli(
+        ['figure-request', '--workspace', workspace, '--fact-id', args.fact_id as string],
         { cwd: config.shortsEngineCwd },
       )) as Record<string, JsonValue>
     },

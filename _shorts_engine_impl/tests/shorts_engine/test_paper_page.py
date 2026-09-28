@@ -93,3 +93,72 @@ class TestFetchFrontPage:
         monkeypatch.setattr(pp, "_screenshot", lambda u, o: None)
         assert pp.fetch_front_page("https://x.example/paper.pdf") is None
         assert pp.fetch_front_page("https://x.example/landing") is None
+
+
+class TestRenderPdfPages:
+    def test_renders_up_to_max_pages(self, tmp_path):
+        from shorts_engine.sourcing import paper_page as pp
+        out = pp.render_pdf_pages(_tiny_pdf_bytes(), tmp_path, "stem", max_pages=5)
+        # the hand-rolled fixture PDF has exactly one page -- rendering never
+        # exceeds what the document actually has, even if max_pages asks for more.
+        assert [p.name for p in out] == ["stem_p0.png"]
+        with Image.open(out[0]) as img:
+            assert img.width >= 1200
+
+    def test_garbage_bytes_return_empty_list(self, tmp_path):
+        from shorts_engine.sourcing import paper_page as pp
+        assert pp.render_pdf_pages(b"not a pdf", tmp_path, "stem", max_pages=5) == []
+
+
+class TestFetchFigureCandidates:
+    def test_cache_hit_short_circuits(self, tmp_path, monkeypatch):
+        from shorts_engine.sourcing import paper_page as pp
+        from shorts_engine import config
+        monkeypatch.setattr(config, "PAPER_CACHE_DIR", tmp_path)
+        url = "https://arxiv.org/pdf/2602.21290"
+        stem = pp.cache_key(url) + "_fig"
+        cached = tmp_path / f"{stem}_p0.png"
+        Image.new("RGB", (1600, 2000), (255, 255, 255)).save(cached)
+        called = []
+        monkeypatch.setattr(pp, "_fetch_bytes", lambda u: called.append(u))
+        assert pp.fetch_figure_candidates(url) == [cached]
+        assert called == []
+
+    def test_torture_mode_never_fetches(self, tmp_path, monkeypatch):
+        from shorts_engine.sourcing import paper_page as pp
+        from shorts_engine import config
+        monkeypatch.setattr(config, "PAPER_CACHE_DIR", tmp_path)
+        called = []
+        monkeypatch.setattr(pp, "_fetch_bytes", lambda u: called.append(u))
+        assert pp.fetch_figure_candidates("https://arxiv.org/pdf/1", torture=True) == []
+        assert called == []
+
+    def test_pdf_path_fetches_renders_and_caches(self, tmp_path, monkeypatch):
+        from shorts_engine.sourcing import paper_page as pp
+        from shorts_engine import config
+        monkeypatch.setattr(config, "PAPER_CACHE_DIR", tmp_path)
+        monkeypatch.setattr(pp, "_fetch_bytes", lambda u: _tiny_pdf_bytes())
+        url = "https://arxiv.org/pdf/2602.21290"
+        out = pp.fetch_figure_candidates(url)
+        assert len(out) == 1 and out[0].exists()
+        assert out[0].name == pp.cache_key(url) + "_fig_p0.png"
+
+    def test_landing_page_uses_full_screenshot_seam(self, tmp_path, monkeypatch):
+        from shorts_engine.sourcing import paper_page as pp
+        from shorts_engine import config
+        monkeypatch.setattr(config, "PAPER_CACHE_DIR", tmp_path)
+        def fake_shot(url, out_png):
+            Image.new("RGB", (1200, 3000), (250, 250, 250)).save(out_png)
+            return out_png
+        monkeypatch.setattr(pp, "_screenshot_full", fake_shot)
+        out = pp.fetch_figure_candidates("https://pubmed.ncbi.nlm.nih.gov/18462937/")
+        assert len(out) == 1 and out[0].exists()
+
+    def test_both_paths_failing_returns_empty_list(self, tmp_path, monkeypatch):
+        from shorts_engine.sourcing import paper_page as pp
+        from shorts_engine import config
+        monkeypatch.setattr(config, "PAPER_CACHE_DIR", tmp_path)
+        monkeypatch.setattr(pp, "_fetch_bytes", lambda u: None)
+        monkeypatch.setattr(pp, "_screenshot_full", lambda u, o: None)
+        assert pp.fetch_figure_candidates("https://x.example/paper.pdf") == []
+        assert pp.fetch_figure_candidates("https://x.example/landing") == []

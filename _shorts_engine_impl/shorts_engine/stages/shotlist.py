@@ -122,6 +122,7 @@ def plan_beat_shots(beat: dict, facts: dict, cites: dict, brand) -> list[dict]:
     for span in spans:
         payload = {"text": beat.get("card_text", "")}
         if fact is not None:
+            payload["fact_id"] = fact["id"]
             payload["fact_text"] = fact["verbatim_quote"]
             payload["fact_value"] = fact.get("value")
             payload["fact_unit"] = fact.get("unit")

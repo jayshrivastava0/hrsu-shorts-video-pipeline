@@ -419,6 +419,20 @@ def cmd_broll_request(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_figure_request(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace)
+    try:
+        from shorts_engine.sourcing.figure_acquisition import acquire_figure
+        factsheet = json.loads((workspace / "factsheet.json").read_text(encoding="utf-8"))
+        post = json.loads((workspace / "post.json").read_text(encoding="utf-8"))
+        result = acquire_figure(args.fact_id, factsheet, post, workspace)
+    except Exception as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="shorts_engine.stage_cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -462,6 +476,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_broll.add_argument("--wish", required=True)
     p_broll.add_argument("--narration-span", required=True)
     p_broll.set_defaults(func=cmd_broll_request)
+
+    p_figure = subparsers.add_parser("figure-request")
+    p_figure.add_argument("--workspace", required=True)
+    p_figure.add_argument("--fact-id", required=True)
+    p_figure.set_defaults(func=cmd_figure_request)
 
     return parser
 
