@@ -255,6 +255,28 @@ describe('authorVisualScene', () => {
   })
 })
 
+describe('write_scene_file tool', () => {
+  it('injects the .clip position reset into every subagent-authored composition', async () => {
+    const { mkdtempSync, readFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const projectRoot = mkdtempSync(join(tmpdir(), 'tool-visual-scene-'))
+    const ctx = makeFakeCtx()
+    apply(ctx, {
+      projectRoot, shortsEngineCwd: '/tmp/engine',
+      agentOptions: { model: 'gemma4:31b-cloud' },
+    })
+    const tool = ctx.tools.getRegistered('write_scene_file')
+    const { path } = await tool.execute({
+      workspace_id: 'run-42', shot_id: 's00',
+      html: '<html><head><style>.headline{color:gold}</style></head><body></body></html>',
+    }) as { path: string }
+    const written = readFileSync(path, 'utf8')
+    expect(written).toContain('.clip{position:static!important}')
+    expect(written.indexOf('.clip{position:static!important}'))
+      .toBeLessThan(written.indexOf('.headline{color:gold}'))
+  })
+})
+
 describe('request_broll tool', () => {
   it('invokes broll-request via runStageCli with the trusted workspace registered by author_visual_scene, keyed by workspace_id', async () => {
     // Real temp workspace with the shot's mp4 already present, so author_visual_scene's real

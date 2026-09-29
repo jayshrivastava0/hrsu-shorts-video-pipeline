@@ -6,9 +6,9 @@ import { defineTool, type JsonValue } from '@deepseek-ai/dsh-tools'
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import type { SubagentResult, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
 import { runStageCli as defaultRunStageCli, type RunStageCliOptions } from '@hrsu/dsh-tool-shorts-stage'
-import { writeSceneFile, renderScene, renderFallbackScene } from './scene-tools.ts'
+import { writeSceneFile, renderScene, renderFallbackScene, injectClipPositionReset } from './scene-tools.ts'
 
-export { writeSceneFile, renderScene, renderFallbackScene } from './scene-tools.ts'
+export { writeSceneFile, renderScene, renderFallbackScene, injectClipPositionReset } from './scene-tools.ts'
 
 export const name = 'tool-visual-scene'
 // `subagents` is `ctx.subagents` (the `SubagentRuntime` service from `@deepseek-ai/dsh-subagent`)
@@ -315,7 +315,12 @@ export function apply(ctx: Context, config: Config): void {
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     async execute(args) {
-      const path = writeSceneFile(args.workspace_id, args.shot_id, args.html, config.projectRoot)
+      // injectClipPositionReset() only applies to subagent-authored compositions written
+      // through THIS tool -- renderFallbackScene's own direct writeSceneFile() call (its
+      // template deliberately relies on .clip position:absolute with hand-placed, non-colliding
+      // coordinates) is untouched, since it never goes through this execute().
+      const html = injectClipPositionReset(args.html as string)
+      const path = writeSceneFile(args.workspace_id, args.shot_id, html, config.projectRoot)
       return { path }
     },
   }))

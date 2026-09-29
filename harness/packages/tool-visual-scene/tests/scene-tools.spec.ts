@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues, findGsapScriptIssues } from '../src/scene-tools.ts'
+import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues, findGsapScriptIssues, injectClipPositionReset } from '../src/scene-tools.ts'
 
 function fakeSpawn() {
   return vi.fn().mockImplementation(() => {
@@ -139,6 +139,35 @@ describe('findGsapScriptIssues', () => {
     const html = '<script src="https://cdn.jsdelivr.net/npm/some-other-lib@1.0.0/dist/lib.min.js"></script>' +
       '<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>'
     expect(findGsapScriptIssues(html)).toEqual([])
+  })
+})
+
+describe('injectClipPositionReset', () => {
+  it('inserts the reset <style> tag before the composition\'s own <style> block', () => {
+    const html = '<html><head><style>.headline{color:gold}</style></head><body></body></html>'
+    const out = injectClipPositionReset(html)
+    const resetIndex = out.indexOf('.clip{position:static!important}')
+    const ownStyleIndex = out.indexOf('.headline{color:gold}')
+    expect(resetIndex).toBeGreaterThan(-1)
+    expect(resetIndex).toBeLessThan(ownStyleIndex)
+  })
+
+  it('inserts before </head> when there is no <style> tag at all', () => {
+    const html = '<html><head></head><body>x</body></html>'
+    const out = injectClipPositionReset(html)
+    expect(out).toContain('.clip{position:static!important}</style></head>')
+  })
+
+  it('inserts before </html> when there is neither a <style> tag nor a </head>', () => {
+    const html = '<html><body>x</body></html>'
+    const out = injectClipPositionReset(html)
+    expect(out).toContain('.clip{position:static!important}</style></html>')
+  })
+
+  it('appends when the document has no style tag, head, or html closing tag at all', () => {
+    const html = '<body>x</body>'
+    const out = injectClipPositionReset(html)
+    expect(out.endsWith('.clip{position:static!important}</style>')).toBe(true)
   })
 })
 

@@ -65,6 +65,42 @@ function resolveScopedPath(workspaceId: string, shotId: string, projectRoot: str
   return candidate
 }
 
+/**
+ * HyperFrames' render runtime applies its own default styling to every `class="clip"` element
+ * that the composition's own CSS doesn't otherwise position -- confirmed empirically (not from
+ * docs, which don't cover this): a composition with several top-level sibling `.clip` elements
+ * (a headline, several diagram nodes, a stat callout) renders with ALL of them piled on top of
+ * each other at the same spot, even though the identical markup opened as a plain static HTML
+ * file (no HyperFrames involved) lays out perfectly via normal flex/flow. Adding
+ * `.clip { position: static !important; }` to the composition's own stylesheet (verified via a
+ * real render, both with and without this rule, on the exact composition that produced the
+ * overlap) makes every `.clip` element participate in normal CSS layout instead, and eliminates
+ * the pile-up entirely. This is the root cause behind the overlapping/garbled compositions seen
+ * across three separate real runs on the same blog post -- distinct from the two earlier fixes
+ * (duplicate attributes, the broken GSAP CDN URL), which were necessary but not sufficient.
+ *
+ * Mechanical, not a persona instruction: the persona already failed to prevent two earlier
+ * defects (a duplicate `class` attribute, and adding a `<script>` tag it was told not to add),
+ * so this is injected unconditionally into every subagent-authored composition rather than left
+ * to a prompt the model could omit or contradict.
+ */
+export function injectClipPositionReset(html: string): string {
+  const RESET = '<style>.clip{position:static!important}</style>'
+  const styleOpenIndex = html.search(/<style[^>]*>/i)
+  if (styleOpenIndex === -1) {
+    // No <style> tag to anchor against -- insert before </head> (or, failing that, before
+    // </html>) so the reset still applies rather than silently doing nothing.
+    if (/<\/head>/i.test(html)) return html.replace(/<\/head>/i, `${RESET}</head>`)
+    if (/<\/html>/i.test(html)) return html.replace(/<\/html>/i, `${RESET}</html>`)
+    return html + RESET
+  }
+  // Insert immediately BEFORE the composition's own <style> block (not !important-free inside
+  // it) so any element-specific rule the author writes later in their own stylesheet -- e.g. a
+  // deliberately positioned element -- still needs its own !important to win; this keeps the
+  // reset as the default floor, not an unconditional override no author rule can beat.
+  return html.slice(0, styleOpenIndex) + RESET + html.slice(styleOpenIndex)
+}
+
 export function writeSceneFile(
   workspaceId: string,
   shotId: string,
