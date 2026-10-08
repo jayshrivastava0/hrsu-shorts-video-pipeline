@@ -7,7 +7,17 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+from shorts_engine import config
+from shorts_engine.cards.encoder import probe_duration
+
 logger = logging.getLogger(__name__)
+
+
+def format_label(duration_s: float | None) -> str:
+    """'short' (<= config.SHORT_FORM_MAX_S), 'long', or 'unknown' when duration is not known."""
+    if duration_s is None:
+        return "unknown"
+    return "short" if duration_s <= config.SHORT_FORM_MAX_S else "long"
 
 
 def _package_for_youtube(sb, blog_record: dict, workspace: str):
@@ -53,11 +63,18 @@ def run(ctx) -> dict[str, str]:
     _words_to_srt(words, ws / "subtitles.srt")
     pkg = _package_for_youtube(SimpleNamespace(hero_claim=hero_claim),
                                blog_record, str(ws))
+    video = ws / "video_short.mp4"
+    try:
+        duration_s = round(probe_duration(video), 2) if video.exists() else None
+    except Exception as exc:
+        logger.warning(f"package: could not probe duration: {exc}")
+        duration_s = None
     (ws / "publish_package.json").write_text(json.dumps({
         "title": pkg.title, "description": pkg.description, "tags": pkg.tags,
         "category_id": pkg.category_id, "privacy_status": pkg.privacy_status,
         "thumbnail_path": str(pkg.thumbnail_path) if pkg.thumbnail_path else None,
         "caption_srt_path": str(pkg.caption_srt_path) if pkg.caption_srt_path else None,
+        "format": format_label(duration_s), "duration_s": duration_s,
     }, indent=2), encoding="utf-8")
 
     caption = "\n".join(

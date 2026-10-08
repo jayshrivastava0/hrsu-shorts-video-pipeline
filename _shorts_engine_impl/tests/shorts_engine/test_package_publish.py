@@ -107,3 +107,47 @@ class TestPublish:
         assert seen["dry_run"] is False
         res = json.loads((ws / arts["publish_result"]).read_text(encoding="utf-8"))
         assert res["video_id"] == "abc123"
+
+
+def test_format_label_boundaries():
+    from shorts_engine import config
+    from shorts_engine.stages.package import format_label
+    assert format_label(45.0) == "short"
+    assert format_label(config.SHORT_FORM_MAX_S) == "short"
+    assert format_label(config.SHORT_FORM_MAX_S + 0.1) == "long"
+    assert format_label(None) == "unknown"
+
+
+def _run_package(ws, monkeypatch):
+    from shorts_engine.stages import package
+    fake_pkg = MagicMock(title="T", description="D", tags=["a"],
+                         category_id="28", privacy_status="unlisted",
+                         thumbnail_path=None, caption_srt_path=None)
+    monkeypatch.setattr(package, "_package_for_youtube", lambda sb, br, w: fake_pkg)
+    arts = package.run(Ctx(ws))
+    return json.loads((ws / arts["publish_package"]).read_text(encoding="utf-8"))
+
+
+def test_package_labels_long_video(tmp_path, monkeypatch):
+    from shorts_engine.stages import package
+    ws = _ws(tmp_path)
+    monkeypatch.setattr(package, "probe_duration", lambda p: 240.0)
+    pkg = _run_package(ws, monkeypatch)
+    assert pkg["format"] == "long" and pkg["duration_s"] == 240.0
+
+
+def test_package_format_unknown_without_video(tmp_path, monkeypatch):
+    ws = _ws(tmp_path)
+    (ws / "video_short.mp4").unlink()
+    pkg = _run_package(ws, monkeypatch)
+    assert pkg["format"] == "unknown" and pkg["duration_s"] is None
+
+
+def test_package_survives_probe_failure(tmp_path, monkeypatch):
+    from shorts_engine.stages import package
+    ws = _ws(tmp_path)
+    def boom(p):
+        raise RuntimeError("ffprobe failed")
+    monkeypatch.setattr(package, "probe_duration", boom)
+    pkg = _run_package(ws, monkeypatch)
+    assert pkg["format"] == "unknown" and pkg["duration_s"] is None
