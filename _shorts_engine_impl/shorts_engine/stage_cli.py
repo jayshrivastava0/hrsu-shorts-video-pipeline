@@ -25,7 +25,7 @@ from PIL import Image
 
 from shorts_engine import config
 from shorts_engine.cli import build_stages
-from shorts_engine.errors import EngineError
+from shorts_engine.errors import EngineError, HoldForReview
 from shorts_engine.manifest import STATUS_ORDER, RunManifest
 from shorts_engine.runner import StageContext
 from shorts_engine.stages.assemble import reflow
@@ -126,6 +126,12 @@ def cmd_run_stage(args: argparse.Namespace) -> int:
 
     try:
         artifacts = stage_fn(ctx)
+    except HoldForReview as hold:
+        manifest.status = "hold_for_review"
+        manifest.error = f"{args.stage_name}: {hold}"
+        manifest.save()
+        print(json.dumps({"status": "hold", "message": str(hold), "reasons": hold.reasons}))
+        return 0
     except Exception as exc:  # mirrors runner.py's own except branch, for one stage
         manifest.status = "failed"
         manifest.error = f"{args.stage_name}: {exc}"

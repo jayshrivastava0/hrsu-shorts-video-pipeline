@@ -6,6 +6,7 @@ Hierarchy:
     - EngineConfigError (configuration issues)
     - EngineLLMError (LLM interaction failures)
     - GateFailure (quality gate violations)
+    - HoldForReview (stage stopped on purpose; run ends in hold_for_review)
 """
 from __future__ import annotations
 
@@ -46,3 +47,17 @@ class GateFailure(EngineError):
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         super().__init__("; ".join(errors))
+
+
+class HoldForReview(EngineError):
+    """A stage stopped on purpose: nothing crashed, but the content cannot ship
+    (too few verified steps, final script below the quality bar...). The run
+    ends in the non-publishing status "hold_for_review" with these reasons.
+
+    Args:
+        reasons: Human-readable reasons; `str(exc)` joins them with "; ".
+    """
+
+    def __init__(self, reasons: list[str]) -> None:
+        self.reasons = reasons
+        super().__init__("; ".join(reasons))

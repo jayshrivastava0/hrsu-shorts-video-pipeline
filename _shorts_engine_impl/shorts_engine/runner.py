@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from shorts_engine.errors import EngineError
+from shorts_engine.errors import EngineError, HoldForReview
 from shorts_engine.manifest import STATUS_ORDER, RunManifest, slug_from_url
 
 logger = logging.getLogger(__name__)
@@ -166,6 +166,15 @@ def run(
                     f"[{manifest.run_id}] Reached until={until}, stopping."
                 )
                 break
+
+        except HoldForReview as hold:
+            manifest.status = "hold_for_review"
+            manifest.error = f"{stage_name}: {hold}"
+            manifest.save()
+            logger.warning(
+                f"[{manifest.run_id}] Stage '{stage_name}' held for review: {hold}"
+            )
+            return manifest
 
         except Exception as exc:
             # Failure: mark status as failed, save error, re-raise
