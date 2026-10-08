@@ -71,6 +71,23 @@ def build_stages() -> list[runner.Stage]:
 
 
 # ── Main CLI ───────────────────────────────────────────────────────────────
+def _maybe_print_plan(args, workspace) -> None:
+    """Print the explanation plan report if --print-plan was given.
+
+    Reporting must never change the exit code, so every failure is logged and swallowed.
+    """
+    if not getattr(args, "print_plan", False) or workspace is None:
+        return
+    try:
+        import json
+        from shorts_engine.review.plan_report import format_plan
+        path = Path(workspace) / "explanation_plan.json"
+        if path.exists():
+            print(format_plan(json.loads(path.read_text(encoding="utf-8"))))
+    except Exception:
+        logger.exception("Could not print explanation plan")
+
+
 def main(argv: list[str] | None = None) -> int:
     """
     Main entry point for shorts_engine CLI.
@@ -141,6 +158,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually upload to YouTube (default is dry-run / hold for review)",
     )
 
+    parser.add_argument(
+        "--print-plan",
+        action="store_true",
+        help="Print the explanation plan and claim verdicts after the run (dry-run review)",
+    )
+
     args = parser.parse_args(argv)
 
     # Convert "until" flag to correct status names
@@ -194,7 +217,8 @@ def main(argv: list[str] | None = None) -> int:
         # Print success status. ASCII markers, not check/cross glyphs: a live
         # run COMPLETED the whole pipeline and then exited 1 because Windows'
         # cp1252 console couldn't encode the success message's U+2713.
-        print(f"[OK] Pipeline completed: {manifest.run_id}")
+        marker = "[HOLD]" if manifest.status == "hold_for_review" else "[OK]"
+        print(f"{marker} Pipeline completed: {manifest.run_id}")
         print(f"  Status: {manifest.status}")
 
         # Print artifacts if any
@@ -205,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if "contact_sheet" in manifest.artifacts:
             print(f"  Review: {manifest.artifacts.get('contact_sheet', '')}")
+
+        _maybe_print_plan(args, getattr(manifest, "workspace", None))
 
         return 0
 

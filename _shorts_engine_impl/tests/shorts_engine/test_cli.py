@@ -269,6 +269,53 @@ class TestMainStages:
             assert stages[4][0] == "script"
 
 
+class TestPrintPlan:
+    """--print-plan prints the explanation plan; hold manifests print [HOLD]."""
+
+    def _manifest(self, tmp_path, status="claims_verified"):
+        (tmp_path / "explanation_plan.json").write_text(
+            json.dumps({"question": "Why model sand?", "status": "verified",
+                        "steps": [], "dropped_claims": [], "dropped_steps": []}),
+            encoding="utf-8")
+        m = mock.Mock()
+        m.artifacts = {}
+        m.run_id = "r1"
+        m.status = status
+        m.workspace = str(tmp_path)
+        return m
+
+    def test_print_plan_flag_prints_question(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        with mock.patch("shorts_engine.runner.run", return_value=self._manifest(tmp_path)):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+        assert "Why model sand?" in capsys.readouterr().out
+
+    def test_no_flag_does_not_print_plan(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        with mock.patch("shorts_engine.runner.run", return_value=self._manifest(tmp_path)):
+            assert main(["https://example.com/b"]) == 0
+        assert "Why model sand?" not in capsys.readouterr().out
+
+    def test_hold_manifest_prints_hold_and_plan(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path, status="hold_for_review")
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+        out = capsys.readouterr().out
+        assert "[HOLD]" in out and "[OK]" not in out and "Why model sand?" in out
+
+    def test_print_plan_failure_does_not_change_exit_code(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path)
+        (tmp_path / "explanation_plan.json").write_text("not json", encoding="utf-8")
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+
+
 class TestCreativeStageBridge:
     """The visuals/assemble stages shell out to the harness agent bridge."""
 
