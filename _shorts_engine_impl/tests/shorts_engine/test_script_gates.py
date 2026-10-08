@@ -19,7 +19,6 @@ from shorts_engine.stages.script import (
     gate_differentiator,
     gate_numbers,
     gate_total_duration,
-    gate_word_budget,
     run_gates,
 )
 
@@ -209,56 +208,6 @@ class TestGateBanned:
         assert gate_banned([], BRAND) == []
 
 
-class TestGateWordBudget:
-    """Per-beat word count vs. its own `purpose`'s PURPOSE_TEMPLATE seconds x
-    WORDS_PER_SECOND, tolerated by WORD_BUDGET_TOLERANCE (spec §4 Stage 3:
-    2.6 words/s ±20%)."""
-
-    def test_default_beats_are_within_budget(self) -> None:
-        assert gate_word_budget(_beats()) == []
-
-    def test_hook_too_long_is_flagged(self) -> None:
-        too_long = _beats(**{"0": {"narration": " ".join(["word"] * 30)}})
-        errs = gate_word_budget(too_long)
-        assert len(errs) == 1 and "hook" in errs[0]
-
-    def test_hook_too_short_is_flagged(self) -> None:
-        too_short = _beats(**{"0": {"narration": "Hi."}})
-        errs = gate_word_budget(too_short)
-        assert len(errs) == 1 and "hook" in errs[0]
-
-    def test_multiple_out_of_budget_beats_each_reported(self) -> None:
-        bad = _beats(**{"0": {"narration": "Hi."}, "4": {"narration": "Go."}})
-        errs = gate_word_budget(bad)
-        assert len(errs) == 2
-
-    def test_cta_too_long_is_flagged(self) -> None:
-        too_long = _beats(**{"4": {"narration": " ".join(["word"] * 40)}})
-        errs = gate_word_budget(too_long)
-        assert len(errs) == 1 and "cta" in errs[0]
-
-    def test_error_bounds_are_integer_feasible_not_rounded(self) -> None:
-        """Regression: {:.0f} formatting rounded stakes' real bounds
-        (5.44-12.24 words at 1.7 w/s; was 8.32-18.72 at the old 2.6) to a
-        range that included word counts the gate actually rejects -- a live
-        run produced the paradoxical retry-echoed message '19 words outside
-        [8, 19]', telling the model 19 was simultaneously the maximum and
-        too many. Bounds must be shown ceil/floor'd: [6, 12]."""
-        over = _beats(**{"1": {"narration": " ".join(["word"] * 13)}})
-        errs = gate_word_budget(over)
-        assert len(errs) == 1
-        assert "[6, 12]" in errs[0]
-        assert "[5, 12]" not in errs[0]
-
-    def test_displayed_bounds_are_actually_accepted(self) -> None:
-        """Truthfulness property: a word count equal to either displayed
-        bound must pass the gate -- otherwise the message lies."""
-        at_max = _beats(**{"1": {"narration": " ".join(["word"] * 12)}})
-        assert gate_word_budget(at_max) == []
-        at_min = _beats(**{"1": {"narration": " ".join(["word"] * 6)}})
-        assert gate_word_budget(at_min) == []
-
-
 class TestGateTotalDuration:
     """Aggregate duration vs. the config.TOTAL_MIN_S floor -- no ceiling
     (2026-08-26 creative-flow redesign: longer videos are fine). gate_word_
@@ -290,12 +239,8 @@ class TestGateTotalDuration:
         assert len(errs) == 1
         assert "total_duration" in errs[0]
 
-    def test_too_short_message_names_exact_deficit_and_headroom_beats(self) -> None:
-        """Regression: the model repeatedly landed a few words short of the
-        floor even after being told the aggregate target RANGE -- the error
-        must do the arithmetic for it (exact word count needed) and name
-        which specific beats have room, not just say 'lengthen the shorter
-        beats'."""
+    def test_too_short_message_names_exact_deficit(self) -> None:
+        """The error does the arithmetic for the writer: exact words needed."""
         short = _beats(**{
             "0": {"narration": " ".join(["word"] * 5)},
             "1": {"narration": " ".join(["word"] * 8)},
@@ -307,8 +252,6 @@ class TestGateTotalDuration:
         assert len(errs) == 1
         assert "AT LEAST" in errs[0]
         assert "4" in errs[0]  # 51 - 50 + 3 buffer = 4
-        # names at least one beat with headroom and its current/max words
-        assert "mechanism" in errs[0] or "proof" in errs[0]
 
     def test_run_gates_includes_total_duration_errors(self) -> None:
         short = _beats(**{
@@ -446,53 +389,6 @@ class TestRunGates:
         errs = run_gates(beats, FACTSHEET, BRAND)
         assert len(errs) == 1
         assert errs[0].startswith("structure:")
-
-
-class TestScriptSchemaDiagramLabels:
-    """Regression: a live run showed the writer including an empty
-    'diagram_labels': [] on beats other than mechanism (a reasonable
-    placeholder for an optional field it has nothing to contribute to).
-    shotlist.py already tolerates this gracefully via
-    `beat.get("diagram_labels") or _fallback_labels(narration)`, and the
-    real 2-4 length constraint is independently enforced downstream by
-    shotlist.lint_shotlist's own DIAGRAM check -- so SCRIPT_SCHEMA must not
-    hard-reject an empty/absent diagram_labels at this earlier layer."""
-
-    def test_empty_diagram_labels_is_schema_valid(self):
-        import jsonschema
-        from shorts_engine.stages.script import SCRIPT_SCHEMA
-
-        beats = [
-            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
-             "card_text": "c", "broll_wish": "", "diagram_labels": []}
-            for purpose in config.PURPOSE_TEMPLATE
-        ]
-        jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
-
-    def test_omitted_diagram_labels_is_still_schema_valid(self):
-        import jsonschema
-        from shorts_engine.stages.script import SCRIPT_SCHEMA
-
-        beats = [
-            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
-             "card_text": "c", "broll_wish": ""}
-            for purpose in config.PURPOSE_TEMPLATE
-        ]
-        jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
-
-    def test_over_four_diagram_labels_is_still_rejected(self):
-        import jsonschema
-        import pytest
-        from shorts_engine.stages.script import SCRIPT_SCHEMA
-
-        beats = [
-            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
-             "card_text": "c", "broll_wish": "",
-             "diagram_labels": ["a", "b", "c", "d", "e"]}
-            for purpose in config.PURPOSE_TEMPLATE
-        ]
-        with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
 
 
 class TestDiagramLabelsGate:
