@@ -1,0 +1,184 @@
+[
+  {
+    "claim": "Calcium nitrate is very soluble in water.",
+    "passages": [
+      "Calcium nitrate dissolves readily in water, with solubility above 100 g per 100 mL at room temperature."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "In ANFO, ammonium nitrate acts as the oxidiser.",
+    "passages": [
+      "ANFO is a blasting agent made of about 94% ammonium nitrate prills, which act as the oxidiser, and about 6% fuel oil, which is the fuel."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "Nitrate dosing can control hydrogen sulfide in sewage.",
+    "passages": [
+      "Dosing nitrate into sewage lets bacteria oxidise sulfide, so dissolved hydrogen sulfide is controlled by nitrate addition."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "Calcium nitrate accelerates the setting of concrete.",
+    "passages": [
+      "Calcium nitrate is used as a set accelerator in concrete, shortening setting time, which is useful in cold weather."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "Denitrifying bacteria can use nitrate as an electron acceptor.",
+    "passages": [
+      "Denitrifying bacteria use nitrate as an electron acceptor in place of oxygen when respiring under anoxic conditions."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "Calcium nitrate is used in fertigation.",
+    "passages": [
+      "Calcium nitrate is a common fertiliser in fertigation and hydroponics because it supplies both calcium and nitrate nitrogen in a water-soluble form."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "Calcium nitrate supplies both calcium and nitrogen to crops.",
+    "passages": [
+      "Calcium nitrate is a common fertiliser in fertigation and hydroponics because it supplies both calcium and nitrate nitrogen in a water-soluble form."
+    ],
+    "expected": "supported"
+  },
+  {
+    "claim": "Calcium nitrate is insoluble in water.",
+    "passages": [
+      "Calcium nitrate dissolves readily in water, with solubility above 100 g per 100 mL at room temperature."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "In ANFO, the fuel oil acts as the oxidiser and ammonium nitrate is the fuel.",
+    "passages": [
+      "ANFO is a blasting agent made of about 94% ammonium nitrate prills, which act as the oxidiser, and about 6% fuel oil, which is the fuel."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "Nitrate dosing has no effect on hydrogen sulfide in sewage.",
+    "passages": [
+      "Dosing nitrate into sewage lets bacteria oxidise sulfide, so dissolved hydrogen sulfide is controlled by nitrate addition."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "Calcium nitrate slows the setting of concrete and is useless in cold weather.",
+    "passages": [
+      "Calcium nitrate is used as a set accelerator in concrete, shortening setting time, which is useful in cold weather."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "Denitrifying bacteria cannot use nitrate and need oxygen only.",
+    "passages": [
+      "Denitrifying bacteria use nitrate as an electron acceptor in place of oxygen when respiring under anoxic conditions."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "Calcium nitrate is unsuitable for fertigation because it is insoluble.",
+    "passages": [
+      "Calcium nitrate is a common fertiliser in fertigation and hydroponics because it supplies both calcium and nitrate nitrogen in a water-soluble form."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "Calcium nitrate supplies no calcium to crops.",
+    "passages": [
+      "Calcium nitrate is a common fertiliser in fertigation and hydroponics because it supplies both calcium and nitrate nitrogen in a water-soluble form."
+    ],
+    "expected": "contradicted"
+  },
+  {
+    "claim": "Calcium nitrate is very soluble in water.",
+    "passages": [
+      "Sodium chloride is used to de-ice roads in winter."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "In ANFO, ammonium nitrate acts as the oxidiser.",
+    "passages": [
+      "The Moon orbits the Earth roughly once every 27.3 days."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Nitrate dosing can control hydrogen sulfide in sewage.",
+    "passages": [
+      "Iron rusts when exposed to oxygen and moisture, forming hydrated iron(III) oxide."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Calcium nitrate accelerates the setting of concrete.",
+    "passages": [
+      "The ratio of a circle's circumference to its diameter is approximately 3.14159."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Denitrifying bacteria can use nitrate as an electron acceptor.",
+    "passages": [
+      "Copper is widely used in electrical wiring because of its high electrical conductivity."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Calcium nitrate is used in fertigation.",
+    "passages": [
+      "Carbon dioxide is absorbed by plants during photosynthesis."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Calcium nitrate is cheaper than ammonium nitrate.",
+    "passages": [
+      "Calcium nitrate dissolves readily in water, with solubility above 100 g per 100 mL at room temperature."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "ANFO is detonated by a nitrate-based primer.",
+    "passages": [
+      "ANFO is a blasting agent made of about 94% ammonium nitrate prills, which act as the oxidiser, and about 6% fuel oil, which is the fuel."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Nitrate dosing removes all odour from a sewer network within one hour.",
+    "passages": [
+      "Dosing nitrate into sewage lets bacteria oxidise sulfide, so dissolved hydrogen sulfide is controlled by nitrate addition."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Calcium nitrate accelerates concrete setting by exactly 40 percent.",
+    "passages": [
+      "Calcium nitrate is used as a set accelerator in concrete, shortening setting time, which is useful in cold weather."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Denitrifying bacteria convert nitrate into ammonia.",
+    "passages": [
+      "Denitrifying bacteria use nitrate as an electron acceptor in place of oxygen when respiring under anoxic conditions."
+    ],
+    "expected": "unsupported"
+  },
+  {
+    "claim": "Calcium nitrate is the cheapest fertigation fertiliser available.",
+    "passages": [
+      "Calcium nitrate is a common fertiliser in fertigation and hydroponics because it supplies both calcium and nitrate nitrogen in a water-soluble form."
+    ],
+    "expected": "unsupported"
+  }
+]
