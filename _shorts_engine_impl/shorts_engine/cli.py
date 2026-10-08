@@ -5,7 +5,7 @@ Provides command-line interface for running the shorts_engine pipeline:
   python -m shorts_engine <blog_url> [options]
 
 Options:
-  --until {ingest,facts,script,shotlist,audio,visuals,assemble}
+  --until {ingest,facts,explain,verify_claims,script,shotlist,audio,visuals,assemble}
                               Stop after reaching this stage
   --resume                    Resume from last completed stage
   --local-only                Use local Ollama model only
@@ -28,7 +28,7 @@ from typing import Any
 from shorts_engine import config, runner
 from shorts_engine.harness_bridge import run_creative_stage
 from shorts_engine.stages import (
-    facts, ingest, script, shotlist, audio,
+    facts, explain, verify_claims, ingest, script, shotlist, audio,
     verify, package, publish,
 )
 
@@ -57,6 +57,8 @@ def build_stages() -> list[runner.Stage]:
     return [
         ("ingest", "ingested", ingest.run),
         ("facts", "facts", facts.run),
+        ("explain", "explained", explain.run),
+        ("verify_claims", "claims_verified", verify_claims.run),
         ("script", "scripted", script.run),
         ("shotlist", "shotlisted", shotlist.run),
         ("audio", "audio", audio.run),
@@ -95,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.add_argument(
         "--until",
-        choices=["ingest", "facts", "script", "shotlist", "audio", "visuals", "assemble",
+        choices=["ingest", "facts", "explain", "verify_claims", "script", "shotlist", "audio", "visuals", "assemble",
                  "verify", "package", "publish"],
         default=None,
         help="Stop execution after reaching this stage",
@@ -145,6 +147,8 @@ def main(argv: list[str] | None = None) -> int:
     until_map = {
         "ingest": "ingested",
         "facts": "facts",
+        "explain": "explained",
+        "verify_claims": "claims_verified",
         "script": "scripted",
         "shotlist": "shotlisted",
         "audio": "audio",

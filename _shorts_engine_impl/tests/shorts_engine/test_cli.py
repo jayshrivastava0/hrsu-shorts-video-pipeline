@@ -39,12 +39,12 @@ class TestBuildStages:
         stages = build_stages()
         assert isinstance(stages, list)
 
-    def test_build_stages_has_ten_stages(self):
-        """build_stages returns exactly ten stages (Task 13: + verify/package/publish)."""
+    def test_build_stages_has_twelve_stages(self):
+        """build_stages returns exactly twelve stages (+ explain/verify_claims, verify/package/publish)."""
         from shorts_engine.cli import build_stages
 
         stages = build_stages()
-        assert len(stages) == 10
+        assert len(stages) == 12
 
     def test_build_stages_ingest_stage(self):
         """build_stages first stage is ('ingest', 'ingested', ingest.run)."""
@@ -74,7 +74,7 @@ class TestBuildStages:
         from shorts_engine.stages import script
 
         stages = build_stages()
-        name, status, fn = stages[2]
+        name, status, fn = stages[4]
         assert name == "script"
         assert status == "scripted"
         assert fn == script.run
@@ -264,7 +264,9 @@ class TestMainStages:
             assert len(stages) == len(expected_stages)
             assert stages[0][0] == "ingest"
             assert stages[1][0] == "facts"
-            assert stages[2][0] == "script"
+            assert stages[2][0] == "explain"
+            assert stages[3][0] == "verify_claims"
+            assert stages[4][0] == "script"
 
 
 class TestCreativeStageBridge:
@@ -468,11 +470,18 @@ class TestPhase2Stages:
         appends verify/package/publish after these (see TestPhase3Stages)."""
         from shorts_engine.cli import build_stages
         names = [s[0] for s in build_stages()]
-        assert names[:7] == ["ingest", "facts", "script", "shotlist", "audio",
-                             "visuals", "assemble"]
+        assert names[:9] == ["ingest", "facts", "explain", "verify_claims", "script",
+                             "shotlist", "audio", "visuals", "assemble"]
         statuses = [s[1] for s in build_stages()]
-        assert statuses[:7] == ["ingested", "facts", "scripted", "shotlisted",
-                                "audio", "visuals", "assembled"]
+        assert statuses[:9] == ["ingested", "facts", "explained", "claims_verified",
+                                "scripted", "shotlisted", "audio", "visuals", "assembled"]
+
+    def test_build_stages_explain_and_verify_claims(self):
+        from shorts_engine.cli import build_stages
+        from shorts_engine.stages import explain, verify_claims
+        stages = build_stages()
+        assert stages[2] == ("explain", "explained", explain.run)
+        assert stages[3] == ("verify_claims", "claims_verified", verify_claims.run)
 
     def test_until_accepts_new_stages(self, monkeypatch):
         import shorts_engine.cli as cli
@@ -491,11 +500,11 @@ class TestPhase2Stages:
 
 
 class TestPhase3Stages:
-    def test_build_stages_has_ten_in_order(self):
+    def test_build_stages_has_twelve_in_order(self):
         from shorts_engine.cli import build_stages
         names = [s[0] for s in build_stages()]
-        assert names == ["ingest", "facts", "script", "shotlist", "audio",
-                         "visuals", "assemble", "verify", "package", "publish"]
+        assert names == ["ingest", "facts", "explain", "verify_claims", "script",
+                         "shotlist", "audio", "visuals", "assemble", "verify", "package", "publish"]
         statuses = [s[1] for s in build_stages()]
         assert statuses[-3:] == ["verified", "packaged", "published"]
 
