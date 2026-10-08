@@ -91,51 +91,75 @@ KNOWN_UNITS = frozenset({
 })
 
 _NUMBER_RE = re.compile(
-    r"(?<![\w.])(?P<num>\d[\d,]*(?:\.\d+)?)(?P<gap>\s*)"
+    r"(?<![\w.])(?P<num>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?P<gap>[ \t]*-?)"
     r"(?P<unit>%|°?[A-Za-zµ]+(?:/[A-Za-zµ]+)?[²³23]?)?"
 )
 _YEAR_RE = re.compile(r"(?:19|20)\d\d")
 _RANGE_TAIL_RE = re.compile(r"\s*(?:to|-|–|and)\s*\d")
+_NO_UNIT_BEFORE_RE = re.compile(r"\b(?:ph|step|stage|phase)\s*$")
 
 
 def has_number(text: str) -> bool:
     return bool(_NUMBER_RE.search(text or ""))
 
 
+def _norm_unit(unit: str | None) -> str | None:
+    if not unit:
+        return None
+    unit = unit.lower()
+    return "%" if unit == "percent" else unit
+
+
+def _tokens(text: str) -> list[dict]:
+    """Numbers in `text` with their unit. A range opener ("1.5 to 3 kg") takes
+    the unit of the number that closes the range."""
+    toks: list[dict] = []
+    for m in _NUMBER_RE.finditer(text or ""):
+        is_open = bool(_RANGE_TAIL_RE.match(text[m.end("num"):]))
+        toks.append({
+            "num": m.group("num").replace(",", ""),
+            "unit": None if is_open else _norm_unit(m.group("unit")),
+            "open": is_open,
+            "before": text[:m.start()].lower(),
+        })
+    for i in range(len(toks) - 2, -1, -1):
+        if toks[i]["open"]:
+            toks[i]["unit"] = toks[i + 1]["unit"]
+    return toks
+
+
 def gate_claim_numbers(text: str, source: str, terms: list[dict] | None = None) -> list[str]:
     """Errors for numbers in `text` that do not trace to `source`, or lack a unit.
 
-    A number passes when (a) it appears as a standalone number in `source`, and
-    (b) it is followed by a unit that is known (KNOWN_UNITS) or defined in
-    `terms`, and (c) that unit string appears in `source` ("%" also accepts
-    "percent"). Years, numbers after "pH"/"step"/"stage"/"phase", and numbers
-    that open a range ("1.5 to 3 kg") skip the unit check (the range's last
-    number carries it) but still must trace.
+    Every number must appear as a standalone number in `source` (not inside a
+    word like H2S, not a prefix of a longer decimal). Unless exempt, it must
+    carry a unit that is known (KNOWN_UNITS) or defined in `terms`, and the
+    exact (number, unit) PAIR must appear in `source` ("%" and "percent" are
+    equivalent). A range opener ("1.5 to 3 kg") takes the closing number's
+    unit. Years and numbers after pH/step/stage/phase only need to trace.
     """
-    pool = normalize_for_match(source).replace(",", "")
+    src = _tokens(normalize_for_match(source))
+    src_nums = {t["num"] for t in src}
+    src_pairs = {(t["num"], t["unit"]) for t in src if t["unit"]}
     term_units = {t.get("unit", "").strip().lower() for t in (terms or [])
                   if t.get("unit", "").strip()}
     errs: list[str] = []
-    for m in _NUMBER_RE.finditer(text or ""):
-        num = m.group("num").replace(",", "")
-        if not re.search(rf"(?<![\d.]){re.escape(num)}(?![\d])", pool):
+    for t in _tokens(text):
+        num, unit = t["num"], t["unit"]
+        if num not in src_nums:
             errs.append(f"number {num!r} does not trace to the source")
             continue
-        before = text[:m.start()].lower().rstrip()
-        if (_YEAR_RE.fullmatch(num) or before.endswith(("ph", "step", "stage", "phase"))
-                or _RANGE_TAIL_RE.match(text[m.end("num"):])):
+        if _YEAR_RE.fullmatch(num) or _NO_UNIT_BEFORE_RE.search(t["before"]):
             continue
-        unit = (m.group("unit") or "").lower()
         if not unit:
-            errs.append(f"number {num!r} has no unit")
+            if not t["open"]:
+                errs.append(f"number {num!r} has no unit")
         elif unit not in KNOWN_UNITS and unit not in term_units:
             errs.append(f"number {num!r} has unknown unit {unit!r} (not a known unit and "
                         f"not defined in the step's terms)")
-        elif unit in ("%", "percent"):
-            if "%" not in pool and "percent" not in pool:
-                errs.append(f"unit {unit!r} for {num!r} does not appear in the source")
-        elif unit not in pool:
-            errs.append(f"unit {unit!r} for {num!r} does not appear in the source")
+        elif (num, unit) not in src_pairs:
+            errs.append(f"unit {unit!r} for {num!r} does not appear with that number "
+                        f"in the source")
     return errs
 
 

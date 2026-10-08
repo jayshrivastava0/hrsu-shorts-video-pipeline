@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 
 import jsonschema
+import pytest
 
 from shorts_engine import explanation as ex
 from shorts_engine.brand import BrandFacts
@@ -48,11 +49,8 @@ class TestSchema:
     def test_unknown_kind_is_rejected(self):
         p = _plan()
         p["steps"][0]["claims"][0]["kind"] = "guess"
-        try:
+        with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(p, ex.PLAN_SCHEMA)
-        except jsonschema.ValidationError:
-            return
-        raise AssertionError("expected ValidationError")
 
 
 class TestGateClaimNumbers:
@@ -87,6 +85,30 @@ class TestGateClaimNumbers:
 
     def test_no_numbers_no_errors(self):
         assert ex.gate_claim_numbers("Water dissolves salt.", "") == []
+
+
+    def test_unit_is_not_a_substring_match(self):
+        assert ex.gate_claim_numbers("Dose is 5 g", "the dose is 5 kg") != []
+        assert ex.gate_claim_numbers("Length 5 m", "length 5 miles") != []
+
+    def test_number_and_unit_must_appear_as_a_pair(self):
+        assert ex.gate_claim_numbers("Use 425 kg", "425 EC and 3 kg") != []
+
+    def test_number_inside_word_or_longer_decimal_does_not_trace(self):
+        assert ex.gate_claim_numbers("Use 2 kg", "H2S and 9 kg") != []
+        assert ex.gate_claim_numbers("Use 1 kg", "dose 1.5 kg") != []
+
+    def test_range_opener_still_needs_the_unit_pair(self):
+        assert ex.gate_claim_numbers("Use 425 and 3 kg", "425 EC and 3 kg") != []
+
+    def test_hyphenated_unit_passes(self):
+        assert ex.gate_claim_numbers("A 5-kg bag", "a 5-kg bag") == []
+
+    def test_thousands_comma_passes(self):
+        assert ex.gate_claim_numbers("Use 1,000 kg", "use 1000 kg") == []
+
+    def test_graph_is_not_a_ph_prefix(self):
+        assert ex.gate_claim_numbers("graph 5 widgets", "graph 5 widgets") != []
 
 
 class TestValidatePlan:
