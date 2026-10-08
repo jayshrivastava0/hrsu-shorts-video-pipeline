@@ -1,0 +1,72 @@
+{
+  "facts": [
+    {
+      "id": "f1",
+      "verbatim_quote": "For example, sandy soils exhibit rapid infiltration and low retention, with electrical conductivity (EC) peaking at 425.",
+      "value": "425",
+      "unit": "EC",
+      "claim_summary": "Sandy soils can reach electrical conductivity peaks of 425.",
+      "tags": [
+        "metric",
+        "spec"
+      ],
+      "procurement_significance": 3,
+      "citation_marker": null,
+      "char_offset": 1843
+    },
+    {
+      "id": "f2",
+      "verbatim_quote": "In specialized fertigation solutions, engineers often utilize substrates such as a 20% calcium carbonate and 80% river sand mixture to approximate desert soil conditions and test nutrient uptake4.",
+      "value": "20",
+      "unit": "%",
+      "claim_summary": "Substrates simulating desert soil often use a 20% calcium carbonate mixture.",
+      "tags": [
+        "spec"
+      ],
+      "procurement_significance": 2,
+      "citation_marker": 4,
+      "char_offset": 2465
+    },
+    {
+      "id": "f3",
+      "verbatim_quote": "In specialized fertigation solutions, engineers often utilize substrates such as a 20% calcium carbonate and 80% river sand mixture to approximate desert soil conditions and test nutrient uptake4.",
+      "value": "80",
+      "unit": "%",
+      "claim_summary": "Substrates simulating desert soil often use 80% river sand.",
+      "tags": [
+        "spec"
+      ],
+      "procurement_significance": 2,
+      "citation_marker": 4,
+      "char_offset": 2465
+    }
+  ],
+  "brand_facts": [
+    {
+      "id": "b_purity",
+      "text": "Consistent high-purity calcium nitrate powder with batch-level QC",
+      "kind": "differentiator"
+    },
+    {
+      "id": "b_supply",
+      "text": "Flexible minimum order quantities and responsive quoting for trial orders",
+      "kind": "differentiator"
+    },
+    {
+      "id": "b_esg",
+      "text": "Solar power and steam-reuse initiatives at the Indore plant",
+      "kind": "differentiator"
+    },
+    {
+      "id": "cta1",
+      "text": "Full technical guide on the HRSU blog — link in description.",
+      "kind": "cta"
+    },
+    {
+      "id": "cta2",
+      "text": "Sourcing calcium nitrate? Visit hrsuindore.com",
+      "kind": "cta"
+    }
+  ],
+  "dropped": []
+}
