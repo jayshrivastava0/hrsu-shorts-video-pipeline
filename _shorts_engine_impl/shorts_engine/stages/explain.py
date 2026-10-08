@@ -66,7 +66,8 @@ def run(ctx) -> dict[str, str]:
     """Run the EXPLAIN stage and write explanation_plan.json (status "planned").
 
     Raises:
-        HoldForReview: if no draft passes `validate_plan` within config.LLM_MAX_RETRIES.
+        HoldForReview: if no draft passes `validate_plan` within config.LLM_MAX_RETRIES
+            (a minimal explanation_plan.json with status "held" is written first).
     """
     ws = Path(ctx.workspace)
     canonical = (ws / "canonical.txt").read_text(encoding="utf-8")
@@ -91,6 +92,11 @@ def run(ctx) -> dict[str, str]:
         logger.warning(f"plan failed checks (attempt {attempt}/{config.LLM_MAX_RETRIES}): "
                        f"{errors}")
     if errors:
+        # Audit trail: a minimal held plan carrying the reasons (plan_report renders it).
+        held = {"status": "held", "question": "", "steps": [], "hold_reasons": errors,
+                "dropped_claims": [], "dropped_steps": []}
+        (ws / "explanation_plan.json").write_text(
+            json.dumps(held, indent=2, ensure_ascii=False), encoding="utf-8")
         raise HoldForReview(errors)
 
     doc = explanation.to_plan_document(raw, attempts)

@@ -104,4 +104,36 @@ def test_exhausted_retries_hold_for_review_and_write_no_plan(tmp_path, monkeypat
         explain.run(ctx)
     assert len(calls) == config.LLM_MAX_RETRIES
     assert any("structure" in r for r in e.value.reasons)
-    assert not (ctx.workspace / "explanation_plan.json").exists()
+    # the audit trail exists: a minimal held plan carrying the hold reasons
+    doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+    assert doc["status"] == "held" and doc["steps"] == []
+    assert doc["hold_reasons"] == e.value.reasons
+    assert doc["dropped_claims"] == [] and doc["dropped_steps"] == []
+    from shorts_engine.review.plan_report import format_plan
+    assert "HELD" in format_plan(doc)
+
+
+def test_thin_plan_holds_instead_of_crashing_on_schema(tmp_path, monkeypatch):
+    """A planner returning 2 steps must HOLD (spec 7.3/11), not fail the run with a schema
+    EngineLLMError: the step count is checked by validate_plan, not by PLAN_SCHEMA."""
+    import jsonschema
+    from shorts_engine.errors import EngineLLMError
+    ctx = _ctx(tmp_path)
+    thin = _good_plan()
+    thin["steps"] = thin["steps"][:2]
+    calls = []
+
+    def schema_checked(prompt, system, schema, **kw):
+        calls.append(1)
+        try:  # what the real generate_schema_json does with every model response
+            jsonschema.validate(instance=thin, schema=schema)
+        except jsonschema.ValidationError as exc:
+            raise EngineLLMError(f"schema failure: {exc.message}") from exc
+        return thin
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", schema_checked)
+    with pytest.raises(HoldForReview) as e:
+        explain.run(ctx)
+    assert not isinstance(e.value, EngineLLMError)
+    assert len(calls) == config.LLM_MAX_RETRIES
+    assert any("structure" in r for r in e.value.reasons)

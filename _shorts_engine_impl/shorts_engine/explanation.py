@@ -37,7 +37,7 @@ _STEP_ITEM_SCHEMA: dict = {
     "properties": {
         "step_id": {"type": "string"},
         "claim_text": {"type": "string"},
-        "claims": {"type": "array", "minItems": 1, "items": CLAIM_ITEM_SCHEMA},
+        "claims": {"type": "array", "items": CLAIM_ITEM_SCHEMA},
         "terms": {
             "type": "array",
             "items": {
@@ -66,8 +66,9 @@ PLAN_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "question": {"type": "string"},
-        "steps": {"type": "array", "minItems": config.MIN_VERIFIED_STEPS,
-                  "items": _STEP_ITEM_SCHEMA},
+        # No minItems here (nor on a step's claims): a thin plan must reach
+        # validate_plan and HOLD, not fail schema validation and crash the run.
+        "steps": {"type": "array", "items": _STEP_ITEM_SCHEMA},
         "payoff": {
             "type": "object",
             "properties": {"takeaway": {"type": "string"},
