@@ -53,6 +53,20 @@ def _get_smart_client(**kwargs):
     return _smart_client(**kwargs)
 
 
+def _get_role_client(role: str):
+    """OllamaClient for a configured role. Cloud models go through the Python SDK
+    (they reject /api/generate, see OllamaClient._generate_via_sdk)."""
+    from shorts_engine import config
+    config.check_role_independence(role)
+    from video_agent.ollama_client import OllamaClient
+    model = config.model_for_role(role)
+    client = OllamaClient(model=model)
+    if "cloud" in model:
+        client.generate = lambda prompt, system=None, **_kw: client._generate_via_sdk(
+            prompt, system)
+    return client
+
+
 def generate_schema_json(
     prompt: str,
     system: str,
@@ -61,6 +75,7 @@ def generate_schema_json(
     retries: int = 3,
     local_only: bool = False,
     client_factory: Callable | None = None,
+    role: str | None = None,
 ) -> dict:
     """Generate structured JSON text via schema-validated LLM.
 
@@ -70,6 +85,7 @@ def generate_schema_json(
         schema: JSON Schema dict for output validation (currently used for type hints)
         retries: Number of retries on OllamaError (default: 3)
         local_only: If True, only use local model; currently unused (reserved for future)
+        role: Config role ("planner"|"writer"|"verifier"|"critic") selecting the model; None keeps the smart-model default
         client_factory: Test hook; callable returning client with .generate_json() method.
                        If None, uses video_agent.ollama_client.smart_client()
 
@@ -88,6 +104,8 @@ def generate_schema_json(
     # Get client
     if client_factory is not None:
         client = client_factory()
+    elif role is not None:
+        client = _get_role_client(role)
     else:
         client = _get_smart_client()
 

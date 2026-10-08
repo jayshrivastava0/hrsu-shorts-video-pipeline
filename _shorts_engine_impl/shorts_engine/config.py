@@ -9,7 +9,11 @@ IMPORTANT: Do NOT re-export video_agent.config to callers. Import internally onl
 from __future__ import annotations
 
 import logging
+import os
+import re
 from pathlib import Path
+
+from shorts_engine.errors import EngineConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +118,62 @@ STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
 LLM_MAX_RETRIES = 5
 LLM_RETRY_DELAY_S = 2  # exponential backoff: 2s, 4s, 8s
 LLM_TIMEOUT_S = 60
+
+# ── Model roles (spec 2026-10-08 §8) ───────────────────────────────────────
+# Planner/writer = the user's choice (Gemma). Verifier and critic MUST be a
+# different model family from the writer (a model checking its own claims
+# agrees with itself); check_role_independence() enforces that at call time.
+# The verifier default is confirmed by scripts/eval_verifier.py (Task 11).
+# Any role can be overridden with env HRSU_MODEL_<ROLE> (e.g. HRSU_MODEL_VERIFIER).
+MODEL_ROLES: dict[str, str] = {
+    "planner": SMART_TEXT_MODEL,
+    "writer": SMART_TEXT_MODEL,
+    "verifier": "glm-5.2:cloud",
+    "critic": "glm-5.2:cloud",
+}
+_INDEPENDENT_ROLES = ("verifier", "critic")
+
+
+def model_for_role(role: str) -> str:
+    """Model name for a role; env HRSU_MODEL_<ROLE> overrides the default."""
+    override = os.environ.get(f"HRSU_MODEL_{role.upper()}")
+    if override:
+        return override
+    try:
+        return MODEL_ROLES[role]
+    except KeyError:
+        raise EngineConfigError(
+            f"unknown model role {role!r}; known: {sorted(MODEL_ROLES)}") from None
+
+
+def model_family(model: str) -> str:
+    """'gemma4:31b-cloud' -> 'gemma'; 'glm-5.2:cloud' -> 'glm'."""
+    return re.split(r"[-:0-9._]", model.strip().lower(), maxsplit=1)[0]
+
+
+def check_role_independence(role: str) -> None:
+    """Raise EngineConfigError if a verifier/critic shares the writer's family."""
+    if role not in _INDEPENDENT_ROLES:
+        return
+    if model_family(model_for_role(role)) == model_family(model_for_role("writer")):
+        raise EngineConfigError(
+            f"role {role!r} uses the same model family as the writer "
+            f"({model_for_role(role)!r} vs {model_for_role('writer')!r}); a model must "
+            f"not grade its own work")
+
+
+# ── Explanation plan / verification (spec 2026-10-08 §5-7) ─────────────────
+MIN_VERIFIED_STEPS = 3
+PLAN_MAX_REPAIR_ROUNDS = 2
+SCRIPT_MAX_REWRITES = 2          # critic-triggered rewrites before holding
+RETRIEVAL_MAX_RESULTS = 5
+RETRIEVAL_MAX_FETCHES = 6
+RETRIEVAL_MAX_PASSAGES = 3
+RETRIEVAL_FETCH_TIMEOUT_S = 10
+RETRIEVAL_SEARCH_RETRIES = 2
+# YouTube Shorts accepts up to 3 minutes (verify against current YouTube rules);
+# anything longer is labelled long-form at packaging time.
+SHORT_FORM_MAX_S = 180.0
 
 # ── Canvas & card design system (spec §5) ──────────────────────────────────
 CANVAS_W, CANVAS_H = 1080, 1920
