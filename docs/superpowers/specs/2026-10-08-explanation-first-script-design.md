@@ -161,14 +161,14 @@ Models are set per role in config (not hardcoded), so changing one is a config e
 | Role | Model |
 |---|---|
 | Planner / writer | `gemma4:31b-cloud` (user's decision) |
-| Fact verifier + coherence critic | `glm-5.2` by default, a different family from the writer, with retrieval and source citation; `nemotron-3-ultra` is a candidate |
+| Fact verifier + coherence critic | `nemotron-3-ultra:cloud` by default, a different family from the writer, with retrieval and source citation (`glm-5.2` was not reachable on the current Ollama plan: HTTP 402) |
 | Scene author | Unchanged for now; decided in sub-project 2 |
 | Vision judge | `gemma4:31b-cloud` (unchanged) |
 
 The verifier default is confirmed by a bake-off: a fixed set of true, false and unsupported
 claims scored against each candidate. The same set is a regression test for model changes.
 Before relying on any cloud model, the plan includes a check that it actually responds on this
-setup (manifests exist on disk for several that `ollama list` does not show).
+setup (manifests exist on disk for several that `ollama list` does not show). Result (2026-10-09): `nemotron-3-ultra:cloud` scored 1.0 on supported, contradicted and unsupported claims with a false-support rate of 0.0.
 
 Reuse: the new stages are separate packages under `harness/packages/`, take a source
 document as input, and read brand rules, banned claims, differentiators and CTA from

@@ -28,7 +28,19 @@ def test_model_family():
     assert config.model_family("nemotron-3-ultra:cloud") == "nemotron"
 
 
-def test_default_verifier_and_critic_differ_from_writer_family():
+def _clear_role_env(monkeypatch):
+    for role in ("PLANNER", "WRITER", "VERIFIER", "CRITIC"):
+        monkeypatch.delenv(f"HRSU_MODEL_{role}", raising=False)
+
+
+def test_default_verifier_and_critic_models(monkeypatch):
+    _clear_role_env(monkeypatch)
+    assert config.model_for_role("verifier") == "nemotron-3-ultra:cloud"
+    assert config.model_for_role("critic") == "nemotron-3-ultra:cloud"
+
+
+def test_default_verifier_and_critic_differ_from_writer_family(monkeypatch):
+    _clear_role_env(monkeypatch)
     assert config.model_family(config.model_for_role("verifier")) != config.model_family(
         config.model_for_role("writer"))
     config.check_role_independence("verifier")

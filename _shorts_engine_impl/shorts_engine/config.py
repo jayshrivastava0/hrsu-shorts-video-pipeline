@@ -123,13 +123,16 @@ LLM_TIMEOUT_S = 60
 # Planner/writer = the user's choice (Gemma). Verifier and critic MUST be a
 # different model family from the writer (a model checking its own claims
 # agrees with itself); check_role_independence() enforces that at call time.
-# The verifier default is confirmed by scripts/eval_verifier.py (Task 11).
+# Verifier/critic default: nemotron-3-ultra:cloud. glm-5.2:cloud needs a paid
+# Ollama plan (HTTP 402), glm-5.1:cloud is retired (410), minimax-m3:cloud 402;
+# nemotron-3-ultra:cloud passed the 24-case scripts/eval_verifier.py bake-off
+# with false_support_rate 0.0 on 2026-10-09.
 # Any role can be overridden with env HRSU_MODEL_<ROLE> (e.g. HRSU_MODEL_VERIFIER).
 MODEL_ROLES: dict[str, str] = {
     "planner": SMART_TEXT_MODEL,
     "writer": SMART_TEXT_MODEL,
-    "verifier": "glm-5.2:cloud",
-    "critic": "glm-5.2:cloud",
+    "verifier": "nemotron-3-ultra:cloud",
+    "critic": "nemotron-3-ultra:cloud",
 }
 _INDEPENDENT_ROLES = ("verifier", "critic")
 
