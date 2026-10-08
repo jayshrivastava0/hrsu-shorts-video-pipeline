@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from shorts_engine import config
 from shorts_engine.cards.encoder import probe_duration
+from shorts_engine.errors import EngineError
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +66,17 @@ def run(ctx) -> dict[str, str]:
                                blog_record, str(ws))
     video = ws / "video_short.mp4"
     try:
-        duration_s = round(probe_duration(video), 2) if video.exists() else None
-    except Exception as exc:
-        logger.warning(f"package: could not probe duration: {exc}")
-        duration_s = None
+        raw_duration_s = probe_duration(video) if video.exists() else None
+    except (EngineError, OSError, ValueError) as exc:
+        logger.warning("package: could not probe duration: %s", exc)
+        raw_duration_s = None
+    duration_s = round(raw_duration_s, 2) if raw_duration_s is not None else None
     (ws / "publish_package.json").write_text(json.dumps({
         "title": pkg.title, "description": pkg.description, "tags": pkg.tags,
         "category_id": pkg.category_id, "privacy_status": pkg.privacy_status,
         "thumbnail_path": str(pkg.thumbnail_path) if pkg.thumbnail_path else None,
         "caption_srt_path": str(pkg.caption_srt_path) if pkg.caption_srt_path else None,
-        "format": format_label(duration_s), "duration_s": duration_s,
+        "format": format_label(raw_duration_s), "duration_s": duration_s,
     }, indent=2), encoding="utf-8")
 
     caption = "\n".join(

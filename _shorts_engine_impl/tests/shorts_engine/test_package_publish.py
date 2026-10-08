@@ -46,9 +46,11 @@ class TestPackage:
                              caption_srt_path=str(ws / "subtitles.srt"))
         monkeypatch.setattr(package, "_package_for_youtube",
                             lambda sb, br, w: fake_pkg)
+        monkeypatch.setattr(package, "probe_duration", lambda p: 45.0)
         arts = package.run(Ctx(ws))
         pkg = json.loads((ws / arts["publish_package"]).read_text(encoding="utf-8"))
         assert pkg["title"] == "T" and pkg["privacy_status"] == "unlisted"
+        assert pkg["format"] == "short" and pkg["duration_s"] == 45.0
         cap = (ws / arts["linkedin_caption"]).read_text(encoding="utf-8")
         assert "Nitrate limits tightening" in cap
         assert "dosing window" in cap and "hrsuindore.com/x.html" in cap
@@ -147,7 +149,38 @@ def test_package_survives_probe_failure(tmp_path, monkeypatch):
     from shorts_engine.stages import package
     ws = _ws(tmp_path)
     def boom(p):
-        raise RuntimeError("ffprobe failed")
+        from shorts_engine.errors import EngineError
+        raise EngineError("ffprobe failed")
     monkeypatch.setattr(package, "probe_duration", boom)
     pkg = _run_package(ws, monkeypatch)
     assert pkg["format"] == "unknown" and pkg["duration_s"] is None
+
+
+def test_package_output_round_trips_through_publish(tmp_path, monkeypatch):
+    from shorts_engine.stages import package, publish
+    ws = _ws(tmp_path)
+    monkeypatch.setattr(package, "probe_duration", lambda p: 45.0)
+    _run_package(ws, monkeypatch)
+    seen = {}
+    def fake_pub(pkg, video_path, workspace, dry_run=False):
+        seen["pkg"] = pkg
+        seen["dry_run"] = dry_run
+        return MagicMock(video_id="DRY_RUN_1", url="", platform="youtube")
+    monkeypatch.setattr(publish, "_publish_to_youtube", fake_pub)
+    arts = publish.run(Ctx(ws))
+    assert seen["dry_run"] is True and seen["pkg"].title == "T"
+    res = json.loads((ws / arts["publish_result"]).read_text(encoding="utf-8"))
+    assert res["video_id"] == "DRY_RUN_1"
+
+
+def test_publish_ignores_unknown_package_keys(tmp_path, monkeypatch):
+    from shorts_engine.stages import publish
+    ws = _ws(tmp_path)
+    (ws / "publish_package.json").write_text(json.dumps({
+        "title": "T", "description": "D", "tags": ["a"], "category_id": "28",
+        "privacy_status": "unlisted", "thumbnail_path": None,
+        "caption_srt_path": None, "something_new": 1}), encoding="utf-8")
+    monkeypatch.setattr(publish, "_publish_to_youtube",
+                        lambda *a, **k: MagicMock(video_id="v", url="", platform="youtube"))
+    publish.run(Ctx(ws))
+    assert (ws / "publish_result.json").exists()

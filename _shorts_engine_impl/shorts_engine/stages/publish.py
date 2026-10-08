@@ -3,6 +3,7 @@ WITHOUT --publish this runs as dry_run (metadata validation only) — the
 default flow holds at the contact sheet for human review."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from pathlib import Path
@@ -20,7 +21,8 @@ def run(ctx) -> dict[str, str]:
     from video_agent.harness.manifest import PublishPackage
     ws = Path(ctx.workspace)
     raw = json.loads((ws / "publish_package.json").read_text(encoding="utf-8"))
-    pkg = PublishPackage(**raw)
+    known = {f.name for f in dataclasses.fields(PublishPackage)}
+    pkg = PublishPackage(**{k: v for k, v in raw.items() if k in known})
     dry_run = not bool(ctx.flags.get("publish", False))
     result = _publish_to_youtube(pkg, str(ws / "video_short.mp4"), str(ws),
                                  dry_run=dry_run)
