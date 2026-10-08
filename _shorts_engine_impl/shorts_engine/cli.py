@@ -71,6 +71,12 @@ def build_stages() -> list[runner.Stage]:
 
 
 # ── Main CLI ───────────────────────────────────────────────────────────────
+def _safe_print(text: str) -> None:
+    """Write text to stdout without ever raising on characters the console cannot encode."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    sys.stdout.write(text.encode(enc, "replace").decode(enc) + "\n")
+
+
 def _maybe_print_plan(args, workspace) -> None:
     """Print the explanation plan report if --print-plan was given.
 
@@ -83,7 +89,7 @@ def _maybe_print_plan(args, workspace) -> None:
         from shorts_engine.review.plan_report import format_plan
         path = Path(workspace) / "explanation_plan.json"
         if path.exists():
-            print(format_plan(json.loads(path.read_text(encoding="utf-8"))))
+            _safe_print(format_plan(json.loads(path.read_text(encoding="utf-8"))))
     except Exception:
         logger.exception("Could not print explanation plan")
 
@@ -220,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
         marker = "[HOLD]" if manifest.status == "hold_for_review" else "[OK]"
         print(f"{marker} Pipeline completed: {manifest.run_id}")
         print(f"  Status: {manifest.status}")
+        if manifest.status == "hold_for_review" and getattr(manifest, "error", None):
+            _safe_print(f"  Hold reason: {manifest.error}")
 
         # Print artifacts if any
         if manifest.artifacts:

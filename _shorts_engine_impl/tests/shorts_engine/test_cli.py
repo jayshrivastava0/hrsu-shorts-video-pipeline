@@ -316,6 +316,35 @@ class TestPrintPlan:
             assert main(["https://example.com/b", "--print-plan"]) == 0
 
 
+    def test_non_ascii_plan_survives_cp1252_console(self, tmp_path, monkeypatch):
+        import io
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path)
+        (tmp_path / "explanation_plan.json").write_text(
+            json.dumps({"question": "Why model sand?", "status": "verified",
+                        "steps": [{"step_id": "s1", "claim_text": "g", "claims": [
+                            {"text": "H\u2082S \u2265 5 \u2192", "kind": "external_fact",
+                             "verdict": "supported"}]}]}),
+            encoding="utf-8")
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+        monkeypatch.setattr(sys, "stdout", out)
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+        text = raw.getvalue().decode("cp1252")
+        assert "Why model sand?" in text and "H" in text and "[supported]" in text
+
+    def test_hold_prints_reason_from_manifest_error(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path, status="hold_for_review")
+        m.error = "only 2 verified steps"
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b"]) == 0
+        assert "Hold reason: only 2 verified steps" in capsys.readouterr().out
+
+
 class TestCreativeStageBridge:
     """The visuals/assemble stages shell out to the harness agent bridge."""
 
