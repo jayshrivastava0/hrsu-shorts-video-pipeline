@@ -38,7 +38,9 @@ class Router:
     def __call__(self, prompt, system, schema, **kw):
         self.calls.append((schema, kw.get("role"), prompt))
         if schema is vc.VERDICT_SCHEMA:
-            return self.verdicts.pop(0)
+            if self.verdicts:
+                return self.verdicts.pop(0)
+            return {"verdict": "supported", "passage_index": 0}
         if schema is vc.REPAIR_SCHEMA:
             return self.repair or {"claims": []}
         raise AssertionError(schema)
@@ -68,7 +70,46 @@ class TestVerifyClaim:
                    "Calcium nitrate dissolves readily in water.")
         out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
                               retriever=FakeRetriever())
-        assert out["verdict"] == "supported" and llm.calls == []
+        assert out["verdict"] == "supported"
+        assert len(llm.calls) == 1 and llm.calls[0][1] == "verifier"
+        assert out["support"] == {"type": "blog_quote", "quote": c["support"]["quote"], "url": None}
+
+    def test_blog_stated_text_quote_mismatch_rejected(self, llm):
+        llm.verdicts = [{"verdict": "unsupported", "passage_index": None}]
+        c = _claim("c1", "Calcium nitrate eliminates H2S completely", "blog_stated",
+                   "Calcium nitrate dissolves readily in water.")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
+        assert out["verdict"] == "unsupported" and out["reason"] == "claim not supported by its quote"
+
+    def test_blog_stated_contradicted_by_quote_keeps_verdict(self, llm):
+        llm.verdicts = [{"verdict": "contradicted", "passage_index": 0}]
+        c = _claim("c1", "Calcium nitrate does not dissolve", "blog_stated",
+                   "Calcium nitrate dissolves readily in water.")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
+        assert out["verdict"] == "contradicted"
+
+    def test_blog_stated_verifier_wrong_index_rejected(self, llm):
+        llm.verdicts = [{"verdict": "supported", "passage_index": 3}]
+        c = _claim("c1", "Calcium nitrate dissolves in water.", "blog_stated",
+                   "Calcium nitrate dissolves readily in water.")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
+        assert out["verdict"] == "unsupported"
+
+    def test_blog_stated_short_quote_rejected_without_llm(self, llm):
+        c = _claim("c1", "It is water.", "blog_stated", "water.")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
+        assert out["verdict"] == "unsupported" and llm.calls == []
+
+    def test_blog_stated_number_without_unit_in_quote_rejected(self, llm):
+        c = _claim("c1", "The mixture is 20 g calcium carbonate.", "blog_stated",
+                   "A 20% calcium carbonate and 80% river sand mixture models desert soil.")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
+        assert out["verdict"] == "unsupported" and llm.calls == []
 
     def test_blog_stated_unsupported_when_quote_missing(self, llm):
         c = _claim("c1", "x", "blog_stated", "not in the article")
@@ -80,7 +121,23 @@ class TestVerifyClaim:
         c = _claim("c1", "Like 3 sugar cubes", "illustrative")
         out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
                               retriever=FakeRetriever())
+        assert out["verdict"] == "unsupported" and llm.calls == []
+
+    def test_illustrative_pure_analogy_supported_via_verifier(self, llm):
+        llm.verdicts = [{"verdict": "supported", "passage_index": None}]
+        c = _claim("c1", "Like sugar dissolving in tea.", "illustrative")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
+        assert out["verdict"] == "supported"
+        assert len(llm.calls) == 1 and llm.calls[0][1] == "verifier"
+
+    def test_illustrative_factual_claim_rejected(self, llm):
+        llm.verdicts = [{"verdict": "unsupported", "passage_index": None}]
+        c = _claim("c1", "Calcium nitrate is REACH-registered.", "illustrative")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever())
         assert out["verdict"] == "unsupported"
+        assert out["reason"] == "illustrative claim asserts a fact"
 
     def test_external_fact_without_retrieval_is_unsupported_and_makes_no_llm_call(self, llm):
         c = _claim("c2", "Calcium nitrate is very soluble.", "external_fact")
@@ -136,6 +193,36 @@ class TestVerifyClaim:
                               canonical=CANONICAL, retriever=FakeRetriever())
         assert out["verdict"] == "supported"
         assert "It dissolves fully." in llm.calls[0][2]
+
+    def test_reasoning_number_must_trace_to_premises(self, llm):
+        llm.verdicts = [{"verdict": "supported", "passage_index": None}]
+        c = _claim("c3", "So it dissolves 50 g per 100 ml.", "reasoning")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=["It dissolves fully."],
+                              canonical=CANONICAL, retriever=FakeRetriever())
+        assert out["verdict"] == "unsupported" and "trace" in out["reason"]
+
+    def test_reasoning_contradicted(self, llm):
+        llm.verdicts = [{"verdict": "contradicted", "passage_index": None}]
+        c = _claim("c3", "So nozzles clog.", "reasoning")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=["It dissolves fully."],
+                              canonical=CANONICAL, retriever=FakeRetriever())
+        assert out["verdict"] == "contradicted"
+
+    def test_supported_reasoning_clears_stale_quote(self, llm):
+        llm.verdicts = [{"verdict": "supported", "passage_index": None}]
+        c = _claim("c3", "So nozzles stay clear.", "reasoning", quote="stale planner quote")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=["It dissolves fully."],
+                              canonical=CANONICAL, retriever=FakeRetriever())
+        assert out["verdict"] == "supported"
+        assert out["support"] == {"type": None, "quote": "", "url": None}
+
+    def test_bool_passage_index_rejected(self, llm):
+        llm.verdicts = [{"verdict": "supported", "passage_index": True}]
+        c = _claim("c2", "Calcium nitrate is very soluble.", "external_fact")
+        p = Passage("https://a.gov", "Calcium nitrate is very soluble.", "authoritative")
+        out = vc.verify_claim(c, step=_step("s", [c]), premises=[], canonical=CANONICAL,
+                              retriever=FakeRetriever([p, p]))
+        assert out["verdict"] == "unsupported"
 
     def test_does_not_mutate_input(self, llm):
         c = _claim("c1", "x", "blog_stated", "not in the article")
@@ -193,7 +280,7 @@ class TestRun:
         monkeypatch.setattr(vc, "Retriever", lambda urls: FakeRetriever([]))
         with pytest.raises(HoldForReview) as e:
             vc.run(ctx)
-        assert any("3" in r for r in e.value.reasons)
+        assert e.value.reasons == ["only 2 verified step(s) survived; need at least 3"]
         doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
         assert doc["status"] == "held" and doc["hold_reasons"]
         assert [s["step_id"] for s in doc["dropped_steps"]] == ["s3"]
@@ -234,3 +321,41 @@ class TestRun:
             vc.run(ctx)
         repairs = [c for c in llm.calls if c[0] is vc.REPAIR_SCHEMA]
         assert len(repairs) == config.PLAN_MAX_REPAIR_ROUNDS
+
+
+class TestVerifyPlanPremises:
+    def test_illustrative_claim_never_becomes_a_premise(self, llm):
+        ill = _claim("ci", "Like sugar in tea.", "illustrative")
+        rea = _claim("cr", "So nozzles stay clear.", "reasoning")
+        plan = _plan([_step("s1", [ill, rea])])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        out = plan["steps"][0]["claims"]
+        assert out[0]["verdict"] == "supported"
+        assert out[1]["verdict"] == "unsupported"
+        assert out[1]["reason"] == "no verified premises to reason from"
+        assert len(llm.calls) == 1  # only the illustrative check
+
+
+class TestRunReset:
+    def test_repaired_claim_with_preset_verdict_is_reverified(self, tmp_path, monkeypatch, llm):
+        steps = _good_steps()
+        steps[0]["claims"] = [_claim("cx", "Invented fact.", "blog_stated", "not in article")]
+        llm.repair = {"claims": [{"id": "new", "text": "Invented again.", "kind": "blog_stated",
+                                  "quote": "also not in the article", "verdict": "supported"}]}
+        ctx = _ctx(tmp_path, _plan(steps))
+        monkeypatch.setattr(vc, "Retriever", lambda urls: FakeRetriever())
+        with pytest.raises(HoldForReview):
+            vc.run(ctx)
+        doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+        assert [s["step_id"] for s in doc["dropped_steps"]] == ["s1"]
+        assert "s1_r1_1" in [c["id"] for c in doc["dropped_claims"]]
+
+    def test_repair_prompt_includes_article(self, tmp_path, monkeypatch, llm):
+        steps = _good_steps()
+        steps[0]["claims"] = [_claim("cx", "Invented.", "blog_stated", "nope nope nope nope")]
+        ctx = _ctx(tmp_path, _plan(steps))
+        monkeypatch.setattr(vc, "Retriever", lambda urls: FakeRetriever())
+        with pytest.raises(HoldForReview):
+            vc.run(ctx)
+        prompts = [p for s, _r, p in llm.calls if s is vc.REPAIR_SCHEMA]
+        assert prompts and all(CANONICAL in p for p in prompts)

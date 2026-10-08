@@ -27,6 +27,8 @@ from shorts_engine.stages.facts import locate_verbatim
 
 logger = logging.getLogger(__name__)
 
+MIN_QUOTE_WORDS = 4
+
 VERDICT_SCHEMA: dict = {
     "type": "object",
     "properties": {"verdict": {"enum": list(explanation.VERDICTS)},
@@ -53,6 +55,12 @@ _LOGIC_SYSTEM = (
     "'supported' only if the conclusion follows from the premises alone, 'contradicted' if "
     "the premises imply the opposite, otherwise 'unsupported'. Set passage_index to null."
 )
+_ILLUSTRATIVE_SYSTEM = (
+    "You are a strict editor. You get ONE sentence labelled as an illustration. Answer "
+    "'supported' ONLY if it is a pure analogy or illustration that makes no factual assertion "
+    "about the subject chemical, product, company, regulation or process. Otherwise answer "
+    "'unsupported'. Set passage_index to null."
+)
 _REPAIR_SYSTEM = (
     "You repair one step of an explainer plan. Some of its claims failed verification. "
     "Return replacement claims (same schema) that convey the step using only facts you are "
@@ -71,6 +79,10 @@ def _result(claim: dict, verdict: str, reason: str, support: dict | None = None)
     return out
 
 
+def _valid_index(idx, n: int) -> bool:
+    return isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < n
+
+
 def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str,
                  retriever, local_only: bool = False) -> dict:
     """Return a copy of `claim` with `verdict`, `reason` and (if sourced) `support` set."""
@@ -80,15 +92,29 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
         quote = claim["support"]["quote"]
         if not quote or locate_verbatim(quote, canonical) is None:
             return _result(claim, "unsupported", "quote not found verbatim in the article")
+        if len(quote.split()) < MIN_QUOTE_WORDS:
+            return _result(claim, "unsupported",
+                           f"quote too short (need at least {MIN_QUOTE_WORDS} words)")
         errs = explanation.gate_claim_numbers(text, quote, terms)
         if errs:
             return _result(claim, "unsupported", "; ".join(errs))
-        return _result(claim, "supported", "verbatim quote found")
+        res = text_llm.generate_schema_json(
+            f"Claim: {text}\n\nPassages:\n[0] (article) {quote}", _VERIFIER_SYSTEM,
+            VERDICT_SCHEMA, local_only=local_only, role="verifier")
+        if res["verdict"] != "supported" or not _valid_index(res.get("passage_index"), 1):
+            verdict = res["verdict"] if res["verdict"] != "supported" else "unsupported"
+            return _result(claim, verdict, "claim not supported by its quote")
+        return _result(claim, "supported", "verbatim quote found and supports the claim")
 
     if kind == "illustrative":
         if explanation.has_number(text):
             return _result(claim, "unsupported", "illustrative claims must not contain numbers")
-        return _result(claim, "supported", "illustrative, no numbers")
+        res = text_llm.generate_schema_json(
+            f"Sentence: {text}", _ILLUSTRATIVE_SYSTEM, VERDICT_SCHEMA,
+            local_only=local_only, role="verifier")
+        if res["verdict"] != "supported":
+            return _result(claim, "unsupported", "illustrative claim asserts a fact")
+        return _result(claim, "supported", "pure illustration, no numbers or facts")
 
     if kind == "external_fact":
         passages = retriever.retrieve(text)
@@ -101,7 +127,7 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
         if res["verdict"] != "supported":
             return _result(claim, res["verdict"], "verifier: not supported by retrieved passages")
         idx = res.get("passage_index")
-        if not isinstance(idx, int) or not 0 <= idx < len(passages):
+        if not _valid_index(idx, len(passages)):
             return _result(claim, "unsupported", "verifier cited no valid passage")
         passage = passages[idx]
         errs = explanation.gate_claim_numbers(text, passage.text, terms)
@@ -122,7 +148,8 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
         errs = explanation.gate_claim_numbers(text, " ".join(premises), terms)
         if errs:
             return _result(claim, "unsupported", "; ".join(errs))
-        return _result(claim, "supported", "follows from verified premises")
+        return _result(claim, "supported", "follows from verified premises",
+                       {"type": None, "quote": "", "url": None})
 
     return _result(claim, "unsupported", f"unknown claim kind {kind!r}")
 
@@ -136,14 +163,17 @@ def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = Fal
                 step["claims"][i] = verify_claim(
                     claim, step=step, premises=premises, canonical=canonical,
                     retriever=retriever, local_only=local_only)
-            if step["claims"][i]["verdict"] == "supported":
+            if (step["claims"][i]["verdict"] == "supported"
+                    and step["claims"][i]["kind"] != "illustrative"):
                 premises.append(step["claims"][i]["text"])
 
 
-def _repair_step(plan: dict, step: dict, round_no: int, local_only: bool) -> None:
+def _repair_step(plan: dict, step: dict, round_no: int, local_only: bool,
+                 canonical: str) -> None:
     failed = [c for c in step["claims"] if c["verdict"] != "supported"]
     kept = [c for c in step["claims"] if c["verdict"] == "supported"]
     prompt = (
+        f"Article:\n{canonical}\n\n"
         f"Question: {plan['question']}\nStep goal: {step['claim_text']}\n"
         "Supported claims (keep as they are):\n"
         + "\n".join(f"- {c['text']}" for c in kept)
@@ -194,7 +224,7 @@ def run(ctx) -> dict[str, str]:
         if not failing:
             break
         for step in failing:
-            _repair_step(plan, step, round_no, local_only)
+            _repair_step(plan, step, round_no, local_only, canonical)
         verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
     _prune(plan)
 
