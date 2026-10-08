@@ -21,11 +21,12 @@ import logging
 import re
 from pathlib import Path
 
-from shorts_engine import config
+from shorts_engine import config, explanation
 from shorts_engine.brand import BrandFacts, load_brand_facts
 from shorts_engine.errors import EngineError, HoldForReview
 from shorts_engine.llm import text_llm
 from shorts_engine.stages.facts import normalize_for_match
+from shorts_engine.stages.verify_claims import MIN_QUOTE_WORDS
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,11 @@ def _allowed_pool(fact_ids: list[str], factsheet: dict, brand: BrandFacts,
     """Normalized, comma-stripped text a beat's numbers may come from: the verbatim quotes of
     its fact_ids, referenced brand differentiators, every CTA line, the domain, plus `extra`
     (the verified claims of the beat's plan step)."""
+    return normalize_for_match(_pool_text(fact_ids, factsheet, brand, extra)).replace(",", "")
+
+
+def _pool_text(fact_ids: list[str], factsheet: dict, brand: BrandFacts, extra: str = "") -> str:
+    """The raw (un-normalized) allowed-pool text; see _allowed_pool."""
     facts_by_id = {f["id"]: f for f in factsheet.get("facts", [])}
     diffs_by_id = {d["id"]: d["text"] for d in brand.differentiators}
     parts: list[str] = []
@@ -58,25 +64,47 @@ def _allowed_pool(fact_ids: list[str], factsheet: dict, brand: BrandFacts,
     parts.append(brand.domain)
     if extra:
         parts.append(extra)
-    return normalize_for_match(" | ".join(parts)).replace(",", "")
+    return " | ".join(parts)
+
+
+_UNIT_ERR_NUM_RE = re.compile(r"(?:for|number) '([^']+)'")
 
 
 def gate_numbers(beats: list[dict], factsheet: dict, brand: BrandFacts,
-                 extra_by_beat: dict[str, str] | None = None) -> list[str]:
+                 extra_by_beat: dict[str, str] | None = None,
+                 terms_by_beat: dict[str, list[dict]] | None = None) -> list[str]:
     """Every numeric token in a beat's narration, card_text and diagram_labels must appear
-    as a standalone number in that beat's allowed pool (see _allowed_pool).
-    `extra_by_beat` maps beat name -> extra allowed text (verified plan claims)."""
+    as a standalone number in that beat's allowed pool (see _allowed_pool). Every number in
+    the narration must ALSO carry a unit -- known, or defined in the beat's plan-step terms --
+    that the pool ties to that same number (explanation.gate_claim_numbers). One error per
+    offending token. `extra_by_beat` maps beat name -> extra allowed text (verified plan
+    claims); `terms_by_beat` maps beat name -> that plan step's `terms`."""
     errs: list[str] = []
     for b in beats:
-        extra = (extra_by_beat or {}).get(b.get("beat"), "")
-        pool = _allowed_pool(b.get("fact_ids", []), factsheet, brand, extra)
+        beat = b.get("beat")
+        extra = (extra_by_beat or {}).get(beat, "")
+        fact_ids = b.get("fact_ids", [])
+        pool = _allowed_pool(fact_ids, factsheet, brand, extra)
         sources = [("narration", b.get("narration", "")), ("card_text", b.get("card_text", ""))]
         sources += [("diagram label", label) for label in b.get("diagram_labels") or []]
+        untraced_in_narration: set[str] = set()
         for name, text in sources:
             for tok in extract_numeric_tokens(text):
                 if not re.search(rf"(?<![\d.]){re.escape(tok)}(?![\d])", pool):
-                    errs.append(f"numbers[{b.get('beat')}]: {tok!r} in {name} does not "
+                    errs.append(f"numbers[{beat}]: {tok!r} in {name} does not "
                                 f"trace to any referenced fact")
+                    if name == "narration":
+                        untraced_in_narration.add(tok)
+        reported = set(untraced_in_narration)
+        for e in explanation.gate_claim_numbers(
+                b.get("narration", ""), _pool_text(fact_ids, factsheet, brand, extra),
+                (terms_by_beat or {}).get(beat)):
+            m = _UNIT_ERR_NUM_RE.search(e)
+            num = m.group(1) if m else e
+            if num in reported:
+                continue
+            reported.add(num)
+            errs.append(f"numbers[{beat}]: {e} (narration)")
     return errs
 
 
@@ -149,7 +177,8 @@ def gate_differentiator(beats: list[dict], brand: BrandFacts) -> list[str]:
 
 # ── run_gates ────────────────────────────────────────────────────────────────
 def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts,
-              extra_by_beat: dict[str, str] | None = None) -> list[str]:
+              extra_by_beat: dict[str, str] | None = None,
+              terms_by_beat: dict[str, list[dict]] | None = None) -> list[str]:
     """Structure check (>= MIN_BEATS beats, final purpose "cta", unique names) then the
     content gates. A structural mismatch short-circuits with a single error."""
     if len(beats) < config.MIN_BEATS:
@@ -160,7 +189,7 @@ def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts,
     dupes = sorted({n for n in names if names.count(n) > 1})
     if dupes:
         return [f"structure: beat names must be unique, found duplicate(s): {dupes}"]
-    return (gate_numbers(beats, factsheet, brand, extra_by_beat)
+    return (gate_numbers(beats, factsheet, brand, extra_by_beat, terms_by_beat)
             + gate_banned(beats, brand)
             + gate_total_duration(beats)
             + gate_card_text(beats)
@@ -202,6 +231,8 @@ CRITIQUE_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
+_NO_NUMBERS_HOOK_CTA = "The hook and the CTA must not contain any numbers."
+
 _WRITER_SYSTEM = (
     "You write the narration for an explainer video for procurement managers sourcing "
     "industrial chemicals. Voice: concrete, technical, zero hype, like a good teacher. You "
@@ -210,7 +241,7 @@ _WRITER_SYSTEM = (
     "about it can follow: define each term the first time you use it, and say why the step "
     "leads to the next. Convey ONLY the verified claims listed for each step -- never add a "
     "new fact, number or unit. The last item is the CTA: state the takeaway and cite the "
-    "brand differentiator. card_text is at most 7 words and must not repeat the narration. "
+    "brand differentiator. " + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
     "Length follows the explanation: there is a 30 second floor and no maximum, and you must "
     "never pad with filler."
 )
@@ -234,7 +265,8 @@ def _labels(entities: list[str]) -> list[str]:
 def _fact_ids_for_step(step: dict, factsheet: dict) -> list[str]:
     """Ids of factsheet facts whose verbatim quote overlaps a supported blog quote of the step."""
     quotes = [normalize_for_match(c["support"]["quote"]) for c in step["claims"]
-              if c.get("support", {}).get("type") == "blog_quote" and c["support"]["quote"]]
+              if c.get("support", {}).get("type") == "blog_quote"
+              and len((c["support"]["quote"] or "").split()) >= MIN_QUOTE_WORDS]
     ids = []
     for f in factsheet.get("facts", []):
         fq = normalize_for_match(f["verbatim_quote"])
@@ -253,6 +285,11 @@ def extra_pool_by_beat(plan: dict) -> dict[str, str]:
                 parts += [c["text"], c.get("support", {}).get("quote", "")]
         pools[f"step_{i}"] = " | ".join(p for p in parts if p)
     return pools
+
+
+def terms_by_step_beat(plan: dict) -> dict[str, list[dict]]:
+    """beat name (step_N) -> that plan step's defined terms (for the number+unit gate)."""
+    return {f"step_{i}": step.get("terms", []) for i, step in enumerate(plan["steps"], start=1)}
 
 
 def build_beats(doc: dict, plan: dict, factsheet: dict,
@@ -279,7 +316,8 @@ def build_beats(doc: dict, plan: dict, factsheet: dict,
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
-                   gate_errors: list[str] | None = None, revise_notes: str = "") -> str:
+                   gate_errors: list[str] | None = None, revise_notes: str = "",
+                   previous_beats: list[dict] | None = None) -> str:
     blocks = []
     for step in plan["steps"]:
         claims = "\n".join(f"  - {c['text']}" for c in step["claims"]
@@ -300,12 +338,16 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
         f"Return a hook, exactly one narration per step using these step_ids in this order "
         f"{[s['step_id'] for s in plan['steps']]}, and a cta. Total narration must reach at "
         f"least {round(config.TOTAL_MIN_S * config.WORDS_PER_SECOND)} words (no maximum), "
-        f"through explanation, never filler.\n\nWrite the script now as JSON."
+        f"through explanation, never filler. {_NO_NUMBERS_HOOK_CTA}\n\n"
+        f"Write the script now as JSON."
     )
     if gate_errors:
         prompt += ("\n\nYour previous draft FAILED these checks -- fix every one:\n"
                    + "\n".join(f"- {e}" for e in gate_errors))
     if revise_notes:
+        if previous_beats:
+            prompt += ("\n\nThe reviewer scored this previous draft:\n"
+                       + "\n".join(f"- {b['beat']}: {b['narration']}" for b in previous_beats))
         prompt += f"\n\nReviewer notes to address:\n{revise_notes}"
     return prompt
 
@@ -320,16 +362,20 @@ def _critic_prompt(plan: dict, beats: list[dict]) -> str:
 
 # ── Writing loop ─────────────────────────────────────────────────────────────
 def _write_until_gates_pass(plan, post_meta, factsheet, brand, extra, local_only, *,
-                            revise_notes: str = "") -> tuple[list[dict], int]:
+                            revise_notes: str = "",
+                            previous_beats: list[dict] | None = None
+                            ) -> tuple[list[dict], int]:
+    terms = terms_by_step_beat(plan)
     errors: list[str] = []
     for attempt in range(1, config.LLM_MAX_RETRIES + 1):
         doc = text_llm.generate_schema_json(
             _writer_prompt(plan, post_meta, brand, gate_errors=errors or None,
-                           revise_notes=revise_notes),
+                           revise_notes=revise_notes, previous_beats=previous_beats),
             _WRITER_SYSTEM, SCRIPT_SCHEMA, local_only=local_only, role="writer")
         beats, errors = build_beats(doc, plan, factsheet, brand)
         if not errors:
-            errors = run_gates(beats, factsheet, brand, extra_by_beat=extra)
+            errors = run_gates(beats, factsheet, brand, extra_by_beat=extra,
+                               terms_by_beat=terms)
         if not errors:
             return beats, attempt
         logger.warning(f"script gates failed (attempt {attempt}/{config.LLM_MAX_RETRIES}): "
@@ -373,7 +419,8 @@ def run(ctx) -> dict[str, str]:
         logger.info(f"critique below bar ({lowest}), rewrite {rewrites}: "
                     f"{critique['revise_notes']}")
         beats, n = _write_until_gates_pass(plan, post_meta, factsheet, brand, extra,
-                                           local_only, revise_notes=critique["revise_notes"])
+                                           local_only, revise_notes=critique["revise_notes"],
+                                           previous_beats=beats)
         attempts += n
 
     payload = {"beats": beats, "critique": critique, "attempts": attempts,

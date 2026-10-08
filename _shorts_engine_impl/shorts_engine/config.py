@@ -62,9 +62,9 @@ except ImportError as e:
 # Per-PURPOSE pacing guidance (not per fixed beat name/position) -- beats are
 # now free-form in count/order/naming (2026-08-26 creative-flow redesign); a
 # beat's `purpose` tag is what carries pacing intent forward, consumed by
-# shorts_engine.stages.script (gate_word_budget, gate_total_duration,
-# apply_word_topup, the writer prompt's beat rules) and shotlist.py (type
-# suggestion, CTA-length cap). "other" is the fallback for any beat whose
+# shotlist.py (type suggestion, CTA-length cap). The SCRIPT stage no longer
+# enforces per-purpose word budgets (2026-10-08 explanation-first redesign:
+# length follows the verified plan, only the TOTAL_MIN_S floor is gated). "other" is the fallback for any beat whose
 # purpose isn't one of the five named ones.
 PURPOSE_TEMPLATE: dict[str, dict] = {
     "hook":      {"min_s": 2.0, "max_s": 4.0},

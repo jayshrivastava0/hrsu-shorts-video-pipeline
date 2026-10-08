@@ -111,7 +111,7 @@ def _llm_router(prompt, system, schema, **kw):
         return {"match_score": 9, "legible": True, "issues": []}
     if "score" in props:         # sourcing judge match
         return {"score": 8, "reason": "matches", "focal_hint": "center"}
-    return CRITIQUE
+    raise AssertionError(f"unexpected schema {schema}")
 
 
 class _EmptyRetriever:

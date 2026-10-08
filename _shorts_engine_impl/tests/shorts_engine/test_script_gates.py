@@ -168,6 +168,74 @@ class TestGateNumbers:
         assert gate_numbers([], FACTSHEET, BRAND) == []
 
 
+class TestGateNumberUnits:
+    """Narration numbers must also carry a unit (known, or defined in the beat's
+    plan-step terms) that the beat's allowed pool ties to that same number."""
+
+    FS = {"facts": FACTSHEET["facts"] + [
+        {"id": "f9", "verbatim_quote": "add 5 kg of powder per batch", "value": "5",
+         "unit": "kg", "tags": [], "citation_marker": None},
+        {"id": "f10", "verbatim_quote": "readings of 425 EC were recorded", "value": "425",
+         "unit": "EC", "tags": [], "citation_marker": None},
+    ]}
+
+    def _proof(self, narration, fact_ids=("f9",)):
+        return _beats(**{"3": {"narration": narration, "fact_ids": list(fact_ids)}})
+
+    def test_unit_not_tied_to_number_in_source_fails(self) -> None:
+        errs = gate_numbers(self._proof("Add 5 g of powder per batch."), self.FS, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("numbers[proof]:") and "'g'" in errs[0]
+
+    def test_bare_number_without_unit_fails(self) -> None:
+        errs = gate_numbers(self._proof("The batch count is 5."), self.FS, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("numbers[proof]:") and "no unit" in errs[0]
+
+    def test_correct_range_with_unit_passes(self) -> None:
+        beats = self._proof("A dosage range of 1.5 to 3 kg per cubic meter works.", ["f1"])
+        assert gate_numbers(beats, self.FS, BRAND) == []
+
+    def test_correct_number_and_unit_passes(self) -> None:
+        assert gate_numbers(self._proof("Add 5 kg of powder per batch."), self.FS, BRAND) == []
+
+    def test_unknown_unit_fails_without_term(self) -> None:
+        errs = gate_numbers(self._proof("Readings reach 425 EC.", ["f10"]), self.FS, BRAND)
+        assert len(errs) == 1 and "unknown unit" in errs[0]
+
+    def test_term_defined_unit_passes_when_pair_is_in_pool(self) -> None:
+        terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
+        beats = self._proof("Readings reach 425 EC.", ["f10"])
+        assert gate_numbers(beats, self.FS, BRAND, terms_by_beat=terms) == []
+
+    def test_term_defined_unit_fails_when_pair_is_not_in_pool(self) -> None:
+        fs = {"facts": [{"id": "f11", "verbatim_quote": "readings of 425 dS/m were recorded",
+                         "value": "425", "unit": "dS/m", "tags": [], "citation_marker": None}]}
+        terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
+        beats = self._proof("Readings reach 425 EC.", ["f11"])
+        errs = gate_numbers(beats, fs, BRAND, terms_by_beat=terms)
+        assert len(errs) == 1 and "'ec'" in errs[0]
+
+    def test_unit_check_covers_hook_and_cta(self) -> None:
+        brand = BrandFacts(company="HRSU", domain="hrsuindore.com", tagline="t",
+                           differentiators=[{"id": "b_purity", "text": "99.9% purity powder"}],
+                           cta_lines=["Visit hrsuindore.com"], banned_claims=[])
+        beats = _beats(**{"4": {"narration": "HRSU delivers 99.9 kg purity powder. Visit "
+                                             "hrsuindore.com today."}})
+        errs = gate_numbers(beats, FACTSHEET, brand)
+        assert len(errs) == 1 and errs[0].startswith("numbers[cta]:")
+
+    def test_untraced_number_reported_once(self) -> None:
+        errs = gate_numbers(self._proof("Reduces nitrate by 150 mg per liter."), self.FS, BRAND)
+        assert len(errs) == 1 and "150" in errs[0]
+
+    def test_run_gates_forwards_terms_by_beat(self) -> None:
+        beats = self._proof("Readings reach 425 EC. " + "More words here. " * 3, ["f10"])
+        terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
+        assert any("unknown unit" in e for e in run_gates(beats, self.FS, BRAND))
+        assert run_gates(beats, self.FS, BRAND, terms_by_beat=terms) == []
+
+
 class TestGateBanned:
     """Rejects SCRIPT_BANNED_PHRASES (AI-isms), FEAR_FILLER_PATTERNS (hype /
     fear marketing), and brand.banned_claims (hard-blocked claims) anywhere

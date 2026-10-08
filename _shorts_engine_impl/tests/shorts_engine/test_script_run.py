@@ -86,10 +86,11 @@ def _ctx(tmp_path: Path, plan=None) -> StageContext:
 class Router:
     def __init__(self, docs, critiques):
         self.docs, self.critiques = list(docs), list(critiques)
-        self.writer_prompts, self.roles = [], []
+        self.writer_prompts, self.roles, self.local_only = [], [], []
 
     def __call__(self, prompt, system, schema, **kw):
         self.roles.append(kw.get("role"))
+        self.local_only.append(kw.get("local_only"))
         if schema is script_stage.SCRIPT_SCHEMA:
             self.writer_prompts.append(prompt)
             return self.docs.pop(0) if len(self.docs) > 1 else self.docs[0]
@@ -251,8 +252,100 @@ class TestCriticLoop:
 
     def test_still_low_after_max_rewrites_holds(self, tmp_path, monkeypatch):
         ctx = _ctx(tmp_path)
-        _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
+        router = _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
         with pytest.raises(HoldForReview) as e:
             script_stage.run(ctx)
         assert "critique below bar" in e.value.reasons[0]
         assert not (ctx.workspace / "script.json").exists()
+        assert router.roles.count("critic") == config.SCRIPT_MAX_REWRITES + 1
+        assert len(router.writer_prompts) == 1 + config.SCRIPT_MAX_REWRITES
+
+    def test_critic_never_called_when_writer_never_passes_gates(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        bad["steps"][1]["narration"] += " It drains 150 liters."
+        router = _install(monkeypatch, [bad], [GOOD_CRITIQUE])
+        with pytest.raises(HoldForReview):
+            script_stage.run(ctx)
+        assert "critic" not in router.roles
+
+    def test_rewrite_that_always_fails_gates_holds(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        bad["steps"][1]["narration"] += " It drains 150 liters."
+        router = _install(monkeypatch, [_doc(), bad], [LOW_CRITIQUE])
+        with pytest.raises(HoldForReview) as e:
+            script_stage.run(ctx)
+        assert any("150" in r for r in e.value.reasons)
+        assert router.roles.count("critic") == 1
+        assert not (ctx.workspace / "script.json").exists()
+
+    def test_rewrite_that_fails_a_gate_once_then_recovers(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        bad["steps"][1]["narration"] += " It drains 150 liters."
+        _install(monkeypatch, [_doc(), bad, _doc()], [LOW_CRITIQUE, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        out = json.loads((ctx.workspace / "script.json").read_text(encoding="utf-8"))
+        assert out["rewrites"] == 1
+        assert out["critique"] == GOOD_CRITIQUE
+        assert out["attempts"] == 3
+
+    def test_rewrite_prompt_includes_previous_draft_narration(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        first = _doc()
+        first["steps"][1]["narration"] = ("Sandy soil drains nutrients quickly, UNIQUE-DRAFT-MARKER. "
+                                          + " ".join(["word"] * 12) + ".")
+        router = _install(monkeypatch, [first, _doc()], [LOW_CRITIQUE, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert "UNIQUE-DRAFT-MARKER" not in router.writer_prompts[0]
+        assert "UNIQUE-DRAFT-MARKER" in router.writer_prompts[1]
+        assert "step_2" in router.writer_prompts[1]
+
+
+class TestLocalOnlyFlag:
+    def test_local_only_forwarded_to_every_llm_call(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        ctx.flags["local_only"] = True
+        router = _install(monkeypatch, [_doc()], [LOW_CRITIQUE, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert len(router.local_only) >= 3
+        assert all(v is True for v in router.local_only)
+
+    def test_local_only_defaults_to_false(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [_doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert router.local_only and all(v is False for v in router.local_only)
+
+
+class TestCritiqueSchemaBounds:
+    @pytest.mark.parametrize("bad", [
+        dict(GOOD_CRITIQUE, coherence_score=11),
+        dict(GOOD_CRITIQUE, actionable_score=-1),
+        dict(GOOD_CRITIQUE, surprise="x"),
+    ])
+    def test_rejects_out_of_range_and_extra_keys(self, bad):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(bad, script_stage.CRITIQUE_SCHEMA)
+
+
+class TestBeatDetails:
+    def test_short_blog_quote_attaches_no_fact(self):
+        plan = _plan()
+        fs = {"facts": FACTSHEET["facts"] + [
+            {"id": "f2", "verbatim_quote": "river sand", "value": "", "unit": "",
+             "procurement_significance": 1, "citation_marker": None}]}
+        plan["steps"][0]["claims"][0]["support"]["quote"] = "river sand"
+        beats, errs = script_stage.build_beats(_doc(), plan, fs, load_brand_facts())
+        assert errs == [] and beats[1]["fact_ids"] == []
+
+    def test_diagram_labels_capped_at_four(self):
+        plan = _plan()
+        plan["steps"][1]["visual_intent"]["entities"] = ["a", "b", "c", "d", "e"]
+        beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+        assert beats[2]["diagram_labels"] == ["a", "b", "c", "d"]
+
+    def test_writer_prompt_forbids_numbers_in_hook_and_cta(self):
+        prompt = script_stage._writer_prompt(_plan(), {"title": "T"}, load_brand_facts())
+        assert "The hook and the CTA must not contain any numbers." in prompt
