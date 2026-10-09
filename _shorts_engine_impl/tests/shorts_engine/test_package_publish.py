@@ -78,6 +78,67 @@ class TestPackage:
         assert seen["br"]["region"] == "eu"
 
 
+def _plan_claim(cid, text, kind="blog_stated", verdict="supported"):
+    return {"id": cid, "text": text, "kind": kind, "verdict": verdict,
+            "support": {"type": None, "quote": "", "url": None}, "needs_number": False}
+
+
+def _write_plan(ws, status="verified"):
+    plan = {"question": "q", "status": status, "payoff": {"takeaway": "t",
+                                                          "differentiator_id": "b_purity"},
+            "steps": [
+                {"step_id": "s1", "claims": [
+                    _plan_claim("c1", "Plants dose 1.5 to 3 kg per cubic meter."),
+                    _plan_claim("c0", "Like a sponge soaking water.", kind="illustrative"),
+                    _plan_claim("cx", "An unsupported leap.", verdict="unsupported")]},
+                {"step_id": "s2", "claims": [
+                    _plan_claim("c2", "Bacteria convert nitrate to nitrogen gas.",
+                                kind="external_fact")]},
+                {"step_id": "s3", "claims": [
+                    _plan_claim("c3", "So the dose is tuned per site.", kind="reasoning"),
+                    _plan_claim("c4", "A fourth verified claim.", kind="reasoning")]},
+            ]}
+    (ws / "explanation_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+
+class TestPackageFromVerifiedPlan:
+    """Published metadata comes from the verified plan's supported claims, never from
+    the factsheet's unverified claim_summary paraphrases (review I2)."""
+
+    def _run(self, ws, monkeypatch):
+        from shorts_engine.stages import package
+        seen = {}
+        monkeypatch.setattr(package, "_package_for_youtube",
+                            lambda sb, br, w: (seen.update(h=sb.hero_claim)
+                                               or MagicMock(title="T", description="", tags=[],
+                                                            category_id="28",
+                                                            privacy_status="unlisted",
+                                                            thumbnail_path=None,
+                                                            caption_srt_path=None)))
+        monkeypatch.setattr(package, "probe_duration", lambda p: 45.0)
+        package.run(Ctx(ws))
+        return seen["h"], (ws / "linkedin_caption.txt").read_text(encoding="utf-8")
+
+    def test_caption_and_stat_use_supported_claims_in_chain_order(self, tmp_path, monkeypatch):
+        ws = _ws(tmp_path)
+        _write_plan(ws)
+        hero, cap = self._run(ws, monkeypatch)
+        assert hero.stat == "Plants dose 1.5 to 3 kg per cubic meter."
+        assert "- Plants dose 1.5 to 3 kg per cubic meter." in cap
+        assert "- Bacteria convert nitrate to nitrogen gas." in cap
+        assert "- So the dose is tuned per site." in cap
+        assert "A fourth verified claim." not in cap          # first 3 only
+        assert "sponge" not in cap and "unsupported leap" not in cap
+        assert "dosing window" not in cap and "92 percent" not in cap
+
+    def test_unverified_plan_never_falls_back_to_factsheet(self, tmp_path, monkeypatch):
+        ws = _ws(tmp_path)
+        _write_plan(ws, status="held")
+        hero, cap = self._run(ws, monkeypatch)
+        assert hero.stat == ""
+        assert "dosing window" not in cap and "92 percent" not in cap
+
+
 class TestPublish:
     def _pkg(self, ws):
         (ws / "publish_package.json").write_text(json.dumps({

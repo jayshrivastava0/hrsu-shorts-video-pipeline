@@ -26,6 +26,26 @@ def _package_for_youtube(sb, blog_record: dict, workspace: str):
     return package_for_youtube(sb, blog_record, workspace)
 
 
+def _key_points(ws: Path, factsheet: dict) -> list[str]:
+    """Up to 3 lines for the published "Key insight" stat and LinkedIn bullets.
+
+    With explanation_plan.json present, ONLY a verified plan's supported, non-illustrative
+    claim texts (in chain order) are used -- never the factsheet's unverified
+    claim_summary paraphrases; a plan that is not verified yields nothing. The factsheet
+    fallback is kept only for legacy runs that have no plan file at all."""
+    plan_path = ws / "explanation_plan.json"
+    if plan_path.exists():
+        from shorts_engine.explanation import supported_claims
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        if plan.get("status") != "verified":
+            return []
+        return [c["text"] for s in plan.get("steps") or [] for c in supported_claims(s)
+                if c.get("kind") != "illustrative" and c.get("text")][:3]
+    top = sorted(factsheet.get("facts", []),
+                 key=lambda f: -int(f.get("procurement_significance", 0)))[:3]
+    return [f["claim_summary"] for f in top]
+
+
 def _words_to_srt(words: list[dict], out_path: Path) -> Path:
     from shorts_engine.stages.assemble import group_words_into_cues
     def ts(s: float) -> str:
@@ -55,10 +75,9 @@ def run(ctx) -> dict[str, str]:
                    "subcategory": post.get("subcategory"),
                    "title": post.get("title"), "url": blog_url}
 
-    top = sorted(factsheet.get("facts", []),
-                 key=lambda f: -int(f.get("procurement_significance", 0)))[:3]
+    key_points = _key_points(ws, factsheet)
     from video_agent.storyboard import HeroClaim
-    hero_claim = HeroClaim(stat=top[0]["claim_summary"] if top else "",
+    hero_claim = HeroClaim(stat=key_points[0] if key_points else "",
                           claim_text=hero_claim_text)
 
     _words_to_srt(words, ws / "subtitles.srt")
@@ -81,7 +100,7 @@ def run(ctx) -> dict[str, str]:
 
     caption = "\n".join(
         [hero_claim_text, ""]
-        + [f"- {f['claim_summary']}" for f in top]
+        + [f"- {p}" for p in key_points]
         + ["", f"Full technical guide: {blog_url}"])
     (ws / "linkedin_caption.txt").write_text(caption, encoding="utf-8")
     logger.info("package: metadata + linkedin caption written")
