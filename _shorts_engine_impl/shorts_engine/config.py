@@ -173,7 +173,8 @@ def check_role_independence(role: str) -> None:
 
 # ── Explanation plan / verification (spec 2026-10-08 §5-7) ─────────────────
 MIN_VERIFIED_STEPS = 3
-PLAN_MAX_REPAIR_ROUNDS = 4       # spec §12: retry a missing mechanism/link before dropping
+PLAN_MAX_REPAIR_ROUNDS = 4       # spec §12: retry a missing mechanism/depends_on before dropping
+TRANSITION_MAX_WORDS = 25        # spec §12: a step's words-only narration transition
 SCRIPT_MAX_REWRITES = 3          # spec §12: critic-triggered rewrites before holding
 RETRIEVAL_MAX_RESULTS = 5
 RETRIEVAL_MAX_FETCHES = 6

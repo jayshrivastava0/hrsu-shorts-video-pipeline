@@ -31,8 +31,9 @@ def _ctx(tmp_path: Path) -> StageContext:
 
 
 def _good_plan():
-    def step(sid, claims):
+    def step(sid, claims, depends_on=(), transition=""):
         return {"step_id": sid, "claim_text": f"goal {sid}", "claims": claims, "terms": [],
+                "depends_on": list(depends_on), "transition": transition,
                 "visual_intent": {"entities": ["water"], "relationship": "r", "quantity": "q"}}
     return {
         "question": "Why does calcium nitrate suit foliar sprays?",
@@ -42,14 +43,16 @@ def _good_plan():
                          "quote": "Calcium nitrate dissolves readily in water."}]),
             step("s2", [{"id": "c2", "text": "Dissolved salt passes through spray nozzles.",
                          "kind": "reasoning", "role": "mechanism", "quote": ""},
-                        {"id": "l2", "text": "Because the salt dissolves, nothing solid "
-                                             "reaches the nozzle.",
-                         "kind": "reasoning", "role": "link", "quote": ""}]),
+                        {"id": "f2", "text": "So nothing solid reaches the nozzle.",
+                         "kind": "reasoning", "role": "fact", "quote": ""}],
+                 depends_on=["c1"],
+                 transition="Once the salt is in solution, follow it to the sprayer."),
             step("s3", [{"id": "c3", "text": "Soluble powder avoids clogged nozzles.",
                          "kind": "reasoning", "role": "mechanism", "quote": ""},
-                        {"id": "l3", "text": "Because nothing solid reaches the nozzle, it "
-                                             "does not clog.",
-                         "kind": "reasoning", "role": "link", "quote": ""}]),
+                        {"id": "f3", "text": "So the nozzle does not clog.",
+                         "kind": "reasoning", "role": "fact", "quote": ""}],
+                 depends_on=["c2", "f2"],
+                 transition="That leaves the question of what reaches the nozzle."),
         ],
         "payoff": {"takeaway": "Choose a consistently soluble powder.",
                    "differentiator_id": "b_purity"},
@@ -71,6 +74,8 @@ def test_writes_plan_document_and_returns_artifact(tmp_path, monkeypatch):
     assert doc["status"] == "planned" and doc["attempts"] == 1
     assert doc["steps"][0]["claims"][0]["support"]["type"] == "blog_quote"
     assert doc["steps"][0]["claims"][0]["verdict"] is None
+    assert doc["steps"][1]["depends_on"] == ["c1"] and doc["steps"][0]["depends_on"] == []
+    assert doc["steps"][1]["transition"].startswith("Once the salt")
 
 
 def test_validation_errors_are_echoed_into_the_retry_prompt(tmp_path, monkeypatch):
@@ -98,28 +103,44 @@ def test_prompt_contains_full_article_and_differentiators(tmp_path):
     assert "b_purity" in prompt
 
 
-def test_planner_is_told_to_explain_the_mechanism_and_link_the_steps():
+def test_planner_is_told_to_explain_the_mechanism_and_chain_the_steps():
     system = explain._PLANNER_SYSTEM.lower()
-    assert "mechanism" in system and "link" in system and "define" in system
-    assert "role" in system
+    assert "mechanism" in system and "depends_on" in system and "define" in system
+    assert "role" in system and "transition" in system
+    assert "link" not in system
     # worked examples use a generic illustration, never the blog under test
     assert "oxide film" in system
 
 
-def test_planner_is_told_a_link_only_connects_with_good_and_bad_examples():
+def test_planner_is_told_depends_on_and_transition_rules():
     system = explain._PLANNER_SYSTEM
-    assert "ONLY connect" in system
-    # the link is judged against earlier steps AND this step's own claims
-    assert "this step" in system
-    assert "Good link" in system and "Bad link" in system
-    assert "Because <earlier established claim>, <this step's mechanism>" in system
+    assert "ids of claims in EARLIER steps" in system
+    assert "first step" in system and "depends_on: []" in system
+    # a transition is words only: no facts, no numbers, and it is not a claim
+    assert "no facts" in system and "no numbers" in system and "not a claim" in system
+    assert "Good transition" in system and "Bad transition" in system
+    # the article's own mechanism is quoted, otherwise an external_fact
+    assert "blog_stated" in system and "external_fact" in system
+    prompt = explain._planner_prompt({"title": "T"}, CANONICAL, {"facts": []},
+                                     __import__("shorts_engine.brand", fromlist=["x"])
+                                     .load_brand_facts())
+    assert "depends_on" in prompt and "link" not in prompt.split("Remember:", 1)[1]
 
 
-def test_missing_mechanism_and_link_errors_are_echoed_into_the_retry_prompt(tmp_path,
-                                                                             monkeypatch):
+def test_schema_role_enum_has_no_link():
+    from shorts_engine import explanation
+    item = explanation.PLAN_SCHEMA["properties"]["steps"]["items"]
+    assert item["properties"]["claims"]["items"]["properties"]["role"]["enum"] == \
+        ["fact", "mechanism"]
+    assert {"depends_on", "transition"} <= set(item["required"])
+
+
+def test_missing_mechanism_and_depends_on_errors_are_echoed_into_the_retry_prompt(
+        tmp_path, monkeypatch):
     ctx = _ctx(tmp_path)
     bad = _good_plan()
     bad["steps"][1]["claims"] = [dict(bad["steps"][1]["claims"][0], role="fact")]
+    bad["steps"][1]["depends_on"] = []
     prompts = []
 
     def fake(prompt, system, schema, **kw):
@@ -130,7 +151,7 @@ def test_missing_mechanism_and_link_errors_are_echoed_into_the_retry_prompt(tmp_
     explain.run(ctx)
     assert len(prompts) == 2
     assert "step[s2]: missing a 'mechanism' claim" in prompts[1]
-    assert "step[s2]: missing a 'link' claim" in prompts[1]
+    assert "step[s2]: missing depends_on" in prompts[1]
 
 
 def test_exhausted_retries_hold_for_review_and_write_no_plan(tmp_path, monkeypatch):

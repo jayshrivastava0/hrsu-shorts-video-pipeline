@@ -23,8 +23,9 @@ def _claim(cid, text, kind="blog_stated", quote="", role="mechanism"):
     return {"id": cid, "text": text, "kind": kind, "role": role, "quote": quote}
 
 
-def _step(sid, claims, entities=("sand",)):
+def _step(sid, claims, entities=("sand",), depends_on=(), transition=""):
     return {"step_id": sid, "claim_text": f"goal {sid}", "claims": claims, "terms": [],
+            "depends_on": list(depends_on), "transition": transition,
             "visual_intent": {"entities": list(entities), "relationship": "r", "quantity": "q"}}
 
 
@@ -36,11 +37,14 @@ def _plan():
                                 quote="a 20% calcium carbonate and 80% river sand mixture")]),
             _step("s2", [_claim("c2", "Calcium nitrate dissolves readily in water.",
                                 kind="external_fact"),
-                         _claim("l2", "Because the soil is mostly sand, dissolved salts meet "
-                                      "little resistance.", kind="reasoning", role="link")]),
-            _step("s3", [_claim("c3", "So nutrients move with the water.", kind="reasoning"),
-                         _claim("l3", "Because the salt is dissolved, it travels with the "
-                                      "draining water.", kind="reasoning", role="link")]),
+                         _claim("f2", "So dissolved salts meet little resistance in sand.",
+                                kind="reasoning", role="fact")],
+                  depends_on=["c1"],
+                  transition="With the model soil described, the next question is what "
+                             "dissolves in it."),
+            _step("s3", [_claim("c3", "So nutrients move with the water.", kind="reasoning")],
+                  depends_on=["c2", "f2"],
+                  transition="Once the salt is dissolved, follow where the water goes."),
         ],
         "payoff": {"takeaway": "Pick a consistent powder.", "differentiator_id": "b_purity"},
     }
@@ -185,11 +189,12 @@ class TestExplanationRules:
         p["steps"][0]["claims"][0]["role"] = "fact"
         assert any("s1" in e and "mechanism" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
 
-    def test_second_step_without_link_is_rejected(self):
+    def test_second_step_without_depends_on_is_rejected(self):
         p = _plan()
-        p["steps"][1]["claims"] = p["steps"][1]["claims"][:1]
+        p["steps"][1]["depends_on"] = []
         errs = ex.validate_plan(p, CANONICAL, BRAND)
-        assert any("s2" in e and "link" in e for e in errs)
+        hits = [e for e in errs if "s2" in e and "depends_on" in e]
+        assert hits and "c1" in hits[0]          # names the earlier claim ids to choose from
 
     def test_term_used_in_a_claim_before_the_step_that_defines_it_is_rejected(self):
         p = _plan()
@@ -221,17 +226,79 @@ class TestExplanationRules:
                                   {"term": "salt", "definition": "d", "unit": ""}]
         assert not any("term" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
 
-    def test_first_step_needs_no_link(self):
+    def test_first_step_needs_no_depends_on_and_may_have_an_empty_transition(self):
         p = _plan()
-        assert not any("s1" in e and "link" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+        assert p["steps"][0]["depends_on"] == [] and p["steps"][0]["transition"] == ""
+        assert ex.validate_plan(p, CANONICAL, BRAND) == []
 
-    def test_link_of_kind_blog_stated_is_rejected(self):
+    def test_first_step_with_depends_on_is_rejected(self):
         p = _plan()
-        p["steps"][1]["claims"][1] = _claim(
-            "l2", "Calcium nitrate dissolves readily in water.", kind="blog_stated",
-            quote="Calcium nitrate dissolves readily in water.", role="link")
+        p["steps"][0]["depends_on"] = ["c1"]
         errs = ex.validate_plan(p, CANONICAL, BRAND)
-        assert any("l2" in e and "link" in e and "reasoning" in e for e in errs)
+        assert any("s1" in e and "depends_on" in e for e in errs)
+
+    def test_depends_on_same_step_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["depends_on"] = ["c2"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "'c2'" in e and "same step" in e for e in errs)
+
+    def test_depends_on_later_step_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["depends_on"] = ["c1", "c3"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "'c3'" in e and "later step" in e for e in errs)
+
+    def test_depends_on_unknown_id_is_rejected(self):
+        p = _plan()
+        p["steps"][2]["depends_on"] = ["c2", "nope"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s3" in e and "'nope'" in e and "unknown" in e for e in errs)
+
+    def test_missing_or_malformed_depends_on_is_an_error_not_a_crash(self):
+        p = _plan()
+        del p["steps"][1]["depends_on"]
+        p["steps"][2]["depends_on"] = "c2"
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "depends_on" in e for e in errs)
+        assert any("s3" in e and "depends_on" in e for e in errs)
+
+    def test_transition_with_digits_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["transition"] = "With 3 checks done, look at what dissolves."
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "transition" in e and "digit" in e for e in errs)
+
+    def test_transition_too_long_is_rejected(self):
+        from shorts_engine import config
+        p = _plan()
+        p["steps"][1]["transition"] = " ".join(["word"] * (config.TRANSITION_MAX_WORDS + 1))
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "transition" in e and "words" in e for e in errs)
+        p["steps"][1]["transition"] = " ".join(["word"] * config.TRANSITION_MAX_WORDS)
+        assert ex.validate_plan(p, CANONICAL, BRAND) == []
+
+    def test_transition_max_words_is_twenty_five(self):
+        from shorts_engine import config
+        assert config.TRANSITION_MAX_WORDS == 25
+
+    def test_link_role_is_no_longer_accepted(self):
+        p = _plan()
+        p["steps"][1]["claims"][1]["role"] = "link"
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("f2" in e and "role" in e for e in errs)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(p, ex.PLAN_SCHEMA)
+
+    def test_claim_roles_are_fact_and_mechanism(self):
+        assert ex.CLAIM_ROLES == ("fact", "mechanism")
+
+    def test_schema_requires_depends_on_and_transition(self):
+        for key in ("depends_on", "transition"):
+            p = _plan()
+            del p["steps"][1][key]
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate(p, ex.PLAN_SCHEMA)
 
     def test_illustrative_mechanism_is_rejected(self):
         p = _plan()
@@ -268,6 +335,22 @@ class TestDocumentHelpers:
     def test_finalize_claim_defaults_role_to_fact_for_legacy_claims(self):
         raw = {"id": "c1", "text": "Old claim.", "kind": "external_fact", "quote": ""}
         assert ex.finalize_claim(raw)["role"] == "fact"
+
+    def test_finalize_claim_maps_legacy_link_role_to_fact(self):
+        raw = {"id": "l2", "text": "Because x, y.", "kind": "reasoning", "role": "link",
+               "quote": ""}
+        assert ex.finalize_claim(raw)["role"] == "fact"
+
+    def test_to_plan_document_keeps_depends_on_and_transition(self):
+        doc = ex.to_plan_document(_plan(), attempts=1)
+        assert doc["steps"][1]["depends_on"] == ["c1"]
+        assert doc["steps"][1]["transition"].startswith("With the model soil")
+
+    def test_depends_on_ids_is_tolerant(self):
+        assert ex.depends_on_ids({}) == []
+        assert ex.depends_on_ids({"depends_on": None}) == []
+        assert ex.depends_on_ids({"depends_on": "c1"}) == []
+        assert ex.depends_on_ids({"depends_on": ["c1", 3, "c2"]}) == ["c1", "c2"]
 
     def test_to_plan_document_finalizes_every_claim_and_does_not_mutate_input(self):
         raw = _plan()

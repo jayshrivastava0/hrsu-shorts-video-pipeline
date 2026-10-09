@@ -19,9 +19,11 @@ from shorts_engine.stages.facts import locate_verbatim, normalize_for_match
 
 CLAIM_KINDS = ("blog_stated", "external_fact", "reasoning", "illustrative")
 VERDICTS = ("supported", "contradicted", "unsupported")
-# What a claim does in its step (spec section 12): `mechanism` is the why/how,
-# `link` says how the step follows from the previous one, `fact` is supporting detail.
-CLAIM_ROLES = ("fact", "mechanism", "link")
+# What a claim does in its step (spec section 12): `mechanism` is the why/how, `fact` is
+# supporting detail. How a step follows from earlier ones is NOT a claim: it is the step's
+# `depends_on` (ids of earlier claims, checked deterministically) plus a words-only
+# `transition` that only guides the narration.
+CLAIM_ROLES = ("fact", "mechanism")
 
 CLAIM_ITEM_SCHEMA: dict = {
     "type": "object",
@@ -42,6 +44,10 @@ _STEP_ITEM_SCHEMA: dict = {
         "step_id": {"type": "string"},
         "claim_text": {"type": "string"},
         "claims": {"type": "array", "items": CLAIM_ITEM_SCHEMA},
+        # ids of EARLIER steps' claims this step builds on ([] for the first step)
+        "depends_on": {"type": "array", "items": {"type": "string"}},
+        # words-only narration guidance (no facts, no digits); may be empty
+        "transition": {"type": "string"},
         "terms": {
             "type": "array",
             "items": {
@@ -62,7 +68,8 @@ _STEP_ITEM_SCHEMA: dict = {
             "additionalProperties": False,
         },
     },
-    "required": ["step_id", "claim_text", "claims", "terms", "visual_intent"],
+    "required": ["step_id", "claim_text", "claims", "depends_on", "transition", "terms",
+                 "visual_intent"],
     "additionalProperties": False,
 }
 
@@ -194,6 +201,8 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
 
     seen_steps: set[str] = set()
     seen_claims: set[str] = set()
+    step_of_claim = {c.get("id"): pos for pos, s in enumerate(steps)
+                     for c in s.get("claims", []) if isinstance(c.get("id"), str)}
     for pos, s in enumerate(steps):
         sid = s.get("step_id")
         if sid in seen_steps:
@@ -204,15 +213,14 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
         if not s.get("visual_intent", {}).get("entities"):
             errs.append(f"step[{sid}]: visual_intent.entities must not be empty")
         claims = s.get("claims", [])
-        if not any(c.get("role") == "mechanism" for c in claims):
+        if not any(c.get("role") == "mechanism" and c.get("kind") != "illustrative"
+                   for c in claims):
             errs.append(f"step[{sid}]: missing a 'mechanism' claim -- add a claim with role "
                         f"'mechanism' that explains WHY/HOW this happens (what physically or "
                         f"chemically goes on), not just what happens")
-        if pos > 0 and not any(c.get("role") == "link" and c.get("kind") == "reasoning"
-                               for c in claims):
-            errs.append(f"step[{sid}]: missing a 'link' claim -- add a claim with role 'link' "
-                        f"and kind 'reasoning' saying how this step follows from the previous "
-                        f"step (\"because ..., so ...\")")
+        earlier_ids = [cid for cid, p in step_of_claim.items() if p < pos]
+        errs += _depends_on_errors(s, pos, step_of_claim, earlier_ids)
+        errs += [f"step[{sid}]: {e}" for e in transition_errors(s.get("transition"))]
         for c in claims:
             cid = c.get("id")
             if cid in seen_claims:
@@ -222,9 +230,6 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
             if role not in CLAIM_ROLES:
                 errs.append(f"claim[{cid}]: unknown role {role!r} (must be one of "
                             f"{list(CLAIM_ROLES)})")
-            elif role == "link" and c.get("kind") != "reasoning":
-                errs.append(f"claim[{cid}]: a 'link' claim must have kind 'reasoning', "
-                            f"got {c.get('kind')!r}")
             elif role == "mechanism" and c.get("kind") == "illustrative":
                 errs.append(f"claim[{cid}]: a 'mechanism' claim must not be illustrative "
                             f"(an analogy is not a mechanism; state the real why/how)")
@@ -242,6 +247,54 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
             elif kind == "illustrative" and has_number(c.get("text", "")):
                 errs.append(f"claim[{cid}]: illustrative claims must not contain numbers")
     return errs + _term_order_errors(plan)
+
+
+def transition_errors(transition) -> list[str]:
+    """A step's `transition` is words-only narration guidance: a string (may be empty) with
+    no digits and at most config.TRANSITION_MAX_WORDS words. Used by validate_plan and by
+    the VERIFY repair before it applies a repaired transition."""
+    if transition is None:
+        return ["transition: missing (use an empty string for none)"]
+    if not isinstance(transition, str):
+        return ["transition: must be a string"]
+    errs = []
+    if re.search(r"\d", transition):
+        errs.append("transition: must not contain digits (it is words-only guidance; numbers "
+                    "belong in verified claims)")
+    n = len(transition.split())
+    if n > config.TRANSITION_MAX_WORDS:
+        errs.append(f"transition: {n} words, at most {config.TRANSITION_MAX_WORDS} words")
+    return errs
+
+
+def _depends_on_errors(step: dict, pos: int, step_of_claim: dict[str, int],
+                       earlier_ids: list[str]) -> list[str]:
+    """depends_on: a list of claim ids of EARLIER steps; non-empty after the first step,
+    empty for the first step. Errors name the valid earlier ids so a retry can converge."""
+    sid = step.get("step_id")
+    deps = step.get("depends_on")
+    choose = f"choose from {sorted(earlier_ids)}" if earlier_ids else "no earlier claims"
+    if not isinstance(deps, list) or not all(isinstance(d, str) for d in deps):
+        return [f"step[{sid}]: depends_on must be a list of claim ids"
+                + ("" if pos == 0 else f" ({choose})")]
+    if pos == 0:
+        return ([f"step[{sid}]: depends_on must be empty for the first step (it follows from "
+                 f"the question)"] if deps else [])
+    errs = []
+    if not deps:
+        errs.append(f"step[{sid}]: missing depends_on -- list the ids of the earlier claims "
+                    f"this step builds on ({choose})")
+    for d in deps:
+        where = step_of_claim.get(d)
+        if where is None:
+            errs.append(f"step[{sid}]: depends_on {d!r} is an unknown claim id ({choose})")
+        elif where == pos:
+            errs.append(f"step[{sid}]: depends_on {d!r} is a claim of the same step; it must "
+                        f"point to an earlier step ({choose})")
+        elif where > pos:
+            errs.append(f"step[{sid}]: depends_on {d!r} is a claim of a later step; it must "
+                        f"point to an earlier step ({choose})")
+    return errs
 
 
 _MIN_ORDERED_TERM_LEN = 4
@@ -290,13 +343,15 @@ def _term_order_errors(plan: dict) -> list[str]:
 def finalize_claim(raw: dict) -> dict:
     """Planner claim -> stored claim (adds support/verdict/needs_number).
 
-    A claim with no `role` (plans stored before roles existed) becomes a "fact".
+    A claim with no `role` (plans stored before roles existed) or with the retired role
+    "link" (plans stored before depends_on replaced link claims) becomes a "fact".
     """
+    role = raw.get("role")
     return {
         "id": raw["id"],
         "text": raw["text"],
         "kind": raw["kind"],
-        "role": raw.get("role") or "fact",
+        "role": role if role in CLAIM_ROLES else "fact",
         "support": {"type": "blog_quote" if raw["kind"] == "blog_stated" else None,
                     "quote": raw.get("quote", ""), "url": None},
         "verdict": None,
@@ -309,6 +364,8 @@ def to_plan_document(raw: dict, attempts: int) -> dict:
     doc = copy.deepcopy(raw)
     for step in doc["steps"]:
         step["claims"] = [finalize_claim(c) for c in step["claims"]]
+        step["depends_on"] = depends_on_ids(step)
+        step["transition"] = step.get("transition") or ""
     doc["status"] = "planned"
     doc["attempts"] = attempts
     doc["dropped_claims"] = []
