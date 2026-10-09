@@ -12,9 +12,11 @@ why/how) and, unless it is the first step, a supported reasoning `link` claim
 the step's own fact/mechanism claims, against the premises of earlier steps plus those
 own supported claims, and must add nothing new. A failed claim, or a step missing its mechanism/link, is
 repaired by the planner (config.PLAN_MAX_REPAIR_ROUNDS rounds) and only then
-dropped, never guessed. When a step is dropped, the reasoning claims of later
-steps are re-checked against the surviving premises ("re-link"), so no link rests
-on a dropped step. Empty/failed web search just means the claim is unsupported; it
+dropped, never guessed. A step currently missing its mechanism contributes no
+premises, so a link resting on it fails (and is repaired) during the rounds. When a
+step is dropped, the reasoning claims of later steps are re-checked against the
+surviving premises ("re-link"), and a step that fails the re-link gets one more
+repair before it is dropped (bound: max_repair_calls). Empty/failed web search just means the claim is unsupported; it
 never stops the run. If fewer than config.MIN_VERIFIED_STEPS steps survive, the
 plan is saved with status "held" and HoldForReview is raised.
 """
@@ -223,14 +225,23 @@ def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = Fal
                         retriever=retriever, local_only=local_only)
             if _is_premise(claims[i]):
                 (own_links if is_link else own).append(claims[i]["text"])
-        earlier += own + own_links
+        # A step currently missing its mechanism contributes NO premises: it may yet be
+        # dropped, so a later link must not silently rest on it. That link fails now and
+        # goes through the repair rounds while this step is being repaired too.
+        if _has_mechanism(step):
+            earlier += own + own_links
+
+
+def _has_mechanism(step: dict) -> bool:
+    return any(_role(c) == "mechanism" and c["kind"] != "illustrative"
+               and c.get("verdict") == "supported" for c in step["claims"])
 
 
 def _missing(step: dict, first: bool) -> list[str]:
     """What a step lacks to survive: a verified mechanism, and (unless first) a link."""
     sup = [c for c in step["claims"] if c.get("verdict") == "supported"]
     out = []
-    if not any(_role(c) == "mechanism" and c["kind"] != "illustrative" for c in sup):
+    if not _has_mechanism(step):
         out.append("no verified mechanism")
     if not first and not any(_role(c) == "link" and c["kind"] == "reasoning" for c in sup):
         out.append("no verified link")
@@ -319,11 +330,23 @@ def _prune(plan: dict) -> bool:
     return dropped
 
 
+def max_repair_calls(n_steps: int) -> int:
+    """Upper bound on planner REPAIR calls for a plan of `n_steps` steps.
+
+    The repair rounds repair each step at most once per round (steps are never removed
+    during the rounds): PLAN_MAX_REPAIR_ROUNDS * n_steps. After the final prune, each
+    surviving step whose re-link fails gets at most ONE more repair (tracked per step):
+    + n_steps. Total <= (PLAN_MAX_REPAIR_ROUNDS + 1) * n_steps."""
+    return (config.PLAN_MAX_REPAIR_ROUNDS + 1) * n_steps
+
+
 def _prune_and_relink(plan: dict, *, canonical: str, retriever, local_only: bool) -> None:
     """Prune; whenever a step is dropped, re-check the reasoning claims of the surviving
-    steps that came after it against the surviving premises only, then prune again.
-    (The repair budget is spent by then: a step is only dropped once its repair rounds
-    are exhausted, so a re-checked claim that fails is dropped, not repaired.)"""
+    steps that came after it against the surviving premises only. A re-checked step that
+    now fails (typically: its link rested on the dropped step) gets ONE bounded repair --
+    the planner sees the surviving previous step -- and is re-verified; then prune again.
+    Each step gets at most one such repair (see max_repair_calls), so this terminates."""
+    relink_repaired: set[int] = set()
     while True:
         order = list(plan["steps"])
         if not _prune(plan):
@@ -341,6 +364,14 @@ def _prune_and_relink(plan: dict, *, canonical: str, retriever, local_only: bool
         if not reset:
             return
         verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
+        failing = [(s, m) for s, m in _failing_steps(plan)
+                   if id(s) in later and id(s) not in relink_repaired]
+        for step, missing in failing:
+            relink_repaired.add(id(step))
+            _repair_step(plan, step, missing, config.PLAN_MAX_REPAIR_ROUNDS + 1,
+                         local_only, canonical)
+        if failing:
+            verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
 
 
 def run(ctx) -> dict[str, str]:

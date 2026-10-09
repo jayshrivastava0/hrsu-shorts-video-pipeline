@@ -311,27 +311,32 @@ class TestRun:
 
     def test_repair_round_replaces_a_failed_claim_and_reverifies(self, tmp_path, monkeypatch, llm):
         steps = _good_steps()
-        # s1's mechanism fails; a supported fact stays, so s2's link still has a premise
+        # s1's mechanism fails. While s1 is unexplained it contributes no premises, so s2's
+        # link fails too and is repaired in the same round (it is not left resting on s1).
         steps[0]["claims"] = [_claim("cx", "Invented fact.", "blog_stated", "not in article",
                                      role="mechanism"),
                               _claim("f1", "Calcium nitrate dissolves in water.", "blog_stated",
                                      "Calcium nitrate dissolves readily in water.")]
-        llm.repair = {"claims": [{"id": "new", "text": "Calcium nitrate dissolves in water.",
-                                  "kind": "blog_stated", "role": "mechanism",
-                                  "quote": "Calcium nitrate dissolves readily in water."}]}
+        mech = {"id": "new", "text": "Calcium nitrate dissolves in water.",
+                "kind": "blog_stated", "role": "mechanism",
+                "quote": "Calcium nitrate dissolves readily in water."}
+        llm.repair = lambda prompt: {"claims": [GOOD_LINK if "MISSING LINK" in prompt
+                                                else mech]}
         ctx = _ctx(tmp_path, _plan(steps))
         monkeypatch.setattr(vc, "Retriever", lambda urls: FakeRetriever())
         vc.run(ctx)
         doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
         ids = [c["id"] for c in doc["steps"][0]["claims"]]
         assert ids == ["f1", "s1_r1_1"]
-        assert [c["id"] for c in doc["dropped_claims"]] == ["cx"]
+        assert [c["id"] for c in doc["dropped_claims"]] == ["cx", "l2"]
+        assert "s2_r1_1" in [c["id"] for c in doc["steps"][1]["claims"]]
+        assert doc["status"] == "verified" and len(doc["steps"]) == 3
         assert any(s is vc.REPAIR_SCHEMA and role == "planner" for s, role, _ in llm.calls)
 
     def test_repair_is_bounded_by_max_rounds(self, tmp_path, monkeypatch, llm):
         from shorts_engine import config
         steps = _good_steps()
-        # only s1 fails (a supported fact keeps s2's link premise alive)
+        # s1's mechanism never verifies, so s2's link (resting on s1) never does either
         steps[0]["claims"] = [_claim("cx", "Invented.", "blog_stated", "nope",
                                      role="mechanism"),
                               _claim("f1", "Calcium nitrate dissolves in water.", "blog_stated",
@@ -343,7 +348,27 @@ class TestRun:
         with pytest.raises(HoldForReview):
             vc.run(ctx)
         repairs = [c for c in llm.calls if c[0] is vc.REPAIR_SCHEMA]
-        assert len(repairs) == config.PLAN_MAX_REPAIR_ROUNDS
+        assert len(repairs) == 2 * config.PLAN_MAX_REPAIR_ROUNDS     # s1 and s2, each round
+        assert len(repairs) <= vc.max_repair_calls(3)
+
+    def test_max_repair_calls_bound(self):
+        from shorts_engine import config
+        assert vc.max_repair_calls(5) == (config.PLAN_MAX_REPAIR_ROUNDS + 1) * 5
+
+    def test_repair_calls_stay_within_the_bound_when_everything_fails(
+            self, tmp_path, monkeypatch, llm):
+        steps = _good_steps()
+        for s in steps:
+            for c in s["claims"]:
+                c["support"]["quote"] = "never in the article"
+        llm.repair = {"claims": [{"id": "n", "text": "Still invented.", "kind": "blog_stated",
+                                  "role": "mechanism", "quote": "nope again"}]}
+        ctx = _ctx(tmp_path, _plan(steps))
+        monkeypatch.setattr(vc, "Retriever", lambda urls: FakeRetriever())
+        with pytest.raises(HoldForReview):
+            vc.run(ctx)
+        repairs = [c for c in llm.calls if c[0] is vc.REPAIR_SCHEMA]
+        assert 0 < len(repairs) <= vc.max_repair_calls(3)
 
 
 class TestVerifyPlanPremises:
@@ -488,11 +513,9 @@ class TestExplainTheWhy:
         assert [s["step_id"] for s in doc["dropped_steps"]] == ["s2"]
 
 
-    def test_link_whose_premise_step_is_dropped_is_not_left_supported(
-            self, tmp_path, monkeypatch, llm):
-        # s2 holds the only premise s3's link relies on, but s2 has no mechanism, so it
-        # is dropped after the repair rounds; s3's link must then be re-checked against
-        # the surviving premises (s1 only) and fail.
+    @staticmethod
+    def _premise_in_unexplained_s2():
+        """s2 holds the only premise s3's link relies on, but s2 has no mechanism."""
         steps = _good_steps()
         steps.append(_step("s4", [_claim("m4", "Calcium nitrate dissolves in water.",
                                          "blog_stated", GOOD_QUOTE, role="mechanism"),
@@ -504,25 +527,86 @@ class TestExplainTheWhy:
                    role="link")]
         steps[2]["claims"][1] = _claim("l3", "Because water carries it, s3 follows.",
                                        "reasoning", role="link")
+        for s in steps:
+            s["claim_text"] = f"GOAL-{s['step_id']}"
+        return steps
 
-        def logic(prompt):
-            if "Conclusion: Because water carries it" in prompt:
-                ok = "PREMISE-ONLY-IN-S2" in prompt
-                return {"verdict": "supported" if ok else "unsupported", "passage_index": None}
-            return {"verdict": "supported", "passage_index": None}
+    @staticmethod
+    def _logic(prompt):
+        if "Conclusion: Because water carries it" in prompt:
+            ok = "PREMISE-ONLY-IN-S2" in prompt
+            return {"verdict": "supported" if ok else "unsupported", "passage_index": None}
+        return {"verdict": "supported", "passage_index": None}
 
-        llm.logic = logic
+    def test_link_resting_on_an_unexplained_step_is_repaired_before_any_drop(
+            self, tmp_path, monkeypatch, llm):
+        # While s2 lacks a mechanism it contributes no premises, so s3's link fails DURING
+        # the repair rounds and is repaired; s3 is dropped only once those repairs fail.
+        llm.logic = self._logic
         llm.repair = {"claims": []}
-        doc = _run_doc(tmp_path, monkeypatch, steps, hold=True)
+        doc = _run_doc(tmp_path, monkeypatch, self._premise_in_unexplained_s2(), hold=True)
+        s3_repairs = [p for p in _repair_prompts(llm) if "Step goal: GOAL-s3" in p]
+        assert s3_repairs and all("MISSING LINK" in p for p in s3_repairs)
         dropped = {s["step_id"]: s["reason"] for s in doc["dropped_steps"]}
         assert dropped == {"s2": "no verified mechanism", "s3": "no verified link"}
         assert [s["step_id"] for s in doc["steps"]] == ["s1", "s4"]
         assert all(c["id"] != "l3" for s in doc["steps"] for c in s["claims"])
+
+    def test_link_repaired_against_surviving_premises_keeps_the_step(
+            self, tmp_path, monkeypatch, llm):
+        llm.logic = self._logic
+        good = {"id": "x", "text": "Because it dissolves, s3 follows.", "kind": "reasoning",
+                "role": "link", "quote": ""}
+        llm.repair = lambda p: {"claims": [good] if "Step goal: GOAL-s3" in p else []}
+        doc = _run_doc(tmp_path, monkeypatch, self._premise_in_unexplained_s2())
+        assert [s["step_id"] for s in doc["steps"]] == ["s1", "s3", "s4"]
+        assert doc["status"] == "verified"
+        assert [s["step_id"] for s in doc["dropped_steps"]] == ["s2"]
+
+    @staticmethod
+    def _premise_in_unlinked_s2():
+        """s2 HAS a mechanism (so its premise counts during the rounds) but never gets a
+        link, so it is dropped after the rounds; s3's link rested on s2's mechanism."""
+        steps = _good_steps()
+        steps[1]["claims"] = [_claim("m2", "PREMISE-ONLY-IN-S2 water carries it.",
+                                     "blog_stated", GOOD_QUOTE, role="mechanism")]
+        steps[2]["claims"][1] = _claim("l3", "Because water carries it, s3 follows.",
+                                       "reasoning", role="link")
+        steps.append(_step("s4", [_claim("m4", "Calcium nitrate dissolves in water.",
+                                         "blog_stated", GOOD_QUOTE, role="mechanism"),
+                                  _claim("l4", "Because it dissolves, s4 follows.",
+                                         "reasoning", role="link")]))
+        for s in steps:
+            s["claim_text"] = f"GOAL-{s['step_id']}"
+        return steps
+
+    def test_relink_failure_after_the_final_prune_gets_one_repair_then_survives(
+            self, tmp_path, monkeypatch, llm):
+        from shorts_engine import config
+        llm.logic = self._logic
+        good = {"id": "x", "text": "Because it dissolves, s3 follows.", "kind": "reasoning",
+                "role": "link", "quote": ""}
+        llm.repair = lambda p: {"claims": [good] if "Step goal: GOAL-s3" in p else []}
+        doc = _run_doc(tmp_path, monkeypatch, self._premise_in_unlinked_s2())
+        s3_repairs = [p for p in _repair_prompts(llm) if "Step goal: GOAL-s3" in p]
+        assert len(s3_repairs) == 1
+        # the planner sees the SURVIVING previous step (s1), not the dropped s2
+        assert "Previous step (this step must follow from it): GOAL-s1" in s3_repairs[0]
+        assert [s["step_id"] for s in doc["steps"]] == ["s1", "s3", "s4"]
+        assert [s["step_id"] for s in doc["dropped_steps"]] == ["s2"]
+        assert len(_repair_prompts(llm)) == config.PLAN_MAX_REPAIR_ROUNDS + 1
+        assert len(_repair_prompts(llm)) <= vc.max_repair_calls(4)
+
+    def test_relink_failure_whose_one_repair_fails_is_dropped(self, tmp_path, monkeypatch, llm):
+        llm.logic = self._logic
+        llm.repair = {"claims": []}
+        doc = _run_doc(tmp_path, monkeypatch, self._premise_in_unlinked_s2(), hold=True)
+        s3_repairs = [p for p in _repair_prompts(llm) if "Step goal: GOAL-s3" in p]
+        assert len(s3_repairs) == 1
+        dropped = {s["step_id"]: s["reason"] for s in doc["dropped_steps"]}
+        assert dropped == {"s2": "no verified link", "s3": "no verified link"}
         l3 = [c for c in doc["dropped_claims"] if c["id"] == "l3"]
         assert l3 and l3[-1]["verdict"] != "supported"
-        # s3 was verified while s2 still existed (supported), then re-checked once
-        l3_checks = [p for s, _r, p in llm.calls if "Conclusion: Because water carries it" in p]
-        assert len(l3_checks) == 2
 
     def test_legacy_claims_without_role_are_facts(self, tmp_path, monkeypatch, llm):
         steps = _good_steps()
