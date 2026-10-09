@@ -121,8 +121,9 @@ LLM_TIMEOUT_S = 60
 
 # ── Model roles (spec 2026-10-08 §8) ───────────────────────────────────────
 # Planner/writer = the user's choice (Gemma). Verifier and critic MUST be a
-# different model family from the writer (a model checking its own claims
-# agrees with itself); check_role_independence() enforces that at call time.
+# different model family from both the planner and the writer (a model checking
+# its own claims agrees with itself); check_role_independence() enforces that
+# at call time.
 # Verifier/critic default: nemotron-3-ultra:cloud. glm-5.2:cloud needs a paid
 # Ollama plan (HTTP 402), glm-5.1:cloud is retired (410), minimax-m3:cloud 402;
 # nemotron-3-ultra:cloud passed the 24-case scripts/eval_verifier.py bake-off
@@ -150,19 +151,23 @@ def model_for_role(role: str) -> str:
 
 
 def model_family(model: str) -> str:
-    """'gemma4:31b-cloud' -> 'gemma'; 'glm-5.2:cloud' -> 'glm'."""
-    return re.split(r"[-:0-9._]", model.strip().lower(), maxsplit=1)[0]
+    """'gemma4:31b-cloud' -> 'gemma'; 'glm-5.2:cloud' -> 'glm'; 'org/gemma-x:7b' -> 'gemma'
+    (a namespaced name is reduced to its last path segment first)."""
+    name = model.strip().lower().rsplit("/", 1)[-1]
+    return re.split(r"[-:0-9._]", name, maxsplit=1)[0]
 
 
 def check_role_independence(role: str) -> None:
-    """Raise EngineConfigError if a verifier/critic shares the writer's family."""
+    """Raise EngineConfigError if a verifier/critic shares the family of the writer or
+    the planner (the verifier grades the planner's claims, the critic the writer's script)."""
     if role not in _INDEPENDENT_ROLES:
         return
-    if model_family(model_for_role(role)) == model_family(model_for_role("writer")):
-        raise EngineConfigError(
-            f"role {role!r} uses the same model family as the writer "
-            f"({model_for_role(role)!r} vs {model_for_role('writer')!r}); a model must "
-            f"not grade its own work")
+    for graded in ("writer", "planner"):
+        if model_family(model_for_role(role)) == model_family(model_for_role(graded)):
+            raise EngineConfigError(
+                f"role {role!r} uses the same model family as the {graded} "
+                f"({model_for_role(role)!r} vs {model_for_role(graded)!r}); a model must "
+                f"not grade its own work")
 
 
 # ── Explanation plan / verification (spec 2026-10-08 §5-7) ─────────────────

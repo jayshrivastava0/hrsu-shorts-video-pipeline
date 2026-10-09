@@ -26,6 +26,8 @@ def test_model_family():
     assert config.model_family("gemma4:31b-cloud") == "gemma"
     assert config.model_family("glm-5.2:cloud") == "glm"
     assert config.model_family("nemotron-3-ultra:cloud") == "nemotron"
+    assert config.model_family("org/gemma-x:7b") == "gemma"
+    assert config.model_family("hf.co/org/Gemma-3:4b") == "gemma"
 
 
 def _clear_role_env(monkeypatch):
@@ -48,9 +50,71 @@ def test_default_verifier_and_critic_differ_from_writer_family(monkeypatch):
 
 
 def test_independence_check_rejects_same_family(monkeypatch):
+    _clear_role_env(monkeypatch)
     monkeypatch.setenv("HRSU_MODEL_VERIFIER", "gemma3:4b")
     with pytest.raises(EngineConfigError, match="same model family"):
         config.check_role_independence("verifier")
+
+
+def test_independence_check_rejects_planner_family(monkeypatch):
+    # the verifier grades the PLANNER's claims, so it must differ from the planner too
+    _clear_role_env(monkeypatch)
+    monkeypatch.setenv("HRSU_MODEL_PLANNER", "nemotron-3-ultra:cloud")
+    with pytest.raises(EngineConfigError, match="same model family"):
+        config.check_role_independence("verifier")
+    with pytest.raises(EngineConfigError, match="same model family"):
+        config.check_role_independence("critic")
+
+
+class _FakeOllamaClient:
+    made: list = []
+
+    def __init__(self, model=None, **kw):
+        self.model = model
+        self.sdk_calls = []
+        _FakeOllamaClient.made.append(self)
+
+    def generate(self, prompt, system=None, **kw):
+        return "default-generate"
+
+    def _generate_via_sdk(self, prompt, system=None):
+        self.sdk_calls.append((prompt, system))
+        return "sdk-generate"
+
+
+def _install_fake_client(monkeypatch):
+    import video_agent.ollama_client as oc
+    _FakeOllamaClient.made = []
+    monkeypatch.setattr(oc, "OllamaClient", _FakeOllamaClient)
+
+
+def test_role_client_routes_cloud_models_through_sdk(monkeypatch):
+    _clear_role_env(monkeypatch)
+    _install_fake_client(monkeypatch)
+    monkeypatch.setenv("HRSU_MODEL_VERIFIER", "nemotron-3-ultra:cloud")
+    client = text_llm._get_role_client("verifier")
+    assert client.model == "nemotron-3-ultra:cloud"
+    assert client.generate("p", system="s") == "sdk-generate"
+    assert client.sdk_calls == [("p", "s")]
+
+
+def test_role_client_keeps_default_generate_for_local_models(monkeypatch):
+    _clear_role_env(monkeypatch)
+    _install_fake_client(monkeypatch)
+    monkeypatch.setenv("HRSU_MODEL_WRITER", "gemma3:4b")
+    client = text_llm._get_role_client("writer")
+    assert client.model == "gemma3:4b"
+    assert client.generate("p", system="s") == "default-generate"
+    assert client.sdk_calls == []
+
+
+def test_role_client_enforces_independence_before_constructing(monkeypatch):
+    _clear_role_env(monkeypatch)
+    _install_fake_client(monkeypatch)
+    monkeypatch.setenv("HRSU_MODEL_VERIFIER", "gemma3:4b")
+    with pytest.raises(EngineConfigError, match="same model family"):
+        text_llm._get_role_client("verifier")
+    assert _FakeOllamaClient.made == []
 
 
 def test_generate_schema_json_uses_role_client(monkeypatch):
