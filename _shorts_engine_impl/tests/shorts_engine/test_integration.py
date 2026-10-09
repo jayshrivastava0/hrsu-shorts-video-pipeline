@@ -50,30 +50,34 @@ PLAN_RAW = {
     "question": "Why do EU plants dose calcium nitrate to cut nitrate discharge?",
     "steps": [
         {"step_id": "s1", "claim_text": "There is an established dosing window.",
-         "claims": [{"id": "c1", "kind": "blog_stated", "quote": REAL_QUOTE,
+         "claims": [{"id": "c1", "kind": "blog_stated", "role": "mechanism",
+                     "quote": REAL_QUOTE,
                      "text": "Best practice uses a dosage range of 1.5 to 3 kg per cubic "
                              "meter of wastewater."}],
          "terms": [],
          "visual_intent": {"entities": ["Calcium nitrate", "Wastewater"],
                            "relationship": "dosed into", "quantity": "dose"}},
         {"step_id": "s2", "claim_text": "Bacteria turn nitrate into nitrogen gas.",
-         "claims": [{"id": "c2", "kind": "blog_stated",
+         "claims": [{"id": "c2", "kind": "blog_stated", "role": "mechanism",
                      "quote": "This bacteria utilizes nitrate as an electron acceptor, "
                               "converting it into harmless nitrogen gas",
                      "text": "Denitrifying bacteria use nitrate as an electron acceptor "
-                             "and convert it into harmless nitrogen gas."}],
+                             "and convert it into harmless nitrogen gas."},
+                    {"id": "l2", "kind": "reasoning", "role": "link", "quote": "",
+                     "text": "So the dosed calcium nitrate is the nitrate those bacteria "
+                             "convert."}],
          "terms": [{"term": "denitrification",
                     "definition": "bacteria converting nitrate into nitrogen gas",
                     "unit": ""}],
          "visual_intent": {"entities": ["Nitrate", "Denitrifying bacteria", "Nitrogen gas"],
                            "relationship": "converted by", "quantity": "nitrate level"}},
         {"step_id": "s3", "claim_text": "The dose must be tuned per site.",
-         "claims": [{"id": "c3", "kind": "blog_stated",
+         "claims": [{"id": "c3", "kind": "blog_stated", "role": "mechanism",
                      "quote": "The amount of chemicals required for treatment depends on "
                               "the pH and alkalinity of the wastewater",
                      "text": "The amount needed depends on the pH and alkalinity of the "
                              "wastewater."},
-                    {"id": "c4", "kind": "reasoning", "quote": "",
+                    {"id": "c4", "kind": "reasoning", "role": "link", "quote": "",
                      "text": "So the dose has to be tuned to each site."}],
          "terms": [],
          "visual_intent": {"entities": ["pH", "Alkalinity", "Dose"],

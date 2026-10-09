@@ -19,6 +19,9 @@ from shorts_engine.stages.facts import locate_verbatim, normalize_for_match
 
 CLAIM_KINDS = ("blog_stated", "external_fact", "reasoning", "illustrative")
 VERDICTS = ("supported", "contradicted", "unsupported")
+# What a claim does in its step (spec section 12): `mechanism` is the why/how,
+# `link` says how the step follows from the previous one, `fact` is supporting detail.
+CLAIM_ROLES = ("fact", "mechanism", "link")
 
 CLAIM_ITEM_SCHEMA: dict = {
     "type": "object",
@@ -26,9 +29,10 @@ CLAIM_ITEM_SCHEMA: dict = {
         "id": {"type": "string"},
         "text": {"type": "string"},
         "kind": {"enum": list(CLAIM_KINDS)},
+        "role": {"enum": list(CLAIM_ROLES)},
         "quote": {"type": "string"},
     },
-    "required": ["id", "text", "kind", "quote"],
+    "required": ["id", "text", "kind", "role", "quote"],
     "additionalProperties": False,
 }
 
@@ -178,6 +182,8 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
     if len(steps) < config.MIN_VERIFIED_STEPS:
         errs.append(f"structure: need at least {config.MIN_VERIFIED_STEPS} steps, "
                     f"got {len(steps)}")
+    if not (plan.get("question") or "").strip():
+        errs.append("question: must not be empty (state the one question the video answers)")
     if has_number(plan.get("question", "")):
         errs.append("question: must not contain numbers")
     if has_number(plan.get("payoff", {}).get("takeaway", "")):
@@ -188,7 +194,7 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
 
     seen_steps: set[str] = set()
     seen_claims: set[str] = set()
-    for s in steps:
+    for pos, s in enumerate(steps):
         sid = s.get("step_id")
         if sid in seen_steps:
             errs.append(f"structure: duplicate step id {sid!r}")
@@ -197,11 +203,31 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
             errs.append(f"step[{sid}]: needs at least one claim")
         if not s.get("visual_intent", {}).get("entities"):
             errs.append(f"step[{sid}]: visual_intent.entities must not be empty")
-        for c in s.get("claims", []):
+        claims = s.get("claims", [])
+        if not any(c.get("role") == "mechanism" for c in claims):
+            errs.append(f"step[{sid}]: missing a 'mechanism' claim -- add a claim with role "
+                        f"'mechanism' that explains WHY/HOW this happens (what physically or "
+                        f"chemically goes on), not just what happens")
+        if pos > 0 and not any(c.get("role") == "link" and c.get("kind") == "reasoning"
+                               for c in claims):
+            errs.append(f"step[{sid}]: missing a 'link' claim -- add a claim with role 'link' "
+                        f"and kind 'reasoning' saying how this step follows from the previous "
+                        f"step (\"because ..., so ...\")")
+        for c in claims:
             cid = c.get("id")
             if cid in seen_claims:
                 errs.append(f"structure: duplicate claim id {cid!r}")
             seen_claims.add(cid)
+            role = c.get("role")
+            if role not in CLAIM_ROLES:
+                errs.append(f"claim[{cid}]: unknown role {role!r} (must be one of "
+                            f"{list(CLAIM_ROLES)})")
+            elif role == "link" and c.get("kind") != "reasoning":
+                errs.append(f"claim[{cid}]: a 'link' claim must have kind 'reasoning', "
+                            f"got {c.get('kind')!r}")
+            elif role == "mechanism" and c.get("kind") == "illustrative":
+                errs.append(f"claim[{cid}]: a 'mechanism' claim must not be illustrative "
+                            f"(an analogy is not a mechanism; state the real why/how)")
             kind = c.get("kind")
             if kind not in CLAIM_KINDS:
                 errs.append(f"claim[{cid}]: unknown kind {kind!r}")
@@ -220,11 +246,15 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
 
 # ── plan document helpers ───────────────────────────────────────────────────
 def finalize_claim(raw: dict) -> dict:
-    """Planner claim -> stored claim (adds support/verdict/needs_number)."""
+    """Planner claim -> stored claim (adds support/verdict/needs_number).
+
+    A claim with no `role` (plans stored before roles existed) becomes a "fact".
+    """
     return {
         "id": raw["id"],
         "text": raw["text"],
         "kind": raw["kind"],
+        "role": raw.get("role") or "fact",
         "support": {"type": "blog_quote" if raw["kind"] == "blog_stated" else None,
                     "quote": raw.get("quote", ""), "url": None},
         "verdict": None,

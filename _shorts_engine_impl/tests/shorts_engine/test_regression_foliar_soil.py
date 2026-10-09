@@ -38,8 +38,8 @@ def _step(sid, claims):
             "visual_intent": {"entities": ["soil"], "relationship": "r", "quantity": "q"}}
 
 
-def _claim(cid, text, kind, quote=""):
-    return {"id": cid, "text": text, "kind": kind, "quote": quote}
+def _claim(cid, text, kind, quote="", role="mechanism"):
+    return {"id": cid, "text": text, "kind": kind, "role": role, "quote": quote}
 
 
 def _plan(steps):
@@ -67,8 +67,13 @@ def test_soil_to_foliar_leap_is_dropped_when_nothing_supports_it(tmp_path, monke
         _step("s1", [_claim("c1", "Engineers model desert soil with a sand mixture.",
                             "blog_stated", SAND_QUOTE)]),
         _step("s2", [_claim("c2", "Soil infiltration data proves foliar solubility.",
-                            "external_fact")]),
-        _step("s3", [_claim("c3", "So foliar sprays never clog nozzles.", "reasoning")]),
+                            "external_fact"),
+                     _claim("l2", "Because engineers model soil with sand, soil data carries "
+                                  "over to foliar sprays.", "reasoning", role="link")]),
+        _step("s3", [_claim("m3", "Fully dissolved salts pass through spray nozzles.",
+                            "external_fact"),
+                     _claim("c3", "So foliar sprays never clog nozzles.", "reasoning",
+                            role="link")]),
     ]
     monkeypatch.setattr(explain.text_llm, "generate_schema_json",
                         lambda p, s, sc, **kw: _plan(steps))
@@ -97,9 +102,14 @@ def test_well_supported_blog_claims_are_not_over_held(tmp_path, monkeypatch):
         _step("s1", [_claim("c1", "Foliar blends need stable solutions.",
                             "blog_stated", BLEND_QUOTE)]),
         _step("s2", [_claim("c2", "Poor solubility causes nozzle clogging.",
-                            "blog_stated", NOZZLE_QUOTE)]),
+                            "blog_stated", NOZZLE_QUOTE),
+                     _claim("l2", "Because blends must stay stable, poor solubility shows up "
+                                  "as clogged nozzles.", "reasoning", role="link")]),
         _step("s3", [_claim("c3", "Engineers model desert soil with a sand mixture.",
-                            "blog_stated", SAND_QUOTE)]),
+                            "blog_stated", SAND_QUOTE),
+                     _claim("l3", "Because clogging depends on how the blend behaves, "
+                                  "engineers test it on modelled soil.", "reasoning",
+                            role="link")]),
     ]
     monkeypatch.setattr(explain.text_llm, "generate_schema_json",
                         lambda p, s, sc, **kw: _plan(steps))

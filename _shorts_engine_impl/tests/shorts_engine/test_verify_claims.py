@@ -46,8 +46,9 @@ class Router:
         raise AssertionError(schema)
 
 
-def _claim(cid, text, kind, quote="", verdict=None):
-    c = ex.finalize_claim({"id": cid, "text": text, "kind": kind, "quote": quote})
+def _claim(cid, text, kind, quote="", verdict=None, role="fact"):
+    c = ex.finalize_claim({"id": cid, "text": text, "kind": kind, "role": role,
+                           "quote": quote})
     c["verdict"] = verdict
     return c
 
@@ -249,9 +250,15 @@ def _ctx(tmp_path, plan):
 
 
 def _good_steps():
+    """Three steps, each with a blog-quoted mechanism; s2 and s3 also link back."""
     q = "Calcium nitrate dissolves readily in water."
-    return [_step(f"s{i}", [_claim(f"c{i}", "Calcium nitrate dissolves in water.",
-                                   "blog_stated", q)]) for i in (1, 2, 3)]
+    steps = [_step(f"s{i}", [_claim(f"c{i}", "Calcium nitrate dissolves in water.",
+                                    "blog_stated", q, role="mechanism")]) for i in (1, 2, 3)]
+    for i in (2, 3):
+        steps[i - 1]["claims"].append(_claim(
+            f"l{i}", "Because it dissolves, the next effect follows.", "reasoning",
+            role="link"))
+    return steps
 
 
 class TestRun:
@@ -298,7 +305,7 @@ class TestRun:
         steps = _good_steps()
         steps[0]["claims"] = [_claim("cx", "Invented fact.", "blog_stated", "not in article")]
         llm.repair = {"claims": [{"id": "new", "text": "Calcium nitrate dissolves in water.",
-                                  "kind": "blog_stated",
+                                  "kind": "blog_stated", "role": "mechanism",
                                   "quote": "Calcium nitrate dissolves readily in water."}]}
         ctx = _ctx(tmp_path, _plan(steps))
         monkeypatch.setattr(vc, "Retriever", lambda urls: FakeRetriever())

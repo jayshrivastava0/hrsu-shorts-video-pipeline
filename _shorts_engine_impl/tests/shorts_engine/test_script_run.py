@@ -20,8 +20,9 @@ FACTSHEET = {"facts": [{"id": "f1", "verbatim_quote": "a 20% calcium carbonate a
                         "citation_marker": None}]}
 
 
-def _claim(cid, text, kind, quote="", verdict="supported"):
-    return {"id": cid, "text": text, "kind": kind, "verdict": verdict, "needs_number": False,
+def _claim(cid, text, kind, quote="", verdict="supported", role="mechanism"):
+    return {"id": cid, "text": text, "kind": kind, "role": role, "verdict": verdict,
+            "needs_number": False,
             "support": {"type": "blog_quote" if kind == "blog_stated" else None,
                         "quote": quote, "url": None}}
 

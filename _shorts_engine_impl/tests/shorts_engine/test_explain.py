@@ -38,12 +38,18 @@ def _good_plan():
         "question": "Why does calcium nitrate suit foliar sprays?",
         "steps": [
             step("s1", [{"id": "c1", "text": "Calcium nitrate dissolves readily in water.",
-                         "kind": "blog_stated",
+                         "kind": "blog_stated", "role": "mechanism",
                          "quote": "Calcium nitrate dissolves readily in water."}]),
             step("s2", [{"id": "c2", "text": "Dissolved salt passes through spray nozzles.",
-                         "kind": "reasoning", "quote": ""}]),
+                         "kind": "reasoning", "role": "mechanism", "quote": ""},
+                        {"id": "l2", "text": "Because the salt dissolves, nothing solid "
+                                             "reaches the nozzle.",
+                         "kind": "reasoning", "role": "link", "quote": ""}]),
             step("s3", [{"id": "c3", "text": "Soluble powder avoids clogged nozzles.",
-                         "kind": "reasoning", "quote": ""}]),
+                         "kind": "reasoning", "role": "mechanism", "quote": ""},
+                        {"id": "l3", "text": "Because nothing solid reaches the nozzle, it "
+                                             "does not clog.",
+                         "kind": "reasoning", "role": "link", "quote": ""}]),
         ],
         "payoff": {"takeaway": "Choose a consistently soluble powder.",
                    "differentiator_id": "b_purity"},

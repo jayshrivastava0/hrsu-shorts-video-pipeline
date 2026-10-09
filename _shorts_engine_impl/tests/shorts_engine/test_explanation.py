@@ -19,8 +19,8 @@ BRAND = BrandFacts(company="HRSU", domain="hrsuindore.com", tagline="t",
                    cta_lines=["Visit hrsuindore.com"], banned_claims=[])
 
 
-def _claim(cid, text, kind="blog_stated", quote=""):
-    return {"id": cid, "text": text, "kind": kind, "quote": quote}
+def _claim(cid, text, kind="blog_stated", quote="", role="mechanism"):
+    return {"id": cid, "text": text, "kind": kind, "role": role, "quote": quote}
 
 
 def _step(sid, claims, entities=("sand",)):
@@ -35,8 +35,12 @@ def _plan():
             _step("s1", [_claim("c1", "Engineers model desert soil with a sand mixture.",
                                 quote="a 20% calcium carbonate and 80% river sand mixture")]),
             _step("s2", [_claim("c2", "Calcium nitrate dissolves readily in water.",
-                                kind="external_fact")]),
-            _step("s3", [_claim("c3", "So nutrients move with the water.", kind="reasoning")]),
+                                kind="external_fact"),
+                         _claim("l2", "Because the soil is mostly sand, dissolved salts meet "
+                                      "little resistance.", kind="reasoning", role="link")]),
+            _step("s3", [_claim("c3", "So nutrients move with the water.", kind="reasoning"),
+                         _claim("l3", "Because the salt is dissolved, it travels with the "
+                                      "draining water.", kind="reasoning", role="link")]),
         ],
         "payoff": {"takeaway": "Pick a consistent powder.", "differentiator_id": "b_purity"},
     }
@@ -161,12 +165,79 @@ class TestValidatePlan:
         assert any("question" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
 
 
+class TestExplanationRules:
+    """Spec section 12: every step explains its why/how and follows from the previous one."""
+
+    def test_schema_requires_role(self):
+        p = _plan()
+        del p["steps"][0]["claims"][0]["role"]
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(p, ex.PLAN_SCHEMA)
+
+    def test_step_without_mechanism_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["claims"][0]["role"] = "fact"
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "mechanism" in e for e in errs)
+
+    def test_first_step_without_mechanism_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["claims"][0]["role"] = "fact"
+        assert any("s1" in e and "mechanism" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_second_step_without_link_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["claims"] = p["steps"][1]["claims"][:1]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "link" in e for e in errs)
+
+    def test_first_step_needs_no_link(self):
+        p = _plan()
+        assert not any("s1" in e and "link" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_link_of_kind_blog_stated_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["claims"][1] = _claim(
+            "l2", "Calcium nitrate dissolves readily in water.", kind="blog_stated",
+            quote="Calcium nitrate dissolves readily in water.", role="link")
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("l2" in e and "link" in e and "reasoning" in e for e in errs)
+
+    def test_illustrative_mechanism_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["claims"][0] = _claim("c2", "Like sugar vanishing in tea.",
+                                            kind="illustrative")
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("c2" in e and "mechanism" in e and "illustrative" in e for e in errs)
+
+    def test_illustrative_fact_is_still_allowed(self):
+        p = _plan()
+        p["steps"][1]["claims"].append(_claim("i2", "Like sugar vanishing in tea.",
+                                              kind="illustrative", role="fact"))
+        assert ex.validate_plan(p, CANONICAL, BRAND) == []
+
+    def test_empty_question_is_rejected(self):
+        p = _plan()
+        p["question"] = "   "
+        assert any("question" in e and "empty" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_unknown_role_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["claims"].append(_claim("cx", "x y z", kind="reasoning", role="vibe"))
+        assert any("cx" in e and "role" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+
 class TestDocumentHelpers:
     def test_finalize_claim_shape(self):
         c = ex.finalize_claim(_claim("c1", "Mix is 20% carbonate", quote="q"))
         assert c == {"id": "c1", "text": "Mix is 20% carbonate", "kind": "blog_stated",
+                     "role": "mechanism",
                      "support": {"type": "blog_quote", "quote": "q", "url": None},
                      "verdict": None, "needs_number": True}
+
+    def test_finalize_claim_defaults_role_to_fact_for_legacy_claims(self):
+        raw = {"id": "c1", "text": "Old claim.", "kind": "external_fact", "quote": ""}
+        assert ex.finalize_claim(raw)["role"] == "fact"
 
     def test_to_plan_document_finalizes_every_claim_and_does_not_mutate_input(self):
         raw = _plan()
