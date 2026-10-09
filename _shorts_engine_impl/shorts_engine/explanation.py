@@ -319,3 +319,10 @@ def to_plan_document(raw: dict, attempts: int) -> dict:
 
 def supported_claims(step: dict) -> list[dict]:
     return [c for c in step.get("claims", []) if c.get("verdict") == "supported"]
+
+
+def depends_on_ids(step: dict) -> list[str]:
+    """A step's `depends_on` claim ids; [] when absent (plans stored before depends_on
+    existed) or malformed. Non-string entries are ignored."""
+    deps = step.get("depends_on")
+    return [d for d in deps if isinstance(d, str)] if isinstance(deps, list) else []

@@ -518,24 +518,25 @@ def _flow_claim(cid, text, role, verdict="supported"):
 
 
 def _flow_plan():
-    """Three steps: s2 defines 'denitrification'; every step has a mechanism claim."""
+    """Three steps: s2 defines 'denitrification'; every step has a mechanism claim and
+    (after the first) builds on the previous step's mechanism."""
     return {
         "question": "Why do plants dose calcium nitrate?",
         "steps": [
             {"step_id": "s1", "terms": [],
              "claims": [_flow_claim("m1", "Septic sewage releases hydrogen sulfide gas.",
                                     "mechanism")]},
-            {"step_id": "s2",
+            {"step_id": "s2", "depends_on": ["m1"],
              "terms": [{"term": "denitrification",
                         "definition": "bacteria turning nitrate into nitrogen gas",
                         "unit": ""}],
              "claims": [_flow_claim("l2", "Because sulfide forms without oxygen, an "
-                                          "alternative oxidant helps.", "link"),
+                                          "alternative oxidant helps.", "fact"),
                         _flow_claim("m2", "Bacteria breathe nitrate instead of oxygen.",
                                     "mechanism")]},
-            {"step_id": "s3", "terms": [],
+            {"step_id": "s3", "depends_on": ["m2"], "terms": [],
              "claims": [_flow_claim("l3", "Since bacteria prefer nitrate, sulfide stops "
-                                          "forming.", "link"),
+                                          "forming.", "fact"),
                         _flow_claim("m3", "Nitrate keeps the sewage oxidised.",
                                     "mechanism")]},
         ],

@@ -2,7 +2,9 @@
 SCRIPT stage -- verified explanation_plan.json (+ post.json, factsheet.json) to script.json.
 
 The writer no longer invents the logic: it narrates the verified plan, one beat per
-step (link transition, then the mechanism as cause and effect, then supporting facts),
+step (an opening that connects the earlier verified claims the step builds on, its
+`depends_on`, in the writer's own words; then the mechanism as cause and effect; then the
+supporting facts),
 with a hook that poses the plan's question and a CTA that answers it from already
 narrated verified claims and cites the payoff's brand differentiator. All
 deterministic gates stay (number tracing, banned phrases, card_text hygiene, exactly
@@ -345,17 +347,22 @@ _WRITER_SYSTEM = (
     "industrial chemicals. Voice: concrete, technical, zero hype, like a good teacher. You "
     "are given a VERIFIED explanation plan: narrate it step by step, in order. The video "
     "must EXPLAIN, not just assert. Open with a hook that poses the plan's question. "
-    "Narrate each step in this order: (1) a transition sentence built from its 'how this "
-    "follows' claim (\"Because ..., ...\"), so the step visibly follows from the previous one "
-    "(the first step follows from the question); (2) the mechanism, explained as cause and "
-    "effect in plain words, so a viewer who knows nothing about it can follow why and how "
-    "it happens, adding no cause, step or condition that its verified claims do not state; "
-    "(3) the supporting facts. Define every term the first time it "
+    "Narrate each step in this order: (1) open the step by connecting its BUILDS ON claims "
+    "(the earlier verified claims it builds on) to this step in your own words, guided by "
+    "its OPENING TRANSITION, so the step visibly follows from them (the first step follows "
+    "from the question); use only those claims and this step's verified claims -- a "
+    "connector may not add any cause, condition, number or fact; (2) the WHY / HOW (the "
+    "mechanism), "
+    "explained as cause and effect in plain words, so a viewer who knows nothing about it "
+    "can follow why and how it happens, adding no cause, step or condition that its "
+    "verified claims do not state -- never skip the why/how; (3) the supporting facts. "
+    "Define every term the first time it "
     "is used, using ONLY the definitions provided. Never assume the viewer already knows why "
     "something happens. Convey ONLY the verified claims listed for each step -- never add a "
     "fact, number or unit that is not in the verified claims. The last item is the CTA: "
     "answer the question in one or two sentences using only verified claims you already "
-    "narrated, then cite the brand differentiator and the domain, so the video ends as it "
+    "narrated plus the approved brand statements, then cite the brand differentiator and "
+    "the domain, so the video ends as it "
     "answers the question. For any statement about the company or its product the "
     "CTA may use only the cited differentiator text, the brand CTA lines and the domain; "
     "never invent additional claims about purity, QC, certifications, delivery or pricing. "
@@ -371,13 +378,16 @@ _CRITIC_SYSTEM = (
     "defined before use, is the chemistry described clearly?), hrsu_reason_score (is there "
     "one credible reason to consider HRSU?), faithfulness_score (does the narration assert "
     "ANYTHING not in the verified claims or the approved brand statements? any such addition "
-    "scores below 5). Approved brand statements in the CTA are allowed and do not count "
-    "against faithfulness, but a CTA must not add brand or product claims beyond them. "
-    "flow_score (does the script EXPLAIN rather than assert? Does each step follow from the "
-    "previous one, using its LINK claim? Is every MECHANISM actually explained -- the why/how "
-    "as cause and effect, not just asserted? Is any term used before it is defined? Does the "
-    "ending answer the question?): a bare assertion with no why/how, or a step that does not "
-    "connect to the previous one, scores below 5. "
+    "scores below 5; in particular, a transition or connector that adds a cause, fact or "
+    "claim not in the verified claims -- the claims a step BUILDS ON or the step's own -- "
+    "scores faithfulness_score below 5). Approved brand statements in the CTA are allowed "
+    "and do not count against faithfulness, but a CTA must not add brand or product claims "
+    "beyond them. flow_score judges the chain (does the script EXPLAIN rather than assert? "
+    "Does each step open by connecting the earlier verified claims it BUILDS ON to this "
+    "step, so it visibly follows from them? Is every MECHANISM actually explained -- the "
+    "why/how as cause and effect, not just asserted? Is any term used before it is defined? "
+    "Does the ending answer the question?): a bare assertion with no why/how, or a step "
+    "that does not connect to what it builds on, scores below 5. "
     "Give concrete revise_notes."
 )
 
@@ -432,14 +442,18 @@ def _fact_ids_for_step(step: dict, factsheet: dict) -> list[str]:
 
 
 def extra_pool_by_beat(plan: dict) -> dict[str, str]:
-    """beat name -> text of the step's supported claims (number provenance).
+    """beat name -> text of the step's supported claims (every role) plus the supported
+    earlier claims it BUILDS ON (number provenance: the writer may restate a builds-on
+    claim when it connects to it).
 
     Claim TEXT only: claim texts are pair-gated against their sources in verify_claims,
     while a support quote (e.g. a whole retrieved sentence) can carry numbers the claim
-    never asserted."""
-    return {f"step_{i}": " | ".join(c["text"] for c in explanation.supported_claims(step)
-                                    if c.get("text"))
-            for i, step in enumerate(plan["steps"], start=1)}
+    never asserted. A step's `transition` is not a claim and never widens the pool."""
+    out = {}
+    for pos, step in enumerate(plan["steps"]):
+        claims = explanation.supported_claims(step) + _builds_on_claims(plan, pos)
+        out[f"step_{pos + 1}"] = " | ".join(c["text"] for c in claims if c.get("text"))
+    return out
 
 
 def terms_by_step_beat(plan: dict) -> dict[str, list[dict]]:
@@ -470,41 +484,63 @@ def build_beats(doc: dict, plan: dict, factsheet: dict,
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
-_LINK_LABEL = "HOW THIS FOLLOWS FROM THE PREVIOUS STEP (use as the opening transition):"
+_BUILDS_LABEL = "BUILDS ON (earlier verified claims):"
+_TRANSITION_LABEL = "OPENING TRANSITION (guidance, words only):"
 _MECH_LABEL = ("WHY / HOW (the mechanism - explain THIS claim as cause and effect in plain "
                "words; add no causes, steps, conditions or facts that are not listed):")
 _FACT_LABEL = "SUPPORTING FACTS:"
 
 
 def _supported_by_role(step: dict) -> dict[str, list[str]]:
-    """role -> ["  - claim text", ...] for the step's supported claims. A claim without a
-    known role (a pre-role plan) counts as a supporting fact."""
-    out: dict[str, list[str]] = {r: [] for r in explanation.CLAIM_ROLES}
+    """{"mechanism": [...], "fact": [...]} of "  - claim text" lines for the step's
+    supported claims. Any role other than "mechanism" (none, or a legacy stored "link")
+    counts as a supporting fact."""
+    out: dict[str, list[str]] = {"mechanism": [], "fact": []}
     for c in explanation.supported_claims(step):
-        role = c.get("role") if c.get("role") in out else "fact"
-        out[role].append(f"  - {c['text']}")
+        out["mechanism" if c.get("role") == "mechanism" else "fact"].append(f"  - {c['text']}")
     return out
+
+
+def _builds_on_claims(plan: dict, pos: int) -> list[dict]:
+    """The supported claims of EARLIER steps that step `pos` lists in `depends_on`, in
+    depends_on order (unknown, unsupported, same-step or later ids are ignored)."""
+    by_id = {c.get("id"): c for s in plan["steps"][:pos]
+             for c in explanation.supported_claims(s)}
+    out, seen = [], set()
+    for cid in explanation.depends_on_ids(plan["steps"][pos]):
+        if cid in by_id and cid not in seen:
+            seen.add(cid)
+            out.append(by_id[cid])
+    return out
+
+
+def _transition(step: dict) -> str:
+    t = step.get("transition")
+    return t.strip() if isinstance(t, str) else ""
 
 
 def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
                    gate_errors: list[str] | None = None, revise_notes: str = "",
                    previous_beats: list[dict] | None = None) -> str:
-    # Only verified text reaches the writer: the planner's step goals (claim_text) and
-    # payoff.takeaway are never verified, so they are deliberately left out.
+    # Only verified claim text reaches the writer as content: the planner's step goals
+    # (claim_text) and payoff.takeaway are never verified, so they are left out. The one
+    # unverified planner text shown is each step's `transition`, and only under the
+    # OPENING TRANSITION label as words-only guidance (validate_plan bans digits in it;
+    # the writer may not add any cause, condition, number or fact through it).
     blocks = []
     for pos, step in enumerate(plan["steps"]):
         by_role = _supported_by_role(step)
+        builds = [f"  - {c['text']}" for c in _builds_on_claims(plan, pos)]
         if pos == 0:
-            link_label = ("HOW THIS FOLLOWS FROM THE QUESTION (this first step must follow "
-                          "from the question; use as the opening transition):")
-            link_none = ("  - (connect this step directly to the QUESTION above using only "
-                         "verified claims)")
-        else:
-            link_label = _LINK_LABEL
-            link_none = "  - (connect this step to the previous one using only verified claims)"
-        groups = [(link_label, by_role["link"] or [link_none]),
-                  (_MECH_LABEL, by_role["mechanism"]),
-                  (_FACT_LABEL, by_role["fact"])]
+            builds = ["  - (none: this first step follows directly from the QUESTION above; "
+                      "connect it to the QUESTION using only verified claims)"]
+        elif not builds:
+            builds = ["  - (connect this step to the previous one using only verified claims)"]
+        groups = [(_BUILDS_LABEL, builds)]
+        if _transition(step):
+            groups.append((_TRANSITION_LABEL, [f"  {_transition(step)}"]))
+        groups += [(_MECH_LABEL, by_role["mechanism"]),
+                   (_FACT_LABEL, by_role["fact"])]
         body = "".join(f"{label}\n" + "\n".join(lines) + "\n"
                        for label, lines in groups if lines)
         terms = "\n".join(f"  - {t['term']}: {t['definition']}" for t in step.get("terms", []))
@@ -548,16 +584,19 @@ def _critic_prompt(plan: dict, beats: list[dict], brand: BrandFacts) -> str:
     approved = ([f"- {diff['text']}"] if diff else []) \
         + [f"- {line}" for line in brand.cta_lines] + [f"- {brand.domain}"]
     chain = []
-    for i, step in enumerate(plan["steps"], start=1):
+    for pos, step in enumerate(plan["steps"]):
         by_role = _supported_by_role(step)
-        lines = [f"  LINK (how it follows from the previous step): {t[4:]}"
-                 for t in by_role["link"]]
+        lines = [f"  BUILDS ON (earlier verified claim): {c['text']}"
+                 for c in _builds_on_claims(plan, pos)]
+        if _transition(step):
+            lines.append(f"  OPENING TRANSITION (guidance, not a claim): {_transition(step)}")
         lines += [f"  MECHANISM (why/how): {t[4:]}" for t in by_role["mechanism"]]
         lines += [f"  TERM: {t['term']}: {t['definition']}" for t in step.get("terms", [])]
-        chain.append(f"step_{i}:\n" + ("\n".join(lines) if lines else "  (none)"))
+        chain.append(f"step_{pos + 1}:\n" + ("\n".join(lines) if lines else "  (none)"))
     return (f"QUESTION the video must answer: {plan['question']}\n\n"
-            "EXPLANATION CHAIN to judge flow_score against (per step: how it follows from "
-            "the previous step, and the mechanism it must explain):\n" + "\n".join(chain)
+            "EXPLANATION CHAIN to judge flow_score against (per step: the earlier verified "
+            "claims it builds on, its opening guidance, and the mechanism it must "
+            "explain):\n" + "\n".join(chain)
             + f"\n\nVerified claims the script may rely on:\n{claims}\n\n"
             "APPROVED BRAND STATEMENTS (the CTA beat may use these verbatim; they are "
             "pre-approved company statements, not claims to verify, so faithfulness must "

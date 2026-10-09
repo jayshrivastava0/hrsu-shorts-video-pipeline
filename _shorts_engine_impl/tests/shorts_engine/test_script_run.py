@@ -233,28 +233,30 @@ class TestWriterPrompt:
         assert "b_purity" in prompt
         assert "no maximum" in prompt.lower()
 
-    LINK_LABEL = "HOW THIS FOLLOWS FROM THE PREVIOUS STEP (use as the opening transition):"
+    BUILDS_LABEL = "BUILDS ON (earlier verified claims):"
+    TRANS_LABEL = "OPENING TRANSITION (guidance, words only):"
     MECH_LABEL = ("WHY / HOW (the mechanism - explain THIS claim as cause and effect in plain "
                   "words; add no causes, steps, conditions or facts that are not listed):")
     FACT_LABEL = "SUPPORTING FACTS:"
+    S2_TRANSITION = "With the model soil in hand, the next question is how water moves through it."
 
-    @staticmethod
-    def _role_plan():
+    @classmethod
+    def _role_plan(cls):
         plan = _plan()
+        plan["steps"][0]["depends_on"] = []
+        plan["steps"][0]["transition"] = ""
         plan["steps"][0]["claims"].append(_claim(
             "f1x", "Desert soil is mostly loose sand.", "external_fact", role="fact"))
-        plan["steps"][1]["claims"].append(_claim(
-            "l2", "Because the model soil is mostly sand, water passes through it fast.",
-            "reasoning", role="link"))
+        plan["steps"][1]["depends_on"] = ["c1"]
+        plan["steps"][1]["transition"] = cls.S2_TRANSITION
         plan["steps"][1]["claims"].append(_claim(
             "f2x", "Sand grains are large compared with clay particles.", "external_fact",
             role="fact"))
         plan["steps"][1]["claims"].append(_claim(
             "u2", "UNSUPPORTED-MECH-MARKER drains everything.", "external_fact",
             verdict="unsupported"))
-        plan["steps"][2]["claims"].append(_claim(
-            "l3", "Since nutrients drain away, they must be kept dissolved.", "reasoning",
-            role="link"))
+        plan["steps"][2]["depends_on"] = ["c2"]
+        plan["steps"][2]["transition"] = "Once nutrients drain fast, holding them matters."
         return plan
 
     @staticmethod
@@ -266,46 +268,78 @@ class TestWriterPrompt:
 
     @staticmethod
     def _group(section, label):
-        labels = ("HOW THIS FOLLOWS FROM", "WHY / HOW", "SUPPORTING FACTS:", "Terms to define:")
+        labels = ("BUILDS ON", "OPENING TRANSITION", "WHY / HOW", "SUPPORTING FACTS:",
+                  "Terms to define:")
         body = section.split(label, 1)[1]
         cut = min((body.find(lb) for lb in labels if lb in body), default=len(body))
         return body[:cut]
 
-    def test_prompt_groups_verified_claims_by_role(self):
+    def test_prompt_shows_builds_on_transition_mechanism_and_facts_in_order(self):
         plan = self._role_plan()
         plan["steps"][1]["terms"] = [{"term": "EC", "definition": "conductivity", "unit": ""}]
         prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
         s2 = self._step_section(prompt, "s2")
-        link = self._group(s2, self.LINK_LABEL)
+        builds = self._group(s2, self.BUILDS_LABEL)
+        trans = self._group(s2, self.TRANS_LABEL)
         mech = self._group(s2, self.MECH_LABEL)
         facts = self._group(s2, self.FACT_LABEL)
-        assert "water passes through it fast" in link
+        assert "20% calcium carbonate sand mixture" in builds       # c1, from s1
+        assert "Sandy soil" not in builds
+        assert self.S2_TRANSITION in trans
         assert "Sandy soil drains nutrients quickly." in mech
-        assert "Sandy soil" not in link and "water passes" not in mech
         assert "Sand grains are large" in facts and "Sand grains" not in mech
+        assert (s2.index(self.BUILDS_LABEL) < s2.index(self.TRANS_LABEL)
+                < s2.index(self.MECH_LABEL) < s2.index(self.FACT_LABEL))
         assert "Terms to define:" in s2 and "EC: conductivity" in s2
         assert "UNSUPPORTED-MECH-MARKER" not in prompt
         s3 = self._step_section(prompt, "s3")
-        assert "kept dissolved" in self._group(s3, self.LINK_LABEL)
+        assert "Sandy soil drains nutrients quickly." in self._group(s3, self.BUILDS_LABEL)
         assert "held in solution" in self._group(s3, self.MECH_LABEL)
 
-    def test_first_step_transition_follows_from_the_question(self):
+    def test_prompt_has_no_link_labels(self):
+        prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
+                                             load_brand_facts())
+        assert "HOW THIS FOLLOWS FROM" not in prompt and "LINK" not in prompt
+        assert not hasattr(script_stage, "_LINK_LABEL")
+
+    def test_builds_on_lists_only_supported_claims_of_earlier_steps(self):
+        plan = self._role_plan()
+        plan["steps"][2]["claims"].append(_claim("u3", "OWN-STEP-MARKER claim.", "external_fact"))
+        plan["steps"][2]["depends_on"] = ["c2", "u2", "u3", "nope"]
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        builds = self._group(self._step_section(prompt, "s3"), self.BUILDS_LABEL)
+        assert "Sandy soil drains nutrients quickly." in builds
+        assert "UNSUPPORTED-MECH-MARKER" not in builds         # unsupported claim
+        assert "OWN-STEP-MARKER" not in builds                 # same step, not earlier
+
+    def test_first_step_builds_on_the_question_and_empty_transition_is_omitted(self):
         prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
                                              load_brand_facts())
         s1 = self._step_section(prompt, "s1")
-        transition = s1.split("\n", 1)[0] if s1.startswith("HOW THIS") else \
-            next(line for line in s1.splitlines() if line.startswith("HOW THIS FOLLOWS"))
-        assert "QUESTION" in transition.upper()
-        assert self.LINK_LABEL not in s1
+        assert "QUESTION" in self._group(s1, self.BUILDS_LABEL)
+        assert self.TRANS_LABEL not in s1
         assert "20% calcium carbonate" in self._group(s1, self.MECH_LABEL)
         assert "mostly loose sand" in self._group(s1, self.FACT_LABEL)
 
-    def test_first_step_placeholder_uses_only_verified_claims(self):
-        prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
-                                             load_brand_facts())
+    def test_first_step_transition_is_shown_when_given(self):
+        plan = self._role_plan()
+        plan["steps"][0]["transition"] = "To answer that, start with the soil itself."
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
         s1 = self._step_section(prompt, "s1")
-        assert ("(connect this step directly to the QUESTION above using only verified "
-                "claims)") in s1
+        assert "start with the soil itself" in self._group(s1, self.TRANS_LABEL)
+
+    def test_step_without_depends_on_gets_a_placeholder(self):
+        prompt = script_stage._writer_prompt(_plan(), {"title": "T"}, load_brand_facts())
+        builds = self._group(self._step_section(prompt, "s2"), self.BUILDS_LABEL)
+        assert "(connect this step to the previous one using only verified claims)" in builds
+
+    def test_legacy_link_role_claims_are_supporting_facts(self):
+        plan = self._role_plan()
+        plan["steps"][1]["claims"].append(_claim(
+            "l2", "LEGACY-LINK-MARKER because sand, fast.", "reasoning", role="link"))
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        facts = self._group(self._step_section(prompt, "s2"), self.FACT_LABEL)
+        assert "LEGACY-LINK-MARKER" in facts
 
     def test_mechanism_label_forbids_adding_causes_or_steps(self):
         assert "explain it fully, step by step" not in script_stage._MECH_LABEL
@@ -318,21 +352,37 @@ class TestWriterPrompt:
         prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
         assert "UNIQUE-GOAL-MARKER" not in prompt and "UNIQUE-TAKEAWAY-MARKER" not in prompt
 
-    def test_writer_system_narrates_link_mechanism_facts_in_order(self):
+    def test_transition_appears_only_as_opening_guidance(self):
+        plan = self._role_plan()
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        assert prompt.count(self.S2_TRANSITION) == 1
+        assert self.S2_TRANSITION in self._group(self._step_section(prompt, "s2"),
+                                                 self.TRANS_LABEL)
+
+    def test_writer_system_connects_builds_on_then_mechanism_then_facts(self):
         system = script_stage._WRITER_SYSTEM.lower()
-        assert system.index("transition") < system.index("mechanism") < \
+        assert system.index("builds on") < system.index("mechanism") < \
             system.index("supporting facts")
+        assert "may not add any cause, condition, number or fact" in system
+        assert "never skip the why/how" in system
         assert "cause and effect" in system
         assert "never assume the viewer already knows" in system
         assert "answers the question" in system
         assert "no maximum" in system and "filler" in system
+        assert "link" not in system
 
-    def test_extra_pool_includes_claims_of_every_role(self):
-        pool = script_stage.extra_pool_by_beat(self._role_plan())
-        assert "water passes through it fast" in pool["step_2"]      # link
+    def test_extra_pool_includes_claims_of_every_role_and_builds_on(self):
+        plan = self._role_plan()
+        plan["steps"][1]["claims"].append(_claim(
+            "l2", "LEGACY-LINK-MARKER because sand, fast.", "reasoning", role="link"))
+        pool = script_stage.extra_pool_by_beat(plan)
         assert "Sandy soil drains nutrients quickly." in pool["step_2"]  # mechanism
         assert "Sand grains are large" in pool["step_2"]              # fact
+        assert "LEGACY-LINK-MARKER" in pool["step_2"]                 # any stored role
+        assert "20% calcium carbonate sand mixture" in pool["step_2"]  # builds on c1
         assert "UNSUPPORTED-MECH-MARKER" not in pool["step_2"]
+        assert self.S2_TRANSITION not in pool["step_2"]               # not a claim
+        assert "20% calcium carbonate" not in pool["step_3"]          # s3 builds on c2 only
 
     def test_prompt_echoes_gate_errors_and_revise_notes(self):
         prompt = script_stage._writer_prompt(
@@ -644,16 +694,21 @@ class TestCtaBrandStatements:
         plan["steps"][0]["claims"].append(_claim(
             "m1", "Carbonate grains hold little water, so the mixture dries fast.",
             "external_fact", role="mechanism"))
-        plan["steps"][1]["claims"].append(_claim(
-            "l2", "Because the mixture dries fast, nutrients wash through it.", "reasoning",
-            role="link"))
+        plan["steps"][1]["depends_on"] = ["m1"]
+        plan["steps"][1]["transition"] = "TRANSITION-MARKER once it dries, water moves on."
         beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
         prompt = script_stage._critic_prompt(plan, beats, load_brand_facts())
         assert plan["question"] in prompt
-        assert "LINK (how it follows from the previous step): Because the mixture dries " \
-               "fast, nutrients wash through it." in prompt
-        assert "MECHANISM (why/how): Carbonate grains hold little water" in prompt
-        assert "LINK (how it follows from the previous step): Carbonate" not in prompt
+        chain = prompt.split("EXPLANATION CHAIN", 1)[1].split("Verified claims", 1)[0]
+        step2 = chain.split("step_2:", 1)[1].split("step_3:", 1)[0]
+        assert "BUILDS ON (earlier verified claim): Carbonate grains hold little water" in step2
+        assert "OPENING TRANSITION (guidance, not a claim): TRANSITION-MARKER" in step2
+        step1 = chain.split("step_1:", 1)[1].split("step_2:", 1)[0]
+        assert "MECHANISM (why/how): Carbonate grains hold little water" in step1
+        assert "LINK" not in prompt
+        verified = prompt.split("Verified claims the script may rely on:", 1)[1] \
+            .split("APPROVED BRAND STATEMENTS", 1)[0]
+        assert "TRANSITION-MARKER" not in verified
         assert "APPROVED BRAND STATEMENTS" in prompt
         for s in plan["steps"]:
             for c in s["claims"]:
@@ -664,6 +719,12 @@ class TestCtaBrandStatements:
         assert "flow_score" in system
         assert "defined" in system and "answer the question" in system
         assert "below 5" in system and "why/how" in system
+        assert "link" not in system
+
+    def test_critic_system_polices_transitions_under_faithfulness(self):
+        system = script_stage._CRITIC_SYSTEM.lower()
+        assert "transition" in system and "builds on" in system
+        assert "faithfulness_score below 5" in system
 
     def test_critic_system_exempts_approved_brand_statements(self, tmp_path, monkeypatch):
         router, _ = self._critic_prompt_text(tmp_path, monkeypatch)
