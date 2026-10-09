@@ -106,6 +106,15 @@ def test_planner_is_told_to_explain_the_mechanism_and_link_the_steps():
     assert "oxide film" in system
 
 
+def test_planner_is_told_a_link_only_connects_with_good_and_bad_examples():
+    system = explain._PLANNER_SYSTEM
+    assert "ONLY connect" in system
+    # the link is judged against earlier steps AND this step's own claims
+    assert "this step" in system
+    assert "Good link" in system and "Bad link" in system
+    assert "Because <earlier established claim>, <this step's mechanism>" in system
+
+
 def test_missing_mechanism_and_link_errors_are_echoed_into_the_retry_prompt(tmp_path,
                                                                              monkeypatch):
     ctx = _ctx(tmp_path)

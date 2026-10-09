@@ -8,8 +8,9 @@ Every factual claim is checked before it can reach the script:
   illustrative  -> no numbers allowed
 A step survives only with a supported non-illustrative `mechanism` claim (its
 why/how) and, unless it is the first step, a supported reasoning `link` claim
-(how it follows from the previous step). A link is checked against premises from
-EARLIER steps only. A failed claim, or a step missing its mechanism/link, is
+(how it follows from the previous step). A link only connects: it is checked, after
+the step's own fact/mechanism claims, against the premises of earlier steps plus those
+own supported claims, and must add nothing new. A failed claim, or a step missing its mechanism/link, is
 repaired by the planner (config.PLAN_MAX_REPAIR_ROUNDS rounds) and only then
 dropped, never guessed. When a step is dropped, the reasoning claims of later
 steps are re-checked against the surviving premises ("re-link"), so no link rests
@@ -60,6 +61,16 @@ _LOGIC_SYSTEM = (
     "'supported' only if the conclusion follows from the premises alone, 'contradicted' if "
     "the premises imply the opposite, otherwise 'unsupported'. Set passage_index to null."
 )
+_LINK_SYSTEM = (
+    "You are a strict logic checker for ONE transition sentence in an explainer. You get "
+    "verified premises (claims established in earlier steps and claims established in this "
+    "step) and ONE conclusion: a transition that should connect them. Answer 'supported' "
+    "ONLY if the conclusion merely connects or combines the premises (restating them, joined "
+    "by 'because'/'so') without adding any new fact, cause, effect, property, number or "
+    "condition that no premise states. Answer 'contradicted' if the premises imply the "
+    "opposite, otherwise 'unsupported' (including whenever it adds anything new). Set "
+    "passage_index to null."
+)
 _ILLUSTRATIVE_SYSTEM = (
     "You are a strict editor. You get ONE sentence labelled as an illustration. Answer "
     "'supported' ONLY if it is a pure analogy or illustration that makes no factual assertion "
@@ -74,7 +85,15 @@ _REPAIR_SYSTEM = (
     "do not repeat them. Re-explain a missing mechanism or link from the article's own text, "
     "or from a fact a reference source will confirm, stated plainly the way a textbook "
     "would. Set `role` on every claim: mechanism (what physically or chemically happens), "
-    "link (kind reasoning, 'because <previous step>, so <this step>'), or fact. Set `kind` on "
+    "link (kind reasoning, 'Because <earlier established claim>, <this step's mechanism>'), "
+    "or fact. A link must ONLY connect: it restates/combines a claim an earlier step "
+    "established with a claim of this step and adds NO new fact, cause, number or "
+    "condition; any new fact goes in its own mechanism or fact claim, which is verified on "
+    "its own. Good link: 'Because the rain water carries chloride ions, the chloride ions "
+    "break down the oxide film on the steel it wets.' (earlier: rain carries chloride ions; "
+    "this step: chloride ions break down the oxide film). Bad link: 'Because the salt keeps "
+    "the surface damp, it remains fluid and forms a durable matrix.' ('remains fluid' and "
+    "'durable matrix' are new facts no claim states). Set `kind` on "
     "every claim; blog_stated claims must copy a verbatim sentence from the article into "
     "`quote`, other kinds leave `quote` empty. Drop any number you cannot support with its "
     "unit. An empty list is allowed only if the step truly cannot be explained honestly."
@@ -151,8 +170,9 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
         if not premises:
             return _result(claim, "unsupported", "no verified premises to reason from")
         listing = "\n".join(f"- {p}" for p in premises)
+        system = _LINK_SYSTEM if _role(claim) == "link" else _LOGIC_SYSTEM
         res = text_llm.generate_schema_json(
-            f"Premises:\n{listing}\n\nConclusion: {text}", _LOGIC_SYSTEM, VERDICT_SCHEMA,
+            f"Premises:\n{listing}\n\nConclusion: {text}", system, VERDICT_SCHEMA,
             local_only=local_only, role="verifier")
         if res["verdict"] != "supported":
             return _result(claim, res["verdict"], "does not follow from the verified premises")
@@ -176,22 +196,34 @@ def _is_premise(claim: dict) -> bool:
 def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = False) -> None:
     """Verify every not-yet-verified claim, in chain order (mutates `plan`).
 
-    Premises are supported non-illustrative claims. A `link` claim is checked against
-    the premises of EARLIER steps only (it must follow from the previous step, not
-    restate its own); any other claim also sees the earlier claims of its own step.
+    Premises are supported non-illustrative claims. Within a step the fact/mechanism
+    claims are verified first (each also sees the earlier ones of its step), then the
+    `link` claims, whatever their stored order. A link only CONNECTS: it is judged
+    (with _LINK_SYSTEM) against the premises of earlier steps PLUS this step's own
+    supported fact/mechanism claims, and it fails outright when no earlier step
+    established anything (a link of the first step has nothing to follow from).
     """
     earlier: list[str] = []
     for step in plan["steps"]:
+        claims = step["claims"]
+        order = ([i for i, c in enumerate(claims) if _role(c) != "link"]
+                 + [i for i, c in enumerate(claims) if _role(c) == "link"])
         own: list[str] = []
-        for i, claim in enumerate(step["claims"]):
+        own_links: list[str] = []
+        for i in order:
+            claim = claims[i]
+            is_link = _role(claim) == "link"
             if claim.get("verdict") is None:
-                premises = earlier if _role(claim) == "link" else earlier + own
-                step["claims"][i] = verify_claim(
-                    claim, step=step, premises=list(premises), canonical=canonical,
-                    retriever=retriever, local_only=local_only)
-            if _is_premise(step["claims"][i]):
-                own.append(step["claims"][i]["text"])
-        earlier += own
+                if is_link and not earlier:
+                    claims[i] = _result(claim, "unsupported",
+                                        "no verified premises from earlier steps to link from")
+                else:
+                    claims[i] = verify_claim(
+                        claim, step=step, premises=earlier + own, canonical=canonical,
+                        retriever=retriever, local_only=local_only)
+            if _is_premise(claims[i]):
+                (own_links if is_link else own).append(claims[i]["text"])
+        earlier += own + own_links
 
 
 def _missing(step: dict, first: bool) -> list[str]:
@@ -233,10 +265,12 @@ def _repair_step(plan: dict, step: dict, missing: list[str], round_no: int,
     if "no verified link" in missing:
         problems.append("MISSING LINK: no verified claim with role 'link' (kind reasoning) "
                         "says how this step follows from the previous step. Add one, "
-                        "'because <previous step>, so <this step>'. It is checked ONLY "
-                        "against what earlier steps established (the previous step is shown "
-                        "above): its 'so' part must follow from that alone; put any new fact in a mechanism or fact "
-                        "claim instead.")
+                        "'Because <earlier established claim>, <this step's mechanism>'. A "
+                        "link must ONLY connect: it is checked against what earlier steps "
+                        "established (the previous step is shown above) plus this step's "
+                        "own supported claims, and it fails if it adds any new fact, cause, "
+                        "number or condition. Put any new fact in a separate mechanism or "
+                        "fact claim of this step instead.")
     if failed:
         problems.append("FAILED CLAIMS: the claims listed below failed verification; "
                         "replace them with claims a source or the article supports, or "

@@ -33,18 +33,23 @@ class Router:
     def __init__(self, verdicts=None, repair=None):
         self.verdicts = list(verdicts or [])
         self.repair = repair
-        self.logic = None  # optional fn(prompt) -> verdict dict for the logic checker
+        self.logic = None  # optional fn(prompt) -> verdict dict for the logic/link checker
         self.calls = []
+        self.systems = []  # system prompt of each call, parallel to `calls`
 
     def __call__(self, prompt, system, schema, **kw):
         self.calls.append((schema, kw.get("role"), prompt))
+        self.systems.append(system)
         if schema is vc.VERDICT_SCHEMA:
-            if self.logic is not None and system is vc._LOGIC_SYSTEM:
+            logic_systems = (vc._LOGIC_SYSTEM, getattr(vc, "_LINK_SYSTEM", None))
+            if self.logic is not None and system in logic_systems:
                 return self.logic(prompt)
             if self.verdicts:
                 return self.verdicts.pop(0)
             return {"verdict": "supported", "passage_index": 0}
         if schema is vc.REPAIR_SCHEMA:
+            if callable(self.repair):
+                return self.repair(prompt)
             return self.repair or {"claims": []}
         raise AssertionError(schema)
 
@@ -482,17 +487,6 @@ class TestExplainTheWhy:
         doc = _run_doc(tmp_path, monkeypatch, steps, hold=True)
         assert [s["step_id"] for s in doc["dropped_steps"]] == ["s2"]
 
-    def test_link_premises_come_only_from_earlier_steps(self, llm):
-        own = _claim("m2", "OWN-STEP-MECHANISM dissolves.", "blog_stated", GOOD_QUOTE,
-                     role="mechanism")
-        link = _claim("l2", "Because of it, so this.", "reasoning", role="link")
-        plan = _plan([_step("s1", [_claim("m1", "EARLIER-STEP-FACT dissolves.",
-                                          "blog_stated", GOOD_QUOTE, role="mechanism")]),
-                      _step("s2", [own, link])])
-        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
-        logic = [p for s, _r, p in llm.calls if "Conclusion: Because of it" in p]
-        assert len(logic) == 1
-        assert "EARLIER-STEP-FACT" in logic[0] and "OWN-STEP-MECHANISM" not in logic[0]
 
     def test_link_whose_premise_step_is_dropped_is_not_left_supported(
             self, tmp_path, monkeypatch, llm):
@@ -538,3 +532,115 @@ class TestExplainTheWhy:
         llm.repair = {"claims": []}
         doc = _run_doc(tmp_path, monkeypatch, steps, hold=True)
         assert len(doc["dropped_steps"]) == 3
+
+
+class TestLinkOnlyConnects:
+    """Live failure (mining run): a link was judged against EARLIER steps only, so a link
+    combining the previous step with this step's own mechanism was refused. A link is
+    judged against earlier steps + this step's own supported fact/mechanism claims, with a
+    dedicated prompt that refuses anything new."""
+
+    EARLIER = "Calcium nitrate draws moisture from the air."
+    OWN = "A damp surface layer binds fine dust particles together."
+    LINK = "Because calcium nitrate draws moisture from the air, the damp layer binds the dust."
+
+    def _plan(self, s2_claims):
+        s1 = _step("s1", [_claim("m1", self.EARLIER, "blog_stated", GOOD_QUOTE,
+                                 role="mechanism")])
+        return _plan([s1, _step("s2", s2_claims)])
+
+    def _link_calls(self, llm):
+        return [(p, sysp) for (_s, _r, p), sysp in zip(llm.calls, llm.systems)
+                if "Conclusion: " + self.LINK in p]
+
+    def test_link_combining_earlier_and_own_mechanism_is_supported(self, llm):
+        def logic(prompt):  # supported only when BOTH halves of the link are premises
+            ok = self.EARLIER in prompt and self.OWN in prompt
+            return {"verdict": "supported" if ok else "unsupported", "passage_index": None}
+        llm.logic = logic
+        plan = self._plan([_claim("m2", self.OWN, "blog_stated", GOOD_QUOTE, role="mechanism"),
+                           _claim("l2", self.LINK, "reasoning", role="link")])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        link = plan["steps"][1]["claims"][1]
+        assert link["verdict"] == "supported"
+        calls = self._link_calls(llm)
+        assert len(calls) == 1
+        prompt, system = calls[0]
+        assert self.EARLIER in prompt and self.OWN in prompt
+        assert system is vc._LINK_SYSTEM
+
+    def test_link_adding_a_new_fact_is_unsupported(self, llm):
+        llm.logic = lambda prompt: ({"verdict": "unsupported", "passage_index": None}
+                                    if "Conclusion: Because" in prompt
+                                    else {"verdict": "supported", "passage_index": None})
+        plan = self._plan([
+            _claim("m2", self.OWN, "blog_stated", GOOD_QUOTE, role="mechanism"),
+            _claim("l2", "Because the salt binds dust, it remains fluid and forms a durable "
+                         "matrix.", "reasoning", role="link")])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        link = plan["steps"][1]["claims"][1]
+        assert link["verdict"] == "unsupported"
+        assert link["reason"] == "does not follow from the verified premises"
+
+    def test_link_is_verified_after_the_steps_mechanism_whatever_the_stored_order(self, llm):
+        plan = self._plan([_claim("l2", self.LINK, "reasoning", role="link"),
+                           _claim("m2", self.OWN, "blog_stated", GOOD_QUOTE, role="mechanism")])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        prompts = [p for _s, _r, p in llm.calls]
+        own_check = next(i for i, p in enumerate(prompts) if p.startswith("Claim: " + self.OWN))
+        link_check = next(i for i, p in enumerate(prompts) if "Conclusion: " + self.LINK in p)
+        assert own_check < link_check
+        assert self.OWN in prompts[link_check]
+        # the stored order of the claims is not changed
+        assert [c["id"] for c in plan["steps"][1]["claims"]] == ["l2", "m2"]
+        assert all(c["verdict"] == "supported" for c in plan["steps"][1]["claims"])
+
+    def test_own_unsupported_mechanism_is_not_a_link_premise(self, llm):
+        llm.verdicts = []
+        plan = self._plan([_claim("m2", "INVENTED-MECHANISM.", "blog_stated", "not in it",
+                                  role="mechanism"),
+                           _claim("l2", self.LINK, "reasoning", role="link")])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        prompt = self._link_calls(llm)[0][0]
+        assert "INVENTED-MECHANISM" not in prompt
+
+    def test_first_step_link_fails_with_no_premises_even_with_own_mechanism(self, llm):
+        plan = _plan([_step("s1", [_claim("m1", self.OWN, "blog_stated", GOOD_QUOTE,
+                                          role="mechanism"),
+                                   _claim("l1", self.LINK, "reasoning", role="link")])])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        link = plan["steps"][0]["claims"][1]
+        assert link["verdict"] == "unsupported"
+        assert "no verified premises" in link["reason"]
+        assert self._link_calls(llm) == []
+
+    def test_link_number_must_trace_to_the_premises(self, llm):
+        llm.logic = lambda prompt: {"verdict": "supported", "passage_index": None}
+        plan = self._plan([_claim("m2", self.OWN, "blog_stated", GOOD_QUOTE, role="mechanism"),
+                           _claim("l2", "Because it draws moisture, dust drops 80%.",
+                                  "reasoning", role="link")])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        link = plan["steps"][1]["claims"][1]
+        assert link["verdict"] == "unsupported" and "trace" in link["reason"]
+
+    def test_link_system_prompt_refuses_anything_new(self):
+        s = vc._LINK_SYSTEM.lower()
+        assert "transition" in s and "new fact" in s and "connect" in s
+        assert s != vc._LOGIC_SYSTEM.lower()
+
+    def test_mechanism_reasoning_keeps_the_plain_logic_prompt(self, llm):
+        plan = self._plan([_claim("m2", "So the surface stays damp.", "reasoning",
+                                  role="mechanism")])
+        vc.verify_plan(plan, canonical=CANONICAL, retriever=FakeRetriever())
+        idx = next(i for i, (_s, _r, p) in enumerate(llm.calls)
+                   if "Conclusion: So the surface stays damp." in p)
+        assert llm.systems[idx] is vc._LOGIC_SYSTEM
+
+    def test_repair_prompt_says_a_link_only_connects(self, tmp_path, monkeypatch, llm):
+        steps = _good_steps()
+        steps[2]["claims"] = steps[2]["claims"][:1]  # s3: mechanism only, no link
+        llm.repair = {"claims": [GOOD_LINK]}
+        _run_doc(tmp_path, monkeypatch, steps)
+        prompt = _repair_prompts(llm)[0]
+        assert "ONLY connect" in prompt and "this step" in prompt
+        assert "ONLY connect" in vc._REPAIR_SYSTEM
