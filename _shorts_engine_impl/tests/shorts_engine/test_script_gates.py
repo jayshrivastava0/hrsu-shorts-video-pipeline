@@ -587,18 +587,49 @@ class TestGateFlow:
         beats = _flow_beats(step_3="Since things change, sulfide stops forming downstream.")
         assert gate_flow(beats, plan) == []
 
-    def test_term_used_before_definition_is_reported(self) -> None:
+    def test_term_used_before_definition_is_a_warning_not_an_error(self, caplog) -> None:
+        # The writer cannot always fix this (the plan orders the terms), so it is a logged
+        # warning that says exactly what to do; the critic's flow_score is the real guard.
         beats = _flow_beats(step_1="Sewage left without air goes septic, before "
                                    "denitrification can help, and releases hydrogen "
                                    "sulfide.")
-        errs = gate_flow(beats, _flow_plan())
-        assert any("'denitrification' used before it is defined" in e for e in errs)
-        assert all(e.startswith("flow[step_2]") for e in errs) and len(errs) == 1
+        with caplog.at_level("WARNING", logger="shorts_engine.stages.script"):
+            assert gate_flow(beats, _flow_plan()) == []
+        msgs = [r.getMessage() for r in caplog.records]
+        assert any("do not use 'denitrification' before step_2, or define it where you "
+                   "first use it" in m for m in msgs)
 
-    def test_term_in_hook_before_definition_is_reported(self) -> None:
+    def test_term_in_hook_before_definition_is_a_warning(self, caplog) -> None:
         beats = _flow_beats(hook="Why does Denitrification matter in sewers?")
-        errs = gate_flow(beats, _flow_plan())
-        assert any("'denitrification' used before it is defined" in e for e in errs)
+        with caplog.at_level("WARNING", logger="shorts_engine.stages.script"):
+            assert gate_flow(beats, _flow_plan()) == []
+        assert any("'denitrification'" in r.getMessage() for r in caplog.records)
+
+    def test_question_term_is_exempt_in_every_beat_before_its_definition(self, caplog) -> None:
+        plan = _flow_plan()
+        plan["question"] = "Why does denitrification stop sewer odour?"
+        beats = _flow_beats(hook="Why does denitrification stop sewer odour?",
+                            step_1="Sewage left without air goes septic, before "
+                                   "denitrification can help, and releases hydrogen "
+                                   "sulfide.")
+        with caplog.at_level("WARNING", logger="shorts_engine.stages.script"):
+            assert gate_flow(beats, plan) == []
+        assert not any("denitrification" in r.getMessage() for r in caplog.records)
+
+    def test_gate_flow_never_returns_a_term_order_error(self) -> None:
+        beats = _flow_beats(hook="Why does denitrification matter?",
+                            step_1="Denitrification is coming, and septic sewage releases "
+                                   "hydrogen sulfide.")
+        assert not any("defined" in e or "term" in e for e in gate_flow(beats, _flow_plan()))
+
+    def test_mechanism_match_uses_a_crude_stem(self) -> None:
+        plan = _flow_plan()
+        plan["steps"][2]["claims"][1]["text"] = "Nitrate oxidises the sulfide."
+        beats = _flow_beats(step_3="Nitrates oxidise sulfides, so the smell stops.")
+        assert gate_flow(beats, plan) == []
+        beats = _flow_beats(step_3="Since things change, the smell stops downstream.")
+        assert any("step_3" in e and "mechanism not narrated" in e
+                   for e in gate_flow(beats, plan))
 
     def test_term_used_in_its_own_and_later_steps_passes(self) -> None:
         beats = _flow_beats(step_3="Since bacteria now prefer nitrate, denitrification "

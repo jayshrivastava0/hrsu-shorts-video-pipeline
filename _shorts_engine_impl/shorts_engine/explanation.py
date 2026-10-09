@@ -241,6 +241,48 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
                              for e in gate_claim_numbers(c["text"], quote, s.get("terms"))]
             elif kind == "illustrative" and has_number(c.get("text", "")):
                 errs.append(f"claim[{cid}]: illustrative claims must not contain numbers")
+    return errs + _term_order_errors(plan)
+
+
+_MIN_ORDERED_TERM_LEN = 4
+
+
+def _uses_term(term: str, text: str) -> bool:
+    """Case-insensitive whole-word/phrase match (no letter/digit directly either side)."""
+    return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])",
+                          text or "", re.IGNORECASE))
+
+
+def _term_order_errors(plan: dict) -> list[str]:
+    """A term defined in a step's `terms` must not appear in the claim texts of an EARLIER
+    step (unless that or an even earlier step also defines it). Terms shorter than
+    _MIN_ORDERED_TERM_LEN chars and terms in the plan's question are ignored."""
+    errs: list[str] = []
+    steps = plan.get("steps", [])
+    question = plan.get("question", "")
+    first_def: dict[str, int] = {}
+    for pos, s in enumerate(steps):
+        for t in s.get("terms") or []:
+            key = (t.get("term") or "").strip().lower()
+            if key:
+                first_def.setdefault(key, pos)
+    reported: set[str] = set()
+    for pos, s in enumerate(steps):
+        for t in s.get("terms") or []:
+            term = (t.get("term") or "").strip()
+            key = term.lower()
+            if (len(term) < _MIN_ORDERED_TERM_LEN or key in reported
+                    or first_def.get(key) != pos or _uses_term(term, question)):
+                continue
+            for earlier in steps[:pos]:
+                if any(_uses_term(term, c.get("text", "")) for c in earlier.get("claims", [])):
+                    reported.add(key)
+                    errs.append(
+                        f"terms: {term!r} is defined in step[{s.get('step_id')}] but already "
+                        f"used in step[{earlier.get('step_id')}]'s claims -- define it in "
+                        f"step[{earlier.get('step_id')}]'s terms where it is first used, or "
+                        f"reorder the steps so it is defined before it is used")
+                    break
     return errs
 
 

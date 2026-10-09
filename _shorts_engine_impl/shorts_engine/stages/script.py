@@ -7,7 +7,8 @@ with a hook that poses the plan's question and a CTA that answers it from alread
 narrated verified claims and cites the payoff's brand differentiator. All
 deterministic gates stay (number tracing, banned phrases, card_text hygiene, exactly
 one differentiator in the CTA, the 30 s floor), plus gate_flow (each step narrates its
-mechanism; no term used before the step that defines it), but there are no per-purpose word
+mechanism; a term used before the step that defines it is only logged as a warning), but
+there are no per-purpose word
 budgets and no filler top-up: length follows the content, with no ceiling.
 
 A critic from a different model family then scores the FINAL script (coherence,
@@ -197,6 +198,21 @@ def _content_words(text: str) -> set[str]:
             if len(w) >= 5 and w.lower() not in _FLOW_STOPWORDS}
 
 
+_STEM_SUFFIXES = ("ing", "es", "ed", "ly", "s")
+
+
+def _stem(word: str) -> str:
+    """Crude stem: lowercase, strip ONE of -ing/-es/-ed/-ly/-s (keeping >= 3 letters), then
+    a trailing 'e', so "Nitrates"/"nitrate", "oxidise"/"oxidises" and "sulfides"/"sulfide"
+    meet. Whole words only: "preoxidationx" never matches "oxidation"."""
+    w = word.lower()
+    for suf in _STEM_SUFFIXES:
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            w = w[:-len(suf)]
+            break
+    return w[:-1] if w.endswith("e") and len(w) > 3 else w
+
+
 def _has_phrase(phrase: str, text: str) -> bool:
     """Case-insensitive whole-phrase match (no letter/digit directly either side)."""
     return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(phrase)}(?![A-Za-z0-9])",
@@ -206,24 +222,28 @@ def _has_phrase(phrase: str, text: str) -> bool:
 def gate_flow(beats: list[dict], plan: dict) -> list[str]:
     """Cheap, conservative checks that the script explains the plan's chain.
 
-    (a) Every step beat's narration contains at least one significant content word of
-        EACH of its step's supported mechanism claims (else the mechanism was skipped).
-    (b) A step's defined term (>= 3 chars) must not appear in the narration of an
-        EARLIER beat (the hook or an earlier step) unless an earlier step also defines it.
-        Exempt: a term that is in the plan's question (the hook must pose it) for the
-        hook, and a term that the earlier step's own verified claims already use (the
-        plan's ordering, not the writer's). Whole-word, case-insensitive."""
+    (a) ERROR: every step beat's narration contains at least one significant content word
+        of EACH of its step's supported mechanism claims, compared on a crude stem (else
+        the mechanism was skipped).
+    (b) WARNING only (logged, never an error): a step's defined term (>= 3 chars) used in
+        the narration of an EARLIER beat (the hook or an earlier step) unless an earlier
+        step also defines it. The writer cannot always fix this (the plan orders the terms;
+        explanation.validate_plan enforces that order at plan time) and the critic's
+        flow_score is the real guard. Exempt: a term that is in the plan's question (every
+        beat before its definition may pose it), and a term that the earlier step's own
+        verified claims already use. Whole-word, case-insensitive."""
     errs: list[str] = []
     steps = {f"step_{i}": s for i, s in enumerate(plan.get("steps", []), start=1)}
     for b in beats:
         step = steps.get(b.get("beat"))
         if step is None:
             continue
+        narrated = {_stem(w) for w in _FLOW_WORD_RE.findall(b.get("narration", ""))}
         for c in explanation.supported_claims(step):
             if c.get("role") != "mechanism":
                 continue
             words = _content_words(c.get("text", ""))
-            if words and not any(_has_phrase(w, b.get("narration", "")) for w in words):
+            if words and not any(_stem(w) in narrated for w in words):
                 errs.append(f"flow[{b['beat']}]: mechanism not narrated "
                             f"(explain: {c.get('text', '')!r})")
     # first step (by beat position) that defines each term
@@ -241,18 +261,19 @@ def gate_flow(beats: list[dict], plan: dict) -> list[str]:
                 defined_at[key] = (order[name], name, term)
     question = plan.get("question", "")
     for key, (pos, name, term) in defined_at.items():
+        if _has_phrase(term, question):
+            continue
         for b in beats[:pos]:
             if not _has_phrase(term, b.get("narration", "")):
-                continue
-            if b.get("beat") == "hook" and _has_phrase(term, question):
                 continue
             earlier = steps.get(b.get("beat"))
             if earlier is not None and any(
                     _has_phrase(term, c.get("text", ""))
                     for c in explanation.supported_claims(earlier)):
                 continue
-            errs.append(f"flow[{name}]: term {term!r} used before it is defined "
-                        f"(used earlier in {b.get('beat')}; define it where first used)")
+            logger.warning(f"flow[{name}]: term {term!r} used in {b.get('beat')} before "
+                           f"{name} defines it -- do not use {term!r} before {name}, or "
+                           f"define it where you first use it")
             break
     return errs
 

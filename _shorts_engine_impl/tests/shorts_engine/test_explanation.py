@@ -191,6 +191,36 @@ class TestExplanationRules:
         errs = ex.validate_plan(p, CANONICAL, BRAND)
         assert any("s2" in e and "link" in e for e in errs)
 
+    def test_term_used_in_a_claim_before_the_step_that_defines_it_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["claims"][0]["text"] = "Engineers model desert soil infiltration."
+        p["steps"][2]["terms"] = [{"term": "Infiltration", "definition": "water soaking in",
+                                   "unit": ""}]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        hits = [e for e in errs if "'Infiltration'" in e]
+        assert len(hits) == 1
+        assert "s3" in hits[0] and "s1" in hits[0]
+        assert "define" in hits[0] and "reorder" in hits[0]
+
+    def test_term_defined_in_the_step_that_first_uses_it_passes(self):
+        p = _plan()
+        p["steps"][0]["claims"][0]["text"] = "Engineers model desert soil infiltration."
+        p["steps"][0]["terms"] = [{"term": "infiltration", "definition": "water soaking in",
+                                   "unit": ""}]
+        p["steps"][2]["terms"] = [{"term": "infiltration", "definition": "water soaking in",
+                                   "unit": ""}]
+        assert not any("infiltration" in e.lower() for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_term_order_rule_ignores_short_terms_question_terms_and_partial_words(self):
+        p = _plan()
+        p["question"] = "Why does sand drain nutrients through infiltration?"
+        p["steps"][0]["claims"][0]["text"] = ("Engineers model desert soil infiltration with "
+                                              "EC data and saltwater.")
+        p["steps"][2]["terms"] = [{"term": "infiltration", "definition": "d", "unit": ""},
+                                  {"term": "EC", "definition": "d", "unit": "dS/m"},
+                                  {"term": "salt", "definition": "d", "unit": ""}]
+        assert not any("term" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
     def test_first_step_needs_no_link(self):
         p = _plan()
         assert not any("s1" in e and "link" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
