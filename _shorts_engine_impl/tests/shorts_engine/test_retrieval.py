@@ -110,6 +110,69 @@ class TestRetriever:
         r.retrieve("Calcium nitrate dissolves in water")  # same after normalisation
         assert len(calls) == 1
 
+    def test_search_hits_get_fetch_budget_despite_many_citations(self):
+        from shorts_engine import config
+        cites = [f"https://cite{i}.org/page" for i in range(33)]
+        hits = [SearchHit("https://www.epa.gov/b", "", ""),
+                SearchHit("https://randomblog.com/a", "", "")]
+        fetched = []
+        r = Retriever(cites, search_fn=lambda q: hits,
+                      fetch_fn=lambda u: fetched.append(u) or self.PAGE)
+        out = r.retrieve("calcium nitrate dissolves in water")
+        assert "https://www.epa.gov/b" in fetched
+        assert len(fetched) <= config.RETRIEVAL_MAX_FETCHES
+        assert len(out) <= config.RETRIEVAL_MAX_PASSAGES
+
+    def test_citations_chosen_by_overlap_with_claim(self):
+        from shorts_engine import config
+        cites = [f"https://cite{i}.org/misc-page" for i in range(10)]
+        cites.append("https://cite-x.org/calcium-nitrate-solubility")
+        fetched = []
+        r = Retriever(cites, search_fn=lambda q: [],
+                      fetch_fn=lambda u: fetched.append(u) or "")
+        r.retrieve("calcium nitrate solubility in water")
+        assert "https://cite-x.org/calcium-nitrate-solubility" in fetched
+        assert len(fetched) <= config.RETRIEVAL_MAX_FETCHES
+
+    def test_url_fetched_at_most_once_per_retriever(self):
+        fetched = []
+        hits = [SearchHit("https://www.epa.gov/b", "", "")]
+        r = Retriever(["https://blog-cite.org/ref"], search_fn=lambda q: hits,
+                      fetch_fn=lambda u: fetched.append(u) or self.PAGE)
+        r.retrieve("calcium nitrate dissolves in water")
+        r.retrieve("calcium nitrate is used in fertigation")
+        assert sorted(fetched) == ["https://blog-cite.org/ref", "https://www.epa.gov/b"]
+
+    def test_empty_fetch_results_are_cached_too(self):
+        fetched = []
+        r = Retriever(["https://blog-cite.org/ref"], search_fn=lambda q: [],
+                      fetch_fn=lambda u: fetched.append(u) or "")
+        r.retrieve("first claim words")
+        r.retrieve("second claim words")
+        assert fetched == ["https://blog-cite.org/ref"]
+
+    def test_one_url_raising_does_not_lose_the_others(self):
+        hits = [SearchHit("https://www.epa.gov/b", "", "")]
+
+        def fetch(u):
+            if "blog-cite" in u:
+                raise RuntimeError("boom")
+            return self.PAGE
+        r = Retriever(["https://blog-cite.org/ref"], search_fn=lambda q: hits, fetch_fn=fetch)
+        out = r.retrieve("calcium nitrate dissolves in water")
+        assert out and all(p.url == "https://www.epa.gov/b" for p in out)
+
+    def test_trailing_slash_duplicates_fetched_once(self):
+        fetched = []
+        hits = [SearchHit("https://www.epa.gov/b/", "", ""),
+                SearchHit("https://www.epa.gov/b", "", ""),
+                SearchHit("https://blog-cite.org/ref/", "", "")]
+        r = Retriever(["https://blog-cite.org/ref"], search_fn=lambda q: hits,
+                      fetch_fn=lambda u: fetched.append(u) or self.PAGE)
+        r.retrieve("calcium nitrate dissolves in water")
+        norm = [u.rstrip("/") for u in fetched]
+        assert sorted(norm) == ["https://blog-cite.org/ref", "https://www.epa.gov/b"]
+
     def test_never_raises_when_search_fn_blows_up(self):
         def bad(q):
             raise RuntimeError("boom")
