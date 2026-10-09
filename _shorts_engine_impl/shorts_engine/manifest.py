@@ -30,6 +30,8 @@ STATUS_ORDER = [
     "init",
     "ingested",
     "facts",
+    "explained",
+    "claims_verified",
     "scripted",
     "shotlisted",
     "audio",

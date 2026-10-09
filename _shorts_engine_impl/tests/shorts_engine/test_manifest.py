@@ -38,6 +38,8 @@ class TestStatusOrder:
             "init",
             "ingested",
             "facts",
+            "explained",
+            "claims_verified",
             "scripted",
             "shotlisted",
             "audio",

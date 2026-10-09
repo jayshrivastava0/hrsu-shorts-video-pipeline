@@ -5,13 +5,7 @@ carries narrative-role meaning forward, and the only hard structural rules
 are a MIN_BEATS floor and a final beat whose purpose is "cta"."""
 from __future__ import annotations
 
-from shorts_engine.stages.script import (
-    apply_word_topup,
-    gate_total_duration,
-    gate_word_budget,
-    run_gates,
-    SCRIPT_SCHEMA,
-)
+from shorts_engine.stages.script import gate_total_duration, run_gates
 
 
 def _beat(beat, purpose, narration, fact_ids=None, card_text="c", broll_wish=""):
@@ -55,25 +49,7 @@ class TestFlexibleBeatStructure:
         errors = run_gates(beats, {"facts": []}, _fake_brand())
         assert not any(e.startswith("structure:") for e in errors)
 
-    def test_gate_word_budget_keys_off_purpose_not_position(self):
-        # A beat named "twist" with purpose "mechanism" must be judged against
-        # mechanism's word range, not against whatever beat sits at that index.
-        beats = [_beat("twist", "mechanism", "word " * 2)]  # far under mechanism's floor
-        errors = gate_word_budget(beats)
-        assert any("budget[twist]" in e for e in errors)
-
     def test_gate_total_duration_only_checks_floor_no_ceiling(self):
         # 200 words is far over the old 50s/85-word ceiling -- must NOT error.
         beats = [_beat("a", "cta", "word " * 200)]
         assert gate_total_duration(beats) == []
-
-    def test_apply_word_topup_uses_purpose_keyed_headroom(self):
-        beats = [_beat("twist", "mechanism", "short narration here")]
-        padded = apply_word_topup(beats)
-        assert len(padded[0]["narration"].split()) > len(beats[0]["narration"].split())
-
-    def test_schema_has_no_max_items_and_requires_purpose(self):
-        beats_schema = SCRIPT_SCHEMA["properties"]["beats"]
-        assert "maxItems" not in beats_schema
-        assert beats_schema["minItems"] == 3
-        assert "purpose" in beats_schema["items"]["required"]

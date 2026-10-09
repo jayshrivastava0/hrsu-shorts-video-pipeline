@@ -9,7 +9,11 @@ IMPORTANT: Do NOT re-export video_agent.config to callers. Import internally onl
 from __future__ import annotations
 
 import logging
+import os
+import re
 from pathlib import Path
+
+from shorts_engine.errors import EngineConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +59,12 @@ except ImportError as e:
     BRAND_TEXT_MUTED = "#8892b0"
 
 # ── Beat/Scene structure ────────────────────────────────────────────────────
-# Per-PURPOSE pacing guidance (not per fixed beat name/position) -- beats are
-# now free-form in count/order/naming (2026-08-26 creative-flow redesign); a
-# beat's `purpose` tag is what carries pacing intent forward, consumed by
-# shorts_engine.stages.script (gate_word_budget, gate_total_duration,
-# apply_word_topup, the writer prompt's beat rules) and shotlist.py (type
-# suggestion, CTA-length cap). "other" is the fallback for any beat whose
-# purpose isn't one of the five named ones.
+# Per-PURPOSE pacing guidance (not per fixed beat name/position). Retained only
+# for legacy tests/consumers: since the 2026-10-08 explanation-first redesign
+# the SCRIPT stage no longer uses PURPOSE_TEMPLATE at all -- there are no
+# per-purpose word budgets and no filler top-up; length follows the verified
+# plan and only the TOTAL_MIN_S floor is gated. "other" is the fallback for any
+# beat whose purpose isn't one of the five named ones.
 PURPOSE_TEMPLATE: dict[str, dict] = {
     "hook":      {"min_s": 2.0, "max_s": 4.0},
     "stakes":    {"min_s": 4.0, "max_s": 6.0},
@@ -84,6 +87,8 @@ MIN_BEATS = 3
 # estimates ~4% conservative vs. the 1.77 measurement, so downstream shot
 # spans and reflow deltas err slightly long rather than clipping.
 WORDS_PER_SECOND = 1.7
+# Retained only for legacy tests/consumers; no longer used by SCRIPT (there are
+# no per-beat word budgets since the 2026-10-08 explanation-first redesign).
 WORD_BUDGET_TOLERANCE = 0.20  # allow ±20% variance from target word count
 
 # ── Script quality gates ───────────────────────────────────────────────────
@@ -106,14 +111,78 @@ PAPER_DOMAINS = [
 STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
 
 # ── LLM behavior ───────────────────────────────────────────────────────────
-# 5, not 3: SCRIPT's writer must satisfy both the per-beat word budget AND
-# the aggregate TOTAL_MIN_S floor (there is no ceiling) simultaneously
-# (gate_total_duration) -- live runs showed it converging (33.5s -> 34.2s ->
-# beat-level overshoot while fixing the aggregate) but needing more than 3
-# attempts to land inside every constraint at once.
+# 5, not 3: SCRIPT's writer must pass every deterministic gate at once (number
+# tracing + units, banned phrases, card_text hygiene, one CTA differentiator and
+# the TOTAL_MIN_S floor -- there is no ceiling and no per-beat word budget);
+# live runs needed more than 3 attempts to land inside every constraint. The
+# planner (EXPLAIN) uses the same retry count against validate_plan.
 LLM_MAX_RETRIES = 5
 LLM_RETRY_DELAY_S = 2  # exponential backoff: 2s, 4s, 8s
 LLM_TIMEOUT_S = 60
+
+# ── Model roles (spec 2026-10-08 §8) ───────────────────────────────────────
+# Planner/writer = the user's choice (Gemma). Verifier and critic MUST be a
+# different model family from both the planner and the writer (a model checking
+# its own claims agrees with itself); check_role_independence() enforces that
+# at call time.
+# Verifier/critic default: nemotron-3-ultra:cloud. glm-5.2:cloud needs a paid
+# Ollama plan (HTTP 402), glm-5.1:cloud is retired (410), minimax-m3:cloud 402;
+# nemotron-3-ultra:cloud passed the 24-case scripts/eval_verifier.py bake-off
+# with false_support_rate 0.0 on 2026-10-09.
+# Any role can be overridden with env HRSU_MODEL_<ROLE> (e.g. HRSU_MODEL_VERIFIER).
+MODEL_ROLES: dict[str, str] = {
+    "planner": SMART_TEXT_MODEL,
+    "writer": SMART_TEXT_MODEL,
+    "verifier": "nemotron-3-ultra:cloud",
+    "critic": "nemotron-3-ultra:cloud",
+}
+_INDEPENDENT_ROLES = ("verifier", "critic")
+
+
+def model_for_role(role: str) -> str:
+    """Model name for a role; env HRSU_MODEL_<ROLE> overrides the default."""
+    override = os.environ.get(f"HRSU_MODEL_{role.upper()}")
+    if override:
+        return override
+    try:
+        return MODEL_ROLES[role]
+    except KeyError:
+        raise EngineConfigError(
+            f"unknown model role {role!r}; known: {sorted(MODEL_ROLES)}") from None
+
+
+def model_family(model: str) -> str:
+    """'gemma4:31b-cloud' -> 'gemma'; 'glm-5.2:cloud' -> 'glm'; 'org/gemma-x:7b' -> 'gemma'
+    (a namespaced name is reduced to its last path segment first)."""
+    name = model.strip().lower().rsplit("/", 1)[-1]
+    return re.split(r"[-:0-9._]", name, maxsplit=1)[0]
+
+
+def check_role_independence(role: str) -> None:
+    """Raise EngineConfigError if a verifier/critic shares the family of the writer or
+    the planner (the verifier grades the planner's claims, the critic the writer's script)."""
+    if role not in _INDEPENDENT_ROLES:
+        return
+    for graded in ("writer", "planner"):
+        if model_family(model_for_role(role)) == model_family(model_for_role(graded)):
+            raise EngineConfigError(
+                f"role {role!r} uses the same model family as the {graded} "
+                f"({model_for_role(role)!r} vs {model_for_role(graded)!r}); a model must "
+                f"not grade its own work")
+
+
+# ── Explanation plan / verification (spec 2026-10-08 §5-7) ─────────────────
+MIN_VERIFIED_STEPS = 3
+PLAN_MAX_REPAIR_ROUNDS = 2
+SCRIPT_MAX_REWRITES = 2          # critic-triggered rewrites before holding
+RETRIEVAL_MAX_RESULTS = 5
+RETRIEVAL_MAX_FETCHES = 6
+RETRIEVAL_MAX_PASSAGES = 3
+RETRIEVAL_FETCH_TIMEOUT_S = 10
+RETRIEVAL_SEARCH_RETRIES = 2
+# YouTube Shorts accepts up to 3 minutes (verify against current YouTube rules);
+# anything longer is labelled long-form at packaging time.
+SHORT_FORM_MAX_S = 180.0
 
 # ── Canvas & card design system (spec §5) ──────────────────────────────────
 CANVAS_W, CANVAS_H = 1080, 1920

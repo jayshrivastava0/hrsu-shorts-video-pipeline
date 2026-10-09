@@ -5,7 +5,7 @@ Provides command-line interface for running the shorts_engine pipeline:
   python -m shorts_engine <blog_url> [options]
 
 Options:
-  --until {ingest,facts,script,shotlist,audio,visuals,assemble}
+  --until {ingest,facts,explain,verify_claims,script,shotlist,audio,visuals,assemble}
                               Stop after reaching this stage
   --resume                    Resume from last completed stage
   --local-only                Use local Ollama model only
@@ -28,7 +28,7 @@ from typing import Any
 from shorts_engine import config, runner
 from shorts_engine.harness_bridge import run_creative_stage
 from shorts_engine.stages import (
-    facts, ingest, script, shotlist, audio,
+    facts, explain, verify_claims, ingest, script, shotlist, audio,
     verify, package, publish,
 )
 
@@ -57,6 +57,8 @@ def build_stages() -> list[runner.Stage]:
     return [
         ("ingest", "ingested", ingest.run),
         ("facts", "facts", facts.run),
+        ("explain", "explained", explain.run),
+        ("verify_claims", "claims_verified", verify_claims.run),
         ("script", "scripted", script.run),
         ("shotlist", "shotlisted", shotlist.run),
         ("audio", "audio", audio.run),
@@ -69,6 +71,29 @@ def build_stages() -> list[runner.Stage]:
 
 
 # ── Main CLI ───────────────────────────────────────────────────────────────
+def _safe_print(text: str) -> None:
+    """Write text to stdout without ever raising on characters the console cannot encode."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    sys.stdout.write(text.encode(enc, "replace").decode(enc) + "\n")
+
+
+def _maybe_print_plan(args, workspace) -> None:
+    """Print the explanation plan report if --print-plan was given.
+
+    Reporting must never change the exit code, so every failure is logged and swallowed.
+    """
+    if not getattr(args, "print_plan", False) or workspace is None:
+        return
+    try:
+        import json
+        from shorts_engine.review.plan_report import format_plan
+        path = Path(workspace) / "explanation_plan.json"
+        if path.exists():
+            _safe_print(format_plan(json.loads(path.read_text(encoding="utf-8"))))
+    except Exception:
+        logger.exception("Could not print explanation plan")
+
+
 def main(argv: list[str] | None = None) -> int:
     """
     Main entry point for shorts_engine CLI.
@@ -95,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.add_argument(
         "--until",
-        choices=["ingest", "facts", "script", "shotlist", "audio", "visuals", "assemble",
+        choices=["ingest", "facts", "explain", "verify_claims", "script", "shotlist", "audio", "visuals", "assemble",
                  "verify", "package", "publish"],
         default=None,
         help="Stop execution after reaching this stage",
@@ -139,12 +164,20 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually upload to YouTube (default is dry-run / hold for review)",
     )
 
+    parser.add_argument(
+        "--print-plan",
+        action="store_true",
+        help="Print the explanation plan and claim verdicts after the run (dry-run review)",
+    )
+
     args = parser.parse_args(argv)
 
     # Convert "until" flag to correct status names
     until_map = {
         "ingest": "ingested",
         "facts": "facts",
+        "explain": "explained",
+        "verify_claims": "claims_verified",
         "script": "scripted",
         "shotlist": "shotlisted",
         "audio": "audio",
@@ -190,8 +223,11 @@ def main(argv: list[str] | None = None) -> int:
         # Print success status. ASCII markers, not check/cross glyphs: a live
         # run COMPLETED the whole pipeline and then exited 1 because Windows'
         # cp1252 console couldn't encode the success message's U+2713.
-        print(f"[OK] Pipeline completed: {manifest.run_id}")
+        marker = "[HOLD]" if manifest.status == "hold_for_review" else "[OK]"
+        print(f"{marker} Pipeline completed: {manifest.run_id}")
         print(f"  Status: {manifest.status}")
+        if manifest.status == "hold_for_review" and getattr(manifest, "error", None):
+            _safe_print(f"  Hold reason: {manifest.error}")
 
         # Print artifacts if any
         if manifest.artifacts:
@@ -201,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
 
         if "contact_sheet" in manifest.artifacts:
             print(f"  Review: {manifest.artifacts.get('contact_sheet', '')}")
+
+        _maybe_print_plan(args, getattr(manifest, "workspace", None))
 
         return 0
 

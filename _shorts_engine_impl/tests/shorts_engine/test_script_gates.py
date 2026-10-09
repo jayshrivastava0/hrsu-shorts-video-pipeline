@@ -19,7 +19,6 @@ from shorts_engine.stages.script import (
     gate_differentiator,
     gate_numbers,
     gate_total_duration,
-    gate_word_budget,
     run_gates,
 )
 
@@ -169,6 +168,98 @@ class TestGateNumbers:
         assert gate_numbers([], FACTSHEET, BRAND) == []
 
 
+class TestGateNumberUnits:
+    """Narration numbers must also carry a unit (known, or defined in the beat's
+    plan-step terms) that the beat's allowed pool ties to that same number."""
+
+    FS = {"facts": FACTSHEET["facts"] + [
+        {"id": "f9", "verbatim_quote": "add 5 kg of powder per batch", "value": "5",
+         "unit": "kg", "tags": [], "citation_marker": None},
+        {"id": "f10", "verbatim_quote": "readings of 425 EC were recorded", "value": "425",
+         "unit": "EC", "tags": [], "citation_marker": None},
+    ]}
+
+    def _proof(self, narration, fact_ids=("f9",)):
+        return _beats(**{"3": {"narration": narration, "fact_ids": list(fact_ids)}})
+
+    def test_unit_not_tied_to_number_in_source_fails(self) -> None:
+        errs = gate_numbers(self._proof("Add 5 g of powder per batch."), self.FS, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("numbers[proof]:") and "'g'" in errs[0]
+
+    def test_bare_number_without_unit_fails(self) -> None:
+        errs = gate_numbers(self._proof("The batch count is 5."), self.FS, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("numbers[proof]:") and "no unit" in errs[0]
+
+    def test_correct_range_with_unit_passes(self) -> None:
+        beats = self._proof("A dosage range of 1.5 to 3 kg per cubic meter works.", ["f1"])
+        assert gate_numbers(beats, self.FS, BRAND) == []
+
+    def test_correct_number_and_unit_passes(self) -> None:
+        assert gate_numbers(self._proof("Add 5 kg of powder per batch."), self.FS, BRAND) == []
+
+    def test_unknown_unit_fails_without_term(self) -> None:
+        errs = gate_numbers(self._proof("Readings reach 425 EC.", ["f10"]), self.FS, BRAND)
+        assert len(errs) == 1 and "unknown unit" in errs[0]
+
+    def test_term_defined_unit_passes_when_pair_is_in_pool(self) -> None:
+        terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
+        beats = self._proof("Readings reach 425 EC.", ["f10"])
+        assert gate_numbers(beats, self.FS, BRAND, terms_by_beat=terms) == []
+
+    def test_term_defined_unit_fails_when_pair_is_not_in_pool(self) -> None:
+        fs = {"facts": [{"id": "f11", "verbatim_quote": "readings of 425 dS/m were recorded",
+                         "value": "425", "unit": "dS/m", "tags": [], "citation_marker": None}]}
+        terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
+        beats = self._proof("Readings reach 425 EC.", ["f11"])
+        errs = gate_numbers(beats, fs, BRAND, terms_by_beat=terms)
+        assert len(errs) == 1 and "'ec'" in errs[0]
+
+    def test_unit_check_covers_hook_and_cta(self) -> None:
+        brand = BrandFacts(company="HRSU", domain="hrsuindore.com", tagline="t",
+                           differentiators=[{"id": "b_purity", "text": "99.9% purity powder"}],
+                           cta_lines=["Visit hrsuindore.com"], banned_claims=[])
+        beats = _beats(**{"4": {"narration": "HRSU delivers 99.9 kg purity powder. Visit "
+                                             "hrsuindore.com today."}})
+        errs = gate_numbers(beats, FACTSHEET, brand)
+        assert len(errs) == 1 and errs[0].startswith("numbers[cta]:")
+
+    def test_untraced_number_reported_once(self) -> None:
+        errs = gate_numbers(self._proof("Reduces nitrate by 150 mg per liter."), self.FS, BRAND)
+        assert len(errs) == 1 and "150" in errs[0]
+
+    def test_unitless_number_in_card_text_fails(self) -> None:
+        # 425 traces to f10, but the card shows it with no unit
+        beats = _beats(**{"3": {"card_text": "Peaks at 425", "fact_ids": ["f1", "f10"]}})
+        errs = gate_numbers(beats, self.FS, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("numbers[proof]:") and "no unit" in errs[0]
+        assert "card_text" in errs[0]
+
+    def test_unitless_number_in_diagram_label_fails(self) -> None:
+        beats = _beats(**{"3": {"fact_ids": ["f1", "f10"], "diagram_labels": ["425", "soil"]}})
+        errs = gate_numbers(beats, self.FS, BRAND)
+        assert len(errs) == 1
+        assert "no unit" in errs[0] and "diagram label" in errs[0]
+
+    def test_card_text_with_traced_unit_passes(self) -> None:
+        beats = _beats(**{"3": {"card_text": "Add 5 kg per batch", "fact_ids": ["f9"],
+                                "narration": "Add 5 kg of powder per batch."}})
+        assert gate_numbers(beats, self.FS, BRAND) == []
+
+    def test_untraced_card_number_reported_once(self) -> None:
+        beats = _beats(**{"3": {"card_text": "Peaks at 777"}})
+        errs = gate_numbers(beats, self.FS, BRAND)
+        assert len(errs) == 1 and "777" in errs[0]
+
+    def test_run_gates_forwards_terms_by_beat(self) -> None:
+        beats = self._proof("Readings reach 425 EC. " + "More words here. " * 3, ["f10"])
+        terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
+        assert any("unknown unit" in e for e in run_gates(beats, self.FS, BRAND))
+        assert run_gates(beats, self.FS, BRAND, terms_by_beat=terms) == []
+
+
 class TestGateBanned:
     """Rejects SCRIPT_BANNED_PHRASES (AI-isms), FEAR_FILLER_PATTERNS (hype /
     fear marketing), and brand.banned_claims (hard-blocked claims) anywhere
@@ -209,56 +300,6 @@ class TestGateBanned:
         assert gate_banned([], BRAND) == []
 
 
-class TestGateWordBudget:
-    """Per-beat word count vs. its own `purpose`'s PURPOSE_TEMPLATE seconds x
-    WORDS_PER_SECOND, tolerated by WORD_BUDGET_TOLERANCE (spec §4 Stage 3:
-    2.6 words/s ±20%)."""
-
-    def test_default_beats_are_within_budget(self) -> None:
-        assert gate_word_budget(_beats()) == []
-
-    def test_hook_too_long_is_flagged(self) -> None:
-        too_long = _beats(**{"0": {"narration": " ".join(["word"] * 30)}})
-        errs = gate_word_budget(too_long)
-        assert len(errs) == 1 and "hook" in errs[0]
-
-    def test_hook_too_short_is_flagged(self) -> None:
-        too_short = _beats(**{"0": {"narration": "Hi."}})
-        errs = gate_word_budget(too_short)
-        assert len(errs) == 1 and "hook" in errs[0]
-
-    def test_multiple_out_of_budget_beats_each_reported(self) -> None:
-        bad = _beats(**{"0": {"narration": "Hi."}, "4": {"narration": "Go."}})
-        errs = gate_word_budget(bad)
-        assert len(errs) == 2
-
-    def test_cta_too_long_is_flagged(self) -> None:
-        too_long = _beats(**{"4": {"narration": " ".join(["word"] * 40)}})
-        errs = gate_word_budget(too_long)
-        assert len(errs) == 1 and "cta" in errs[0]
-
-    def test_error_bounds_are_integer_feasible_not_rounded(self) -> None:
-        """Regression: {:.0f} formatting rounded stakes' real bounds
-        (5.44-12.24 words at 1.7 w/s; was 8.32-18.72 at the old 2.6) to a
-        range that included word counts the gate actually rejects -- a live
-        run produced the paradoxical retry-echoed message '19 words outside
-        [8, 19]', telling the model 19 was simultaneously the maximum and
-        too many. Bounds must be shown ceil/floor'd: [6, 12]."""
-        over = _beats(**{"1": {"narration": " ".join(["word"] * 13)}})
-        errs = gate_word_budget(over)
-        assert len(errs) == 1
-        assert "[6, 12]" in errs[0]
-        assert "[5, 12]" not in errs[0]
-
-    def test_displayed_bounds_are_actually_accepted(self) -> None:
-        """Truthfulness property: a word count equal to either displayed
-        bound must pass the gate -- otherwise the message lies."""
-        at_max = _beats(**{"1": {"narration": " ".join(["word"] * 12)}})
-        assert gate_word_budget(at_max) == []
-        at_min = _beats(**{"1": {"narration": " ".join(["word"] * 6)}})
-        assert gate_word_budget(at_min) == []
-
-
 class TestGateTotalDuration:
     """Aggregate duration vs. the config.TOTAL_MIN_S floor -- no ceiling
     (2026-08-26 creative-flow redesign: longer videos are fine). gate_word_
@@ -290,12 +331,8 @@ class TestGateTotalDuration:
         assert len(errs) == 1
         assert "total_duration" in errs[0]
 
-    def test_too_short_message_names_exact_deficit_and_headroom_beats(self) -> None:
-        """Regression: the model repeatedly landed a few words short of the
-        floor even after being told the aggregate target RANGE -- the error
-        must do the arithmetic for it (exact word count needed) and name
-        which specific beats have room, not just say 'lengthen the shorter
-        beats'."""
+    def test_too_short_message_names_exact_deficit(self) -> None:
+        """The error does the arithmetic for the writer: exact words needed."""
         short = _beats(**{
             "0": {"narration": " ".join(["word"] * 5)},
             "1": {"narration": " ".join(["word"] * 8)},
@@ -307,8 +344,6 @@ class TestGateTotalDuration:
         assert len(errs) == 1
         assert "AT LEAST" in errs[0]
         assert "4" in errs[0]  # 51 - 50 + 3 buffer = 4
-        # names at least one beat with headroom and its current/max words
-        assert "mechanism" in errs[0] or "proof" in errs[0]
 
     def test_run_gates_includes_total_duration_errors(self) -> None:
         short = _beats(**{
@@ -448,53 +483,6 @@ class TestRunGates:
         assert errs[0].startswith("structure:")
 
 
-class TestScriptSchemaDiagramLabels:
-    """Regression: a live run showed the writer including an empty
-    'diagram_labels': [] on beats other than mechanism (a reasonable
-    placeholder for an optional field it has nothing to contribute to).
-    shotlist.py already tolerates this gracefully via
-    `beat.get("diagram_labels") or _fallback_labels(narration)`, and the
-    real 2-4 length constraint is independently enforced downstream by
-    shotlist.lint_shotlist's own DIAGRAM check -- so SCRIPT_SCHEMA must not
-    hard-reject an empty/absent diagram_labels at this earlier layer."""
-
-    def test_empty_diagram_labels_is_schema_valid(self):
-        import jsonschema
-        from shorts_engine.stages.script import SCRIPT_SCHEMA
-
-        beats = [
-            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
-             "card_text": "c", "broll_wish": "", "diagram_labels": []}
-            for purpose in config.PURPOSE_TEMPLATE
-        ]
-        jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
-
-    def test_omitted_diagram_labels_is_still_schema_valid(self):
-        import jsonschema
-        from shorts_engine.stages.script import SCRIPT_SCHEMA
-
-        beats = [
-            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
-             "card_text": "c", "broll_wish": ""}
-            for purpose in config.PURPOSE_TEMPLATE
-        ]
-        jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
-
-    def test_over_four_diagram_labels_is_still_rejected(self):
-        import jsonschema
-        import pytest
-        from shorts_engine.stages.script import SCRIPT_SCHEMA
-
-        beats = [
-            {"beat": purpose, "purpose": purpose, "narration": "n", "fact_ids": [],
-             "card_text": "c", "broll_wish": "",
-             "diagram_labels": ["a", "b", "c", "d", "e"]}
-            for purpose in config.PURPOSE_TEMPLATE
-        ]
-        with pytest.raises(jsonschema.ValidationError):
-            jsonschema.validate({"beats": beats}, SCRIPT_SCHEMA)
-
-
 class TestDiagramLabelsGate:
     def test_gate_numbers_scans_diagram_labels(self):
         from shorts_engine.stages import script
@@ -509,3 +497,15 @@ class TestDiagramLabelsGate:
                   "diagram_labels": ["Stage 99 boost", "output"]}]
         errs = script.gate_numbers(beats, factsheet, brand)
         assert any("99" in e for e in errs)
+
+    def test_formula_diagram_label_passes_when_pool_has_formula(self):
+        from shorts_engine.stages import script
+        from shorts_engine.brand import BrandFacts
+        brand = BrandFacts(company="c", domain="hrsuindore.com", tagline="t",
+                           differentiators=[{"id": "b_purity", "text": "pure"}],
+                           cta_lines=["cta"], banned_claims=[])
+        beats = [{"beat": "step_1", "narration": "no numbers here", "fact_ids": [],
+                  "card_text": "clean", "diagram_labels": ["Ca(NO3)2", "output"]}]
+        errs = script.gate_numbers(beats, {"facts": []}, brand,
+                                   extra_by_beat={"step_1": "Ca(NO3)2 dissolves in water."})
+        assert errs == []

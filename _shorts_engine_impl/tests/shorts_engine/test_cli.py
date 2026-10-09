@@ -39,12 +39,12 @@ class TestBuildStages:
         stages = build_stages()
         assert isinstance(stages, list)
 
-    def test_build_stages_has_ten_stages(self):
-        """build_stages returns exactly ten stages (Task 13: + verify/package/publish)."""
+    def test_build_stages_has_twelve_stages(self):
+        """build_stages returns exactly twelve stages (+ explain/verify_claims, verify/package/publish)."""
         from shorts_engine.cli import build_stages
 
         stages = build_stages()
-        assert len(stages) == 10
+        assert len(stages) == 12
 
     def test_build_stages_ingest_stage(self):
         """build_stages first stage is ('ingest', 'ingested', ingest.run)."""
@@ -74,7 +74,7 @@ class TestBuildStages:
         from shorts_engine.stages import script
 
         stages = build_stages()
-        name, status, fn = stages[2]
+        name, status, fn = stages[4]
         assert name == "script"
         assert status == "scripted"
         assert fn == script.run
@@ -264,7 +264,85 @@ class TestMainStages:
             assert len(stages) == len(expected_stages)
             assert stages[0][0] == "ingest"
             assert stages[1][0] == "facts"
-            assert stages[2][0] == "script"
+            assert stages[2][0] == "explain"
+            assert stages[3][0] == "verify_claims"
+            assert stages[4][0] == "script"
+
+
+class TestPrintPlan:
+    """--print-plan prints the explanation plan; hold manifests print [HOLD]."""
+
+    def _manifest(self, tmp_path, status="claims_verified"):
+        (tmp_path / "explanation_plan.json").write_text(
+            json.dumps({"question": "Why model sand?", "status": "verified",
+                        "steps": [], "dropped_claims": [], "dropped_steps": []}),
+            encoding="utf-8")
+        m = mock.Mock()
+        m.artifacts = {}
+        m.run_id = "r1"
+        m.status = status
+        m.workspace = str(tmp_path)
+        return m
+
+    def test_print_plan_flag_prints_question(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        with mock.patch("shorts_engine.runner.run", return_value=self._manifest(tmp_path)):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+        assert "Why model sand?" in capsys.readouterr().out
+
+    def test_no_flag_does_not_print_plan(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        with mock.patch("shorts_engine.runner.run", return_value=self._manifest(tmp_path)):
+            assert main(["https://example.com/b"]) == 0
+        assert "Why model sand?" not in capsys.readouterr().out
+
+    def test_hold_manifest_prints_hold_and_plan(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path, status="hold_for_review")
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+        out = capsys.readouterr().out
+        assert "[HOLD]" in out and "[OK]" not in out and "Why model sand?" in out
+
+    def test_print_plan_failure_does_not_change_exit_code(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path)
+        (tmp_path / "explanation_plan.json").write_text("not json", encoding="utf-8")
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+
+
+    def test_non_ascii_plan_survives_cp1252_console(self, tmp_path, monkeypatch):
+        import io
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path)
+        (tmp_path / "explanation_plan.json").write_text(
+            json.dumps({"question": "Why model sand?", "status": "verified",
+                        "steps": [{"step_id": "s1", "claim_text": "g", "claims": [
+                            {"text": "H\u2082S \u2265 5 \u2192", "kind": "external_fact",
+                             "verdict": "supported"}]}]}),
+            encoding="utf-8")
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", write_through=True)
+        monkeypatch.setattr(sys, "stdout", out)
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b", "--print-plan"]) == 0
+        text = raw.getvalue().decode("cp1252")
+        assert "Why model sand?" in text and "H" in text and "[supported]" in text
+
+    def test_hold_prints_reason_from_manifest_error(self, tmp_path, capsys):
+        from shorts_engine.cli import main
+
+        m = self._manifest(tmp_path, status="hold_for_review")
+        m.error = "only 2 verified steps"
+        with mock.patch("shorts_engine.runner.run", return_value=m):
+            assert main(["https://example.com/b"]) == 0
+        assert "Hold reason: only 2 verified steps" in capsys.readouterr().out
 
 
 class TestCreativeStageBridge:
@@ -468,11 +546,18 @@ class TestPhase2Stages:
         appends verify/package/publish after these (see TestPhase3Stages)."""
         from shorts_engine.cli import build_stages
         names = [s[0] for s in build_stages()]
-        assert names[:7] == ["ingest", "facts", "script", "shotlist", "audio",
-                             "visuals", "assemble"]
+        assert names[:9] == ["ingest", "facts", "explain", "verify_claims", "script",
+                             "shotlist", "audio", "visuals", "assemble"]
         statuses = [s[1] for s in build_stages()]
-        assert statuses[:7] == ["ingested", "facts", "scripted", "shotlisted",
-                                "audio", "visuals", "assembled"]
+        assert statuses[:9] == ["ingested", "facts", "explained", "claims_verified",
+                                "scripted", "shotlisted", "audio", "visuals", "assembled"]
+
+    def test_build_stages_explain_and_verify_claims(self):
+        from shorts_engine.cli import build_stages
+        from shorts_engine.stages import explain, verify_claims
+        stages = build_stages()
+        assert stages[2] == ("explain", "explained", explain.run)
+        assert stages[3] == ("verify_claims", "claims_verified", verify_claims.run)
 
     def test_until_accepts_new_stages(self, monkeypatch):
         import shorts_engine.cli as cli
@@ -491,11 +576,11 @@ class TestPhase2Stages:
 
 
 class TestPhase3Stages:
-    def test_build_stages_has_ten_in_order(self):
+    def test_build_stages_has_twelve_in_order(self):
         from shorts_engine.cli import build_stages
         names = [s[0] for s in build_stages()]
-        assert names == ["ingest", "facts", "script", "shotlist", "audio",
-                         "visuals", "assemble", "verify", "package", "publish"]
+        assert names == ["ingest", "facts", "explain", "verify_claims", "script",
+                         "shotlist", "audio", "visuals", "assemble", "verify", "package", "publish"]
         statuses = [s[1] for s in build_stages()]
         assert statuses[-3:] == ["verified", "packaged", "published"]
 

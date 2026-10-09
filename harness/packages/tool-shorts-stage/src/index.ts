@@ -37,7 +37,9 @@ const STAGE_TOOLS: StageToolSpec[] = [
   { toolName: 'stage_init', description: 'Start a new shorts-video run for one blog URL.' },
   { toolName: 'stage_ingest', description: 'Isolate the target post and extract canonical text.', stageName: 'ingest' },
   { toolName: 'stage_facts', description: 'Build the grounded factsheet from canonical text.', stageName: 'facts' },
-  { toolName: 'stage_script', description: 'Generate the narration script from the factsheet.', stageName: 'script' },
+  { toolName: 'stage_explain', description: 'Plan the explanation (question, causal steps, tagged claims) from the full article.', stageName: 'explain' },
+  { toolName: 'stage_verify_claims', description: 'Verify every claim against the article or retrieved sources; drop or repair what fails.', stageName: 'verify_claims' },
+  { toolName: 'stage_script', description: 'Narrate the verified explanation plan as the script.', stageName: 'script' },
   { toolName: 'stage_shotlist', description: 'Break the script into a shot-by-shot list.', stageName: 'shotlist' },
   { toolName: 'stage_audio', description: 'Synthesize per-beat voiceover audio.', stageName: 'audio' },
   {
