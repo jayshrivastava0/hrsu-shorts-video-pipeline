@@ -59,13 +59,12 @@ except ImportError as e:
     BRAND_TEXT_MUTED = "#8892b0"
 
 # ── Beat/Scene structure ────────────────────────────────────────────────────
-# Per-PURPOSE pacing guidance (not per fixed beat name/position) -- beats are
-# now free-form in count/order/naming (2026-08-26 creative-flow redesign); a
-# beat's `purpose` tag is what carries pacing intent forward, consumed by
-# shotlist.py (type suggestion, CTA-length cap). The SCRIPT stage no longer
-# enforces per-purpose word budgets (2026-10-08 explanation-first redesign:
-# length follows the verified plan, only the TOTAL_MIN_S floor is gated). "other" is the fallback for any beat whose
-# purpose isn't one of the five named ones.
+# Per-PURPOSE pacing guidance (not per fixed beat name/position). Retained only
+# for legacy tests/consumers: since the 2026-10-08 explanation-first redesign
+# the SCRIPT stage no longer uses PURPOSE_TEMPLATE at all -- there are no
+# per-purpose word budgets and no filler top-up; length follows the verified
+# plan and only the TOTAL_MIN_S floor is gated. "other" is the fallback for any
+# beat whose purpose isn't one of the five named ones.
 PURPOSE_TEMPLATE: dict[str, dict] = {
     "hook":      {"min_s": 2.0, "max_s": 4.0},
     "stakes":    {"min_s": 4.0, "max_s": 6.0},
@@ -88,6 +87,8 @@ MIN_BEATS = 3
 # estimates ~4% conservative vs. the 1.77 measurement, so downstream shot
 # spans and reflow deltas err slightly long rather than clipping.
 WORDS_PER_SECOND = 1.7
+# Retained only for legacy tests/consumers; no longer used by SCRIPT (there are
+# no per-beat word budgets since the 2026-10-08 explanation-first redesign).
 WORD_BUDGET_TOLERANCE = 0.20  # allow ±20% variance from target word count
 
 # ── Script quality gates ───────────────────────────────────────────────────
@@ -110,11 +111,11 @@ PAPER_DOMAINS = [
 STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
 
 # ── LLM behavior ───────────────────────────────────────────────────────────
-# 5, not 3: SCRIPT's writer must satisfy both the per-beat word budget AND
-# the aggregate TOTAL_MIN_S floor (there is no ceiling) simultaneously
-# (gate_total_duration) -- live runs showed it converging (33.5s -> 34.2s ->
-# beat-level overshoot while fixing the aggregate) but needing more than 3
-# attempts to land inside every constraint at once.
+# 5, not 3: SCRIPT's writer must pass every deterministic gate at once (number
+# tracing + units, banned phrases, card_text hygiene, one CTA differentiator and
+# the TOTAL_MIN_S floor -- there is no ceiling and no per-beat word budget);
+# live runs needed more than 3 attempts to land inside every constraint. The
+# planner (EXPLAIN) uses the same retry count against validate_plan.
 LLM_MAX_RETRIES = 5
 LLM_RETRY_DELAY_S = 2  # exponential backoff: 2s, 4s, 8s
 LLM_TIMEOUT_S = 60
