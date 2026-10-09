@@ -2,7 +2,8 @@
 SCRIPT stage -- verified explanation_plan.json (+ post.json, factsheet.json) to script.json.
 
 The writer no longer invents the logic: it narrates the verified plan, one beat per
-step, with a hook that poses the plan's question and a CTA built on the payoff. All
+step, with a hook that poses the plan's question and a CTA that restates only the
+verified claims and cites the payoff's brand differentiator. All
 deterministic gates stay (number tracing, banned phrases, card_text hygiene, exactly
 one differentiator in the CTA, the 30 s floor) but there are no per-purpose word
 budgets and no filler top-up: length follows the content, with no ceiling.
@@ -74,37 +75,36 @@ def gate_numbers(beats: list[dict], factsheet: dict, brand: BrandFacts,
                  extra_by_beat: dict[str, str] | None = None,
                  terms_by_beat: dict[str, list[dict]] | None = None) -> list[str]:
     """Every numeric token in a beat's narration, card_text and diagram_labels must appear
-    as a standalone number in that beat's allowed pool (see _allowed_pool). Every number in
-    the narration must ALSO carry a unit -- known, or defined in the beat's plan-step terms --
-    that the pool ties to that same number (explanation.gate_claim_numbers). One error per
-    offending token. `extra_by_beat` maps beat name -> extra allowed text (verified plan
-    claims); `terms_by_beat` maps beat name -> that plan step's `terms`."""
+    as a standalone number in that beat's allowed pool (see _allowed_pool). Every such number
+    must ALSO carry a unit -- known, or defined in the beat's plan-step terms -- that the pool
+    ties to that same number (explanation.gate_claim_numbers), so no unit-less number reaches
+    the screen. One error per offending token per text. `extra_by_beat` maps beat name ->
+    extra allowed text (verified plan claims); `terms_by_beat` maps beat name -> that plan
+    step's `terms`."""
     errs: list[str] = []
     for b in beats:
         beat = b.get("beat")
         extra = (extra_by_beat or {}).get(beat, "")
         fact_ids = b.get("fact_ids", [])
         pool = _allowed_pool(fact_ids, factsheet, brand, extra)
+        raw_pool = _pool_text(fact_ids, factsheet, brand, extra)
+        terms = (terms_by_beat or {}).get(beat)
         sources = [("narration", b.get("narration", "")), ("card_text", b.get("card_text", ""))]
         sources += [("diagram label", label) for label in b.get("diagram_labels") or []]
-        untraced_in_narration: set[str] = set()
         for name, text in sources:
+            reported: set[str] = set()
             for tok in extract_numeric_tokens(text):
                 if not re.search(rf"(?<![\d.]){re.escape(tok)}(?![\d])", pool):
                     errs.append(f"numbers[{beat}]: {tok!r} in {name} does not "
                                 f"trace to any referenced fact")
-                    if name == "narration":
-                        untraced_in_narration.add(tok)
-        reported = set(untraced_in_narration)
-        for e in explanation.gate_claim_numbers(
-                b.get("narration", ""), _pool_text(fact_ids, factsheet, brand, extra),
-                (terms_by_beat or {}).get(beat)):
-            m = _UNIT_ERR_NUM_RE.search(e)
-            num = m.group(1) if m else e
-            if num in reported:
-                continue
-            reported.add(num)
-            errs.append(f"numbers[{beat}]: {e} (narration)")
+                    reported.add(tok)
+            for e in explanation.gate_claim_numbers(text, raw_pool, terms):
+                m = _UNIT_ERR_NUM_RE.search(e)
+                num = m.group(1) if m else e
+                if num in reported:
+                    continue
+                reported.add(num)
+                errs.append(f"numbers[{beat}]: {e} ({name})")
     return errs
 
 
@@ -240,8 +240,9 @@ _WRITER_SYSTEM = (
     "hook that poses the plan's question. Explain each step so a viewer who knows nothing "
     "about it can follow: define each term the first time you use it, and say why the step "
     "leads to the next. Convey ONLY the verified claims listed for each step -- never add a "
-    "new fact, number or unit. The last item is the CTA: state the takeaway and cite the "
-    "brand differentiator. " + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
+    "new fact, number or unit. The last item is the CTA: close by restating, in your own "
+    "words, only the verified claims you already narrated, then cite the brand "
+    "differentiator and the domain. " + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
     "Length follows the explanation: there is a 30 second floor and no maximum, and you must "
     "never pad with filler."
 )
@@ -263,28 +264,46 @@ def _labels(entities: list[str]) -> list[str]:
 
 
 def _fact_ids_for_step(step: dict, factsheet: dict) -> list[str]:
-    """Ids of factsheet facts whose verbatim quote overlaps a supported blog quote of the step."""
-    quotes = [normalize_for_match(c["support"]["quote"]) for c in step["claims"]
+    """Ids of factsheet facts the step's verified claims actually state.
+
+    A fact attaches only if (1) its verbatim quote overlaps a supported blog quote of the
+    step, (2) its numeric value appears as a standalone number in the text of one of the
+    step's supported claims, and (3) the fact's value+unit pair passes the number+unit gate
+    against those claim texts. A fact that merely shares a sentence with a number-free
+    claim (or whose unit the claims do not carry) is never attached, so its value/unit
+    never reaches a shot payload."""
+    supported = explanation.supported_claims(step)
+    claim_texts = [c.get("text", "") for c in supported]
+    claim_pool = " | ".join(claim_texts)
+    quotes = [normalize_for_match(c["support"]["quote"]) for c in supported
               if c.get("support", {}).get("type") == "blog_quote"
               and len((c["support"]["quote"] or "").split()) >= MIN_QUOTE_WORDS]
     ids = []
     for f in factsheet.get("facts", []):
         fq = normalize_for_match(f["verbatim_quote"])
-        if any(q in fq or fq in q for q in quotes):
-            ids.append(f["id"])
+        if not any(q in fq or fq in q for q in quotes):
+            continue
+        value = str(f.get("value") or "")
+        value_nums = explanation.standalone_numbers(value)
+        if not value_nums or not any(value_nums <= explanation.standalone_numbers(t)
+                                     for t in claim_texts):
+            continue
+        pair = f"{value} {f.get('unit') or ''}".strip()
+        if explanation.gate_claim_numbers(pair, claim_pool, step.get("terms")):
+            continue
+        ids.append(f["id"])
     return ids
 
 
 def extra_pool_by_beat(plan: dict) -> dict[str, str]:
-    """beat name -> text of the step's supported claims and their quotes (number provenance)."""
-    pools = {}
-    for i, step in enumerate(plan["steps"], start=1):
-        parts = []
-        for c in step["claims"]:
-            if c.get("verdict") == "supported":
-                parts += [c["text"], c.get("support", {}).get("quote", "")]
-        pools[f"step_{i}"] = " | ".join(p for p in parts if p)
-    return pools
+    """beat name -> text of the step's supported claims (number provenance).
+
+    Claim TEXT only: claim texts are pair-gated against their sources in verify_claims,
+    while a support quote (e.g. a whole retrieved sentence) can carry numbers the claim
+    never asserted."""
+    return {f"step_{i}": " | ".join(c["text"] for c in explanation.supported_claims(step)
+                                    if c.get("text"))
+            for i, step in enumerate(plan["steps"], start=1)}
 
 
 def terms_by_step_beat(plan: dict) -> dict[str, list[dict]]:
@@ -318,12 +337,14 @@ def build_beats(doc: dict, plan: dict, factsheet: dict,
 def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
                    gate_errors: list[str] | None = None, revise_notes: str = "",
                    previous_beats: list[dict] | None = None) -> str:
+    # Only verified text reaches the writer: the planner's step goals (claim_text) and
+    # payoff.takeaway are never verified, so they are deliberately left out.
     blocks = []
     for step in plan["steps"]:
         claims = "\n".join(f"  - {c['text']}" for c in step["claims"]
                            if c.get("verdict") == "supported")
         terms = "\n".join(f"  - {t['term']}: {t['definition']}" for t in step.get("terms", []))
-        blocks.append(f"STEP {step['step_id']} (goal: {step['claim_text']})\n"
+        blocks.append(f"STEP {step['step_id']}\n"
                       f"Verified claims:\n{claims}\n"
                       + (f"Terms to define:\n{terms}\n" if terms else ""))
     diff = next((d for d in brand.differentiators
@@ -332,7 +353,8 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
         f"Blog: {post_meta.get('title')} | region={post_meta.get('region')} | "
         f"category={post_meta.get('category')}\n\n"
         f"QUESTION the video answers: {plan['question']}\n\n" + "\n".join(blocks)
-        + f"\nPAYOFF takeaway: {plan['payoff']['takeaway']}\n"
+        + "\nCTA: close by restating, in your own words, only the verified claims above, "
+        "then cite the brand differentiator and the domain.\n"
         f"Brand differentiator to cite in the CTA [{plan['payoff']['differentiator_id']}]: "
         f"{diff['text'] if diff else ''}\nCTA domain: {brand.domain}\n\n"
         f"Return a hook, exactly one narration per step using these step_ids in this order "
@@ -389,7 +411,8 @@ def run(ctx) -> dict[str, str]:
     Raises:
         EngineError: the plan on disk is not verified (run verify_claims first).
         HoldForReview: gates still failing after LLM_MAX_RETRIES attempts, or the final
-            critique still below the bar after config.SCRIPT_MAX_REWRITES rewrites.
+            critique still below the bar after config.SCRIPT_MAX_REWRITES rewrites. The
+            reasons are first written to the plan's `hold_reasons` (status unchanged).
     """
     ws = Path(ctx.workspace)
     plan = json.loads((ws / "explanation_plan.json").read_text(encoding="utf-8"))
@@ -401,6 +424,27 @@ def run(ctx) -> dict[str, str]:
     local_only = bool(ctx.flags.get("local_only", False))
     extra = extra_pool_by_beat(plan)
 
+    try:
+        beats, critique, attempts, rewrites = _write_and_critique(
+            plan, post_meta, factsheet, brand, extra, local_only)
+    except HoldForReview as hold:
+        # Audit trail: record why on the plan; status stays "verified" so SCRIPT can re-run.
+        plan["hold_reasons"] = list(hold.reasons)
+        (ws / "explanation_plan.json").write_text(
+            json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+        raise
+
+    payload = {"beats": beats, "critique": critique, "attempts": attempts,
+               "rewrites": rewrites}
+    (ws / "script.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                                    encoding="utf-8")
+    logger.info(f"script written: {len(beats)} beats, attempts={attempts}, rewrites={rewrites}")
+    return {"script": "script.json"}
+
+
+def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
+    """Gated writing + critic/rewrite loop -> (beats, critique, attempts, rewrites).
+    Raises HoldForReview (gates exhausted or critique still below the bar)."""
     beats, attempts = _write_until_gates_pass(plan, post_meta, factsheet, brand, extra,
                                               local_only)
     rewrites = 0
@@ -422,10 +466,4 @@ def run(ctx) -> dict[str, str]:
                                            local_only, revise_notes=critique["revise_notes"],
                                            previous_beats=beats)
         attempts += n
-
-    payload = {"beats": beats, "critique": critique, "attempts": attempts,
-               "rewrites": rewrites}
-    (ws / "script.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False),
-                                    encoding="utf-8")
-    logger.info(f"script written: {len(beats)} beats, attempts={attempts}, rewrites={rewrites}")
-    return {"script": "script.json"}
+    return beats, critique, attempts, rewrites

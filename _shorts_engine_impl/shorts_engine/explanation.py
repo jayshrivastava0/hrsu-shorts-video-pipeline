@@ -104,6 +104,11 @@ def has_number(text: str) -> bool:
     return bool(_NUMBER_RE.search(text or ""))
 
 
+def standalone_numbers(text: str) -> set[str]:
+    """Standalone numbers in `text` (commas stripped; not digits inside words like H2S)."""
+    return {t["num"] for t in _tokens(normalize_for_match(text or ""))}
+
+
 def _norm_unit(unit: str | None) -> str | None:
     if not unit:
         return None

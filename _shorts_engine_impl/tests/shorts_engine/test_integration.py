@@ -289,7 +289,9 @@ class TestFullPipelineGroundedScript:
         script = json.loads((ctx.workspace / "script.json").read_text(encoding="utf-8"))
         beats = script["beats"]
         assert [b["beat"] for b in beats] == ["hook", "step_1", "step_2", "step_3", "cta"]
-        assert beats[1]["fact_ids"] == ["f1"]
+        # review I3(b): the factsheet unit "kg/m3" is not stated with 1.5-3 in the verified
+        # claim ("kg per cubic meter"), so no fact attaches (no unverified unit on screen)
+        assert beats[1]["fact_ids"] == []
         assert beats[-1]["purpose"] == "cta"
         assert beats[-1]["fact_ids"] == ["b_purity"]
         assert script["critique"] == CRITIQUE

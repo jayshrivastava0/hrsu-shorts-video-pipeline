@@ -33,7 +33,7 @@ def _plan():
     return {
         "question": "Why model desert soil?",
         "steps": [
-            step("s1", [_claim("c1", "Engineers model desert soil with a sand mixture.",
+            step("s1", [_claim("c1", "Engineers model desert soil with a 20% calcium carbonate sand mixture.",
                                "blog_stated", "a 20% calcium carbonate and 80% river sand mixture")],
                  ["calcium carbonate", "river sand", "mixture of the two soils here"]),
             step("s2", [_claim("c2", "Sandy soil drains nutrients quickly.", "external_fact")],
@@ -122,10 +122,30 @@ class TestBuildBeats:
         beats, errs = script_stage.build_beats(doc, _plan(), FACTSHEET, load_brand_facts())
         assert beats == [] and any("steps must be exactly" in e for e in errs)
 
-    def test_extra_pool_contains_supported_claim_text_and_quotes(self):
+    def test_extra_pool_contains_supported_claim_text_only(self):
+        # claim texts are pair-gated against their sources in verify_claims; the full
+        # support quote is wider than the claim and must not widen the number pool
         pool = script_stage.extra_pool_by_beat(_plan())
-        assert "80% river sand" in pool["step_1"]
+        assert "20% calcium carbonate sand mixture" in pool["step_1"]
+        assert "80% river sand" not in pool["step_1"]
         assert "Sandy soil drains nutrients quickly." in pool["step_2"]
+
+    def test_passage_wider_than_claim_does_not_license_its_numbers(self):
+        plan = _plan()
+        plan["steps"][1]["claims"] = [_claim(
+            "c2", "Calcium nitrate dissolves readily.", "external_fact")]
+        plan["steps"][1]["claims"][0]["support"] = {
+            "type": "external", "url": "https://x.gov/a",
+            "quote": "Ammonium nitrate dissolves at 1500 g/L; calcium nitrate dissolves readily."}
+        doc = _doc()
+        doc["steps"][1]["narration"] = ("Calcium nitrate dissolves at 1500 g/L. "
+                                        + " ".join(["word"] * 12) + ".")
+        brand = load_brand_facts()
+        beats, errs = script_stage.build_beats(doc, plan, FACTSHEET, brand)
+        assert errs == []
+        gate = script_stage.run_gates(beats, FACTSHEET, brand,
+                                      extra_by_beat=script_stage.extra_pool_by_beat(plan))
+        assert any("1500" in e and "step_2" in e for e in gate)
 
 
 class TestSchemas:
@@ -175,6 +195,24 @@ class TestRunHappyPath:
 
 
 class TestWriterPrompt:
+    def test_prompt_omits_unverified_planner_text(self):
+        plan = _plan()
+        plan["steps"][0]["claim_text"] = "UNIQUE-GOAL-MARKER 9 tonnes"
+        plan["payoff"]["takeaway"] = "UNIQUE-TAKEAWAY-MARKER saves a fortune"
+        plan["steps"][1]["terms"] = [{"term": "EC", "definition": "conductivity", "unit": ""}]
+        brand = load_brand_facts()
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, brand)
+        assert "UNIQUE-GOAL-MARKER" not in prompt
+        assert "UNIQUE-TAKEAWAY-MARKER" not in prompt
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                assert c["text"] in prompt
+        assert "EC: conductivity" in prompt
+        diff = next(d for d in brand.differentiators if d["id"] == "b_purity")
+        assert diff["text"] in prompt
+        assert plan["question"] in prompt
+        assert "STEP s1" in prompt
+
     def test_prompt_has_supported_claims_terms_and_no_ceiling(self):
         plan = _plan()
         plan["steps"][0]["terms"] = [{"term": "EC", "definition": "conductivity", "unit": ""}]
@@ -212,6 +250,9 @@ class TestGateRetryAndHold:
         assert len(router.writer_prompts) == config.LLM_MAX_RETRIES
         assert any("150" in r for r in e.value.reasons)
         assert not (ctx.workspace / "script.json").exists()
+        plan = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+        assert plan["hold_reasons"] == e.value.reasons
+        assert plan["status"] == "verified"          # SCRIPT can be re-run on this plan
 
     def test_short_script_is_not_padded_it_holds(self, tmp_path, monkeypatch):
         ctx = _ctx(tmp_path)
@@ -257,6 +298,8 @@ class TestCriticLoop:
             script_stage.run(ctx)
         assert "critique below bar" in e.value.reasons[0]
         assert not (ctx.workspace / "script.json").exists()
+        plan = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+        assert plan["hold_reasons"] == e.value.reasons and plan["status"] == "verified"
         assert router.roles.count("critic") == config.SCRIPT_MAX_REWRITES + 1
         assert len(router.writer_prompts) == 1 + config.SCRIPT_MAX_REWRITES
 
@@ -339,6 +382,48 @@ class TestBeatDetails:
         plan["steps"][0]["claims"][0]["support"]["quote"] = "river sand"
         beats, errs = script_stage.build_beats(_doc(), plan, fs, load_brand_facts())
         assert errs == [] and beats[1]["fact_ids"] == []
+
+    def test_number_free_claim_does_not_attach_fact_by_quote_overlap(self):
+        ec_quote = "electrical conductivity (EC) peaks at 425 during infiltration"
+        fs = {"facts": FACTSHEET["facts"] + [
+            {"id": "f_ec", "verbatim_quote": ec_quote, "value": "425", "unit": "EC",
+             "procurement_significance": 9, "citation_marker": None}]}
+        plan = _plan()
+        plan["steps"][1]["claims"] = [_claim(
+            "c2", "Soil conductivity rises during infiltration.", "blog_stated", ec_quote)]
+        beats, errs = script_stage.build_beats(_doc(), plan, fs, load_brand_facts())
+        assert errs == [] and beats[2]["fact_ids"] == []
+
+    def test_claim_with_unitless_number_does_not_attach_fact(self):
+        ec_quote = "electrical conductivity (EC) peaks at 425 during infiltration"
+        fs = {"facts": [{"id": "f_ec", "verbatim_quote": ec_quote, "value": "425",
+                         "unit": "EC", "procurement_significance": 9,
+                         "citation_marker": None}]}
+        plan = _plan()
+        plan["steps"][1]["claims"] = [_claim(
+            "c2", "Conductivity peaks at 425 during infiltration.", "blog_stated", ec_quote)]
+        beats, _ = script_stage.build_beats(_doc(), plan, fs, load_brand_facts())
+        assert beats[2]["fact_ids"] == []      # "EC" is neither a known unit nor a term
+
+    def test_range_fact_attaches_when_claim_states_value_and_unit(self):
+        quote = "dosage range of 1.5 to 3 kg per cubic meter of wastewater volume"
+        fs = {"facts": [{"id": "f_dose", "verbatim_quote": quote, "value": "1.5-3",
+                         "unit": "kg", "procurement_significance": 9,
+                         "citation_marker": None}]}
+        plan = _plan()
+        plan["steps"][1]["claims"] = [_claim(
+            "c2", "Plants dose 1.5 to 3 kg per cubic meter.", "blog_stated", quote)]
+        beats, _ = script_stage.build_beats(_doc(), plan, fs, load_brand_facts())
+        assert beats[2]["fact_ids"] == ["f_dose"]
+        fs["facts"][0]["unit"] = "kg/m3"     # unit the claim does not state with 1.5-3
+        beats, _ = script_stage.build_beats(_doc(), plan, fs, load_brand_facts())
+        assert beats[2]["fact_ids"] == []
+
+    def test_unsupported_claim_never_attaches_fact(self):
+        plan = _plan()
+        plan["steps"][0]["claims"][0]["verdict"] = "unsupported"
+        beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+        assert beats[1]["fact_ids"] == []
 
     def test_diagram_labels_capped_at_four(self):
         plan = _plan()

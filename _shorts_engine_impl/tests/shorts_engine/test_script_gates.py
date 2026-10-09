@@ -229,6 +229,30 @@ class TestGateNumberUnits:
         errs = gate_numbers(self._proof("Reduces nitrate by 150 mg per liter."), self.FS, BRAND)
         assert len(errs) == 1 and "150" in errs[0]
 
+    def test_unitless_number_in_card_text_fails(self) -> None:
+        # 425 traces to f10, but the card shows it with no unit
+        beats = _beats(**{"3": {"card_text": "Peaks at 425", "fact_ids": ["f1", "f10"]}})
+        errs = gate_numbers(beats, self.FS, BRAND)
+        assert len(errs) == 1
+        assert errs[0].startswith("numbers[proof]:") and "no unit" in errs[0]
+        assert "card_text" in errs[0]
+
+    def test_unitless_number_in_diagram_label_fails(self) -> None:
+        beats = _beats(**{"3": {"fact_ids": ["f1", "f10"], "diagram_labels": ["425", "soil"]}})
+        errs = gate_numbers(beats, self.FS, BRAND)
+        assert len(errs) == 1
+        assert "no unit" in errs[0] and "diagram label" in errs[0]
+
+    def test_card_text_with_traced_unit_passes(self) -> None:
+        beats = _beats(**{"3": {"card_text": "Add 5 kg per batch", "fact_ids": ["f9"],
+                                "narration": "Add 5 kg of powder per batch."}})
+        assert gate_numbers(beats, self.FS, BRAND) == []
+
+    def test_untraced_card_number_reported_once(self) -> None:
+        beats = _beats(**{"3": {"card_text": "Peaks at 777"}})
+        errs = gate_numbers(beats, self.FS, BRAND)
+        assert len(errs) == 1 and "777" in errs[0]
+
     def test_run_gates_forwards_terms_by_beat(self) -> None:
         beats = self._proof("Readings reach 425 EC. " + "More words here. " * 3, ["f10"])
         terms = {"proof": [{"term": "EC", "definition": "conductivity", "unit": "EC"}]}
