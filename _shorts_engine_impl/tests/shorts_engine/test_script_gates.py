@@ -17,6 +17,7 @@ from shorts_engine.stages.script import (
     gate_banned,
     gate_card_text,
     gate_differentiator,
+    gate_flow,
     gate_numbers,
     gate_total_duration,
     run_gates,
@@ -509,3 +510,126 @@ class TestDiagramLabelsGate:
         errs = script.gate_numbers(beats, {"facts": []}, brand,
                                    extra_by_beat={"step_1": "Ca(NO3)2 dissolves in water."})
         assert errs == []
+
+
+def _flow_claim(cid, text, role, verdict="supported"):
+    return {"id": cid, "text": text, "kind": "external_fact", "role": role,
+            "verdict": verdict}
+
+
+def _flow_plan():
+    """Three steps: s2 defines 'denitrification'; every step has a mechanism claim."""
+    return {
+        "question": "Why do plants dose calcium nitrate?",
+        "steps": [
+            {"step_id": "s1", "terms": [],
+             "claims": [_flow_claim("m1", "Septic sewage releases hydrogen sulfide gas.",
+                                    "mechanism")]},
+            {"step_id": "s2",
+             "terms": [{"term": "denitrification",
+                        "definition": "bacteria turning nitrate into nitrogen gas",
+                        "unit": ""}],
+             "claims": [_flow_claim("l2", "Because sulfide forms without oxygen, an "
+                                          "alternative oxidant helps.", "link"),
+                        _flow_claim("m2", "Bacteria breathe nitrate instead of oxygen.",
+                                    "mechanism")]},
+            {"step_id": "s3", "terms": [],
+             "claims": [_flow_claim("l3", "Since bacteria prefer nitrate, sulfide stops "
+                                          "forming.", "link"),
+                        _flow_claim("m3", "Nitrate keeps the sewage oxidised.",
+                                    "mechanism")]},
+        ],
+    }
+
+
+def _flow_beats(**narr):
+    text = {
+        "hook": "Why do treatment plants add calcium nitrate to sewers?",
+        "step_1": "Sewage left without air goes septic and releases hydrogen sulfide.",
+        "step_2": "Because the gas forms without oxygen, plants offer bacteria another "
+                  "option. Denitrification means bacteria turn nitrate into nitrogen gas: "
+                  "they breathe nitrate instead of oxygen.",
+        "step_3": "Since bacteria now prefer nitrate, the sewage stays oxidised, so "
+                  "sulfide stops forming.",
+        "cta": "That is why plants dose it. Visit hrsuindore.com.",
+    }
+    text.update(narr)
+    return [{"beat": k, "narration": v} for k, v in text.items()]
+
+
+class TestGateFlow:
+    def test_legitimate_narration_passes(self) -> None:
+        assert gate_flow(_flow_beats(), _flow_plan()) == []
+
+    def test_skipped_mechanism_is_reported(self) -> None:
+        beats = _flow_beats(step_2="Because the gas forms without oxygen, plants offer "
+                                   "another option. Denitrification means bacteria turn "
+                                   "nitrate into nitrogen gas.")
+        # "bacteria" and "nitrate" are content words of m2 -> still narrated
+        assert gate_flow(beats, _flow_plan()) == []
+        beats = _flow_beats(step_3="Since things change, sulfide stops forming downstream.")
+        errs = gate_flow(beats, _flow_plan())
+        assert any(e.startswith("flow[step_3]: mechanism not narrated") for e in errs)
+        assert len(errs) == 1
+
+    def test_mechanism_match_is_whole_word_and_case_insensitive(self) -> None:
+        plan = _flow_plan()
+        plan["steps"][2]["claims"][1]["text"] = "Oxidation stops the gas."
+        beats = _flow_beats(step_3="OXIDATION halts it, so sulfide ceases forming.")
+        assert gate_flow(beats, plan) == []
+        beats = _flow_beats(step_3="Preoxidationx halts it, so sulfide ceases forming.")
+        assert any("step_3" in e and "mechanism not narrated" in e
+                   for e in gate_flow(beats, plan))
+
+    def test_unsupported_mechanism_is_not_required(self) -> None:
+        plan = _flow_plan()
+        plan["steps"][2]["claims"][1]["verdict"] = "unsupported"
+        beats = _flow_beats(step_3="Since things change, sulfide stops forming downstream.")
+        assert gate_flow(beats, plan) == []
+
+    def test_term_used_before_definition_is_reported(self) -> None:
+        beats = _flow_beats(step_1="Sewage left without air goes septic, before "
+                                   "denitrification can help, and releases hydrogen "
+                                   "sulfide.")
+        errs = gate_flow(beats, _flow_plan())
+        assert any("'denitrification' used before it is defined" in e for e in errs)
+        assert all(e.startswith("flow[step_2]") for e in errs) and len(errs) == 1
+
+    def test_term_in_hook_before_definition_is_reported(self) -> None:
+        beats = _flow_beats(hook="Why does Denitrification matter in sewers?")
+        errs = gate_flow(beats, _flow_plan())
+        assert any("'denitrification' used before it is defined" in e for e in errs)
+
+    def test_term_used_in_its_own_and_later_steps_passes(self) -> None:
+        beats = _flow_beats(step_3="Since bacteria now prefer nitrate, denitrification "
+                                   "keeps the sewage oxidised, so sulfide stops forming.")
+        assert gate_flow(beats, _flow_plan()) == []
+
+    def test_term_match_is_whole_word_and_short_terms_ignored(self) -> None:
+        plan = _flow_plan()
+        plan["steps"][1]["terms"] += [{"term": "EC", "definition": "conductivity",
+                                       "unit": ""},
+                                      {"term": "nitrogen gas", "definition": "N2",
+                                       "unit": ""}]
+        beats = _flow_beats(step_1="Sewage left without air goes septic (EC rises) and "
+                                   "releases hydrogen sulfide and nitrogen gasses.")
+        assert gate_flow(beats, plan) == []
+
+    def test_term_also_defined_earlier_passes(self) -> None:
+        plan = _flow_plan()
+        plan["steps"][0]["terms"] = [dict(plan["steps"][1]["terms"][0])]
+        beats = _flow_beats(step_1="Sewage left without air goes septic, before "
+                                   "denitrification can help, and releases hydrogen "
+                                   "sulfide.")
+        assert gate_flow(beats, plan) == []
+
+    def test_run_gates_runs_flow_only_with_plan(self) -> None:
+        beats = _beats()
+        plan = {"question": "q", "steps": [
+            {"step_id": "s1", "terms": [],
+             "claims": [_flow_claim("m1", "Zeolites capture ammonium ions.", "mechanism")]}]}
+        beats[2]["beat"] = "step_1"
+        assert run_gates(beats, FACTSHEET, BRAND) == []
+        errs = run_gates(beats, FACTSHEET, BRAND, plan=plan)
+        assert errs == ["flow[step_1]: mechanism not narrated (explain: "
+                        "'Zeolites capture ammonium ions.')"]

@@ -339,6 +339,15 @@ class TestGateRetryAndHold:
         assert len(router.writer_prompts) == 2
         assert "'150'" in router.writer_prompts[1] and "'150'" not in router.writer_prompts[0]
 
+    def test_skipped_mechanism_flow_error_is_echoed_into_retry(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        bad["steps"][1]["narration"] = "Water moves on. " + " ".join(["word"] * 12) + "."
+        router = _install(monkeypatch, [bad, _doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert len(router.writer_prompts) == 2
+        assert "flow[step_2]: mechanism not narrated" in router.writer_prompts[1]
+
     def test_exhausted_writer_retries_hold_and_write_nothing(self, tmp_path, monkeypatch):
         ctx = _ctx(tmp_path)
         bad = _doc()

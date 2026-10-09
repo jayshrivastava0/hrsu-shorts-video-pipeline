@@ -6,7 +6,8 @@ step (link transition, then the mechanism as cause and effect, then supporting f
 with a hook that poses the plan's question and a CTA that answers it from already
 narrated verified claims and cites the payoff's brand differentiator. All
 deterministic gates stay (number tracing, banned phrases, card_text hygiene, exactly
-one differentiator in the CTA, the 30 s floor) but there are no per-purpose word
+one differentiator in the CTA, the 30 s floor), plus gate_flow (each step narrates its
+mechanism; no term used before the step that defines it), but there are no per-purpose word
 budgets and no filler top-up: length follows the content, with no ceiling.
 
 A critic from a different model family then scores the FINAL script (coherence,
@@ -177,12 +178,93 @@ def gate_differentiator(beats: list[dict], brand: BrandFacts) -> list[str]:
     return errs
 
 
+# ── gate_flow: the script explains, in order ────────────────────────────────
+_FLOW_WORD_RE = re.compile(r"[A-Za-z]+")
+_FLOW_STOPWORDS = frozenset({
+    "about", "above", "after", "again", "against", "along", "also", "among", "because",
+    "before", "being", "below", "between", "cannot", "could", "doing", "during", "every",
+    "first", "further", "having", "their", "theirs", "there", "these", "thing", "things",
+    "those", "through", "under", "until", "where", "which", "while", "whose", "within",
+    "without", "would", "should", "other", "others", "rather", "since", "still", "therefore",
+    "thus", "though", "together", "toward", "towards", "whether", "becomes", "become",
+    "makes", "making", "means", "often", "really", "several", "something", "always",
+})
+
+
+def _content_words(text: str) -> set[str]:
+    """Significant words of `text`: >= 5 letters, not a stopword, lowercased."""
+    return {w.lower() for w in _FLOW_WORD_RE.findall(text or "")
+            if len(w) >= 5 and w.lower() not in _FLOW_STOPWORDS}
+
+
+def _has_phrase(phrase: str, text: str) -> bool:
+    """Case-insensitive whole-phrase match (no letter/digit directly either side)."""
+    return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(phrase)}(?![A-Za-z0-9])",
+                          text or "", re.IGNORECASE))
+
+
+def gate_flow(beats: list[dict], plan: dict) -> list[str]:
+    """Cheap, conservative checks that the script explains the plan's chain.
+
+    (a) Every step beat's narration contains at least one significant content word of
+        EACH of its step's supported mechanism claims (else the mechanism was skipped).
+    (b) A step's defined term (>= 3 chars) must not appear in the narration of an
+        EARLIER beat (the hook or an earlier step) unless an earlier step also defines it.
+        Exempt: a term that is in the plan's question (the hook must pose it) for the
+        hook, and a term that the earlier step's own verified claims already use (the
+        plan's ordering, not the writer's). Whole-word, case-insensitive."""
+    errs: list[str] = []
+    steps = {f"step_{i}": s for i, s in enumerate(plan.get("steps", []), start=1)}
+    for b in beats:
+        step = steps.get(b.get("beat"))
+        if step is None:
+            continue
+        for c in explanation.supported_claims(step):
+            if c.get("role") != "mechanism":
+                continue
+            words = _content_words(c.get("text", ""))
+            if words and not any(_has_phrase(w, b.get("narration", "")) for w in words):
+                errs.append(f"flow[{b['beat']}]: mechanism not narrated "
+                            f"(explain: {c.get('text', '')!r})")
+    # first step (by beat position) that defines each term
+    order = {b.get("beat"): i for i, b in enumerate(beats)}
+    defined_at: dict[str, tuple[int, str, str]] = {}
+    for name, step in steps.items():
+        if name not in order:
+            continue
+        for t in step.get("terms", []):
+            term = (t.get("term") or "").strip()
+            key = term.lower()
+            if len(term) < 3:
+                continue
+            if key not in defined_at or order[name] < defined_at[key][0]:
+                defined_at[key] = (order[name], name, term)
+    question = plan.get("question", "")
+    for key, (pos, name, term) in defined_at.items():
+        for b in beats[:pos]:
+            if not _has_phrase(term, b.get("narration", "")):
+                continue
+            if b.get("beat") == "hook" and _has_phrase(term, question):
+                continue
+            earlier = steps.get(b.get("beat"))
+            if earlier is not None and any(
+                    _has_phrase(term, c.get("text", ""))
+                    for c in explanation.supported_claims(earlier)):
+                continue
+            errs.append(f"flow[{name}]: term {term!r} used before it is defined "
+                        f"(used earlier in {b.get('beat')}; define it where first used)")
+            break
+    return errs
+
+
 # ── run_gates ────────────────────────────────────────────────────────────────
 def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts,
               extra_by_beat: dict[str, str] | None = None,
-              terms_by_beat: dict[str, list[dict]] | None = None) -> list[str]:
+              terms_by_beat: dict[str, list[dict]] | None = None, *,
+              plan: dict | None = None) -> list[str]:
     """Structure check (>= MIN_BEATS beats, final purpose "cta", unique names) then the
-    content gates. A structural mismatch short-circuits with a single error."""
+    content gates (plus gate_flow when `plan` is given). A structural mismatch
+    short-circuits with a single error."""
     if len(beats) < config.MIN_BEATS:
         return [f"structure: expected at least {config.MIN_BEATS} beats, got {len(beats)}"]
     if beats[-1].get("purpose") != "cta":
@@ -195,7 +277,8 @@ def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts,
             + gate_banned(beats, brand)
             + gate_total_duration(beats)
             + gate_card_text(beats)
-            + gate_differentiator(beats, brand))
+            + gate_differentiator(beats, brand)
+            + (gate_flow(beats, plan) if plan is not None else []))
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -476,7 +559,7 @@ def _write_until_gates_pass(plan, post_meta, factsheet, brand, extra, local_only
         beats, errors = build_beats(doc, plan, factsheet, brand)
         if not errors:
             errors = run_gates(beats, factsheet, brand, extra_by_beat=extra,
-                               terms_by_beat=terms)
+                               terms_by_beat=terms, plan=plan)
         if not errors:
             return beats, attempt
         logger.warning(f"script gates failed (attempt {attempt}/{config.LLM_MAX_RETRIES}): "
