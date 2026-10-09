@@ -14,6 +14,17 @@ def _content_words(text: str) -> set[str]:
     return {w for w in _WORD_RE.findall(normalize_for_match(text)) if w not in _STOP and len(w) > 2}
 
 
+def key_terms_query(text: str, limit: int = 6) -> str:
+    """A short search query from `text`: its `limit` most informative content words
+    (longest first, ties by position), emitted in their original order. Deterministic."""
+    seen: dict[str, int] = {}
+    for w in _WORD_RE.findall(normalize_for_match(text or "")):
+        if w not in _STOP and len(w) > 2 and w not in seen:
+            seen[w] = len(seen)
+    top = sorted(seen, key=lambda w: (-len(w), seen[w]))[:limit]
+    return " ".join(sorted(top, key=seen.__getitem__))
+
+
 def best_passages(text: str, claim: str, k: int) -> list[str]:
     """Top-k sentences by content-word overlap with `claim` (needs >=2 shared words,
     or >=1 when the claim has fewer than 3 content words). Ties keep page order."""

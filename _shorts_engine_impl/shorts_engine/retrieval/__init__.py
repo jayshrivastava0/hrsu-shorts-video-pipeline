@@ -8,13 +8,14 @@ from urllib.parse import urlparse
 
 from shorts_engine import config
 from shorts_engine.retrieval.fetch import fetch_text
-from shorts_engine.retrieval.passages import best_passages
+from shorts_engine.retrieval.passages import best_passages, key_terms_query
 from shorts_engine.retrieval.search import SearchHit, web_search
 from shorts_engine.stages.facts import normalize_for_match
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Passage", "Retriever", "SearchHit", "source_kind"]
+__all__ = ["Passage", "Retriever", "SearchHit", "key_terms_query", "query_variants",
+           "source_kind"]
 
 _AUTHORITATIVE = tuple(config.PAPER_DOMAINS) + tuple(config.STANDARD_DOMAINS)
 _RANK = {"blog_citation": 0, "authoritative": 1, "web": 2}
@@ -70,22 +71,47 @@ def _content_words(text: str) -> set[str]:
             if len(w) > 2 and w not in _STOPWORDS}
 
 
+def query_variants(claim_text: str) -> list[str]:
+    """Search queries tried in order for a claim (spec section 12): the claim itself,
+    its key terms, and its key terms plus "why how" (finds mechanism explanations).
+    Duplicates and empty queries are skipped."""
+    terms = key_terms_query(claim_text)
+    out: list[str] = []
+    for q in (claim_text.strip(), terms, f"{terms} why how" if terms else ""):
+        if q and q not in out:
+            out.append(q)
+    return out
+
+
+def _default_search(query: str) -> list[SearchHit]:
+    # raise_on_failure: a failed search must be distinguishable from an empty one
+    return web_search(query, raise_on_failure=True)
+
+
 class Retriever:
     """Finds evidence passages for a claim. Blog citations first, then ranked web hits.
 
-    Never raises: search/fetch failures yield fewer (or zero) passages. Results are
-    cached per normalised claim so repair rounds do not repeat searches, and every URL
-    is fetched at most once per Retriever (empty results cached too). The per-claim
-    fetch budget (config.RETRIEVAL_MAX_FETCHES) is shared: at most half goes to the
-    blog citations that best match the claim, the rest to ranked search hits.
+    Never raises: search/fetch failures yield fewer (or zero) passages. Query variants
+    (`query_variants`) are tried in order until one yields passages; passages of
+    different variants are never merged, and they are always scored against the claim
+    text. Results are cached per normalised claim so repair rounds do not repeat
+    searches -- except an EMPTY result caused by a search or fetch failure, which is
+    not cached so a later call retries. `last_search_failed` says whether the last
+    uncached retrieve() saw a search failure. Every URL is fetched at most once per
+    Retriever (failed/empty pages cached too). The fetch budget
+    (config.RETRIEVAL_MAX_FETCHES, per variant; cached pages cost nothing) is shared:
+    at most half goes to the blog citations that best match the claim, the rest to
+    ranked search hits.
     """
 
     def __init__(self, citation_urls: list[str], *, search_fn=None, fetch_fn=None) -> None:
         self._citations = list(citation_urls)
-        self._search = search_fn or web_search
+        self._search = search_fn or _default_search
         self._fetch = fetch_fn or fetch_text
         self._cache: dict[str, list[Passage]] = {}
         self._pages: dict[str, str] = {}
+        self._failed_urls: set[str] = set()
+        self.last_search_failed = False
 
     def _fetch_once(self, url: str) -> str:
         key = _norm_url(url)
@@ -95,6 +121,7 @@ class Retriever:
             except Exception as exc:
                 logger.warning(f"fetch failed for {url!r}: {exc}")
                 self._pages[key] = ""
+                self._failed_urls.add(key)
         return self._pages[key]
 
     def _pick_citations(self, claim_text: str, limit: int) -> list[str]:
@@ -116,20 +143,34 @@ class Retriever:
 
     def retrieve(self, claim_text: str) -> list[Passage]:
         key = normalize_for_match(claim_text)
-        if key not in self._cache:
-            try:
-                self._cache[key] = self._retrieve(claim_text)
-            except Exception as exc:
-                logger.warning(f"retrieval failed for {claim_text!r}: {exc}")
-                self._cache[key] = []
-        return self._cache[key]
-
-    def _retrieve(self, claim_text: str) -> list[Passage]:
+        if key in self._cache:
+            return self._cache[key]
+        passages: list[Passage] = []
+        search_failed = fetch_failed = False
         try:
-            hits = list(self._search(claim_text))
+            for query in query_variants(claim_text):
+                found, search_ok, fetch_ok = self._retrieve(query, claim_text)
+                search_failed = search_failed or not search_ok
+                fetch_failed = fetch_failed or not fetch_ok
+                if found:
+                    passages = found
+                    break
         except Exception as exc:
-            logger.warning(f"search failed for {claim_text!r}: {exc}")
-            hits = []
+            logger.warning(f"retrieval failed for {claim_text!r}: {exc}")
+            passages, fetch_failed = [], True
+        self.last_search_failed = search_failed
+        if passages or not (search_failed or fetch_failed):
+            self._cache[key] = passages
+        return passages
+
+    def _retrieve(self, query: str, claim_text: str) -> tuple[list[Passage], bool, bool]:
+        """Passages for one query variant -> (passages, search_ok, fetch_ok)."""
+        search_ok = True
+        try:
+            hits = list(self._search(query))
+        except Exception as exc:
+            logger.warning(f"search failed for {query!r}: {exc}")
+            hits, search_ok = [], False
         budget = config.RETRIEVAL_MAX_FETCHES
         ordered_cites = self._pick_citations(claim_text, len(self._citations))
         cite_keys = {_norm_url(u) for u in self._citations}
@@ -151,4 +192,5 @@ class Retriever:
             for p in best_passages(text, claim_text, 2):
                 passages.append(Passage(url, p, kind))
         passages.sort(key=lambda p: _RANK[p.kind])  # stable: keeps page order within a kind
-        return passages[:config.RETRIEVAL_MAX_PASSAGES]
+        fetch_ok = not any(_norm_url(u) in self._failed_urls for u, _k in candidates)
+        return passages[:config.RETRIEVAL_MAX_PASSAGES], search_ok, fetch_ok

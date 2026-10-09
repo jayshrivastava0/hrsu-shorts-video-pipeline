@@ -30,15 +30,21 @@ def _default_factory():
 
 
 def web_search(query: str, max_results: int = config.RETRIEVAL_MAX_RESULTS, *,
-               ddgs_factory=None, sleep=time.sleep) -> list[SearchHit]:
-    """Search the web for `query`. Returns [] on any failure after bounded retries."""
+               ddgs_factory=None, sleep=time.sleep,
+               raise_on_failure: bool = False) -> list[SearchHit]:
+    """Search the web for `query`. Returns [] on any failure after bounded retries.
+
+    With `raise_on_failure=True` a failure (every retry failed, or no search package)
+    raises RuntimeError instead, so a caller can tell "search failed" from "search
+    found nothing" (the Retriever does not cache a failure-caused empty result).
+    """
     factory = ddgs_factory or _default_factory
     for attempt in range(1, config.RETRIEVAL_SEARCH_RETRIES + 1):
         try:
             client = factory()
             if client is None:
                 logger.warning("ddgs not installed; web search unavailable")
-                return []
+                break
             raw = client.text(query, max_results=max_results)
             return [SearchHit(r.get("href", ""), r.get("title", ""), r.get("body", ""))
                     for r in raw if r.get("href")]
@@ -46,4 +52,6 @@ def web_search(query: str, max_results: int = config.RETRIEVAL_MAX_RESULTS, *,
             logger.warning(f"web_search attempt {attempt} failed for {query!r}: {exc}")
             if attempt < config.RETRIEVAL_SEARCH_RETRIES:
                 sleep(config.LLM_RETRY_DELAY_S * attempt)
+    if raise_on_failure:
+        raise RuntimeError(f"web search failed for {query!r}")
     return []
