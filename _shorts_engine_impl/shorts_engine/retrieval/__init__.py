@@ -27,9 +27,21 @@ class Passage:
     kind: str  # "blog_citation" | "authoritative" | "web"
 
 
+def _safe_parse(url: str):
+    """urlparse that returns None instead of raising ValueError (e.g. "http://[bad")."""
+    try:
+        return urlparse(url.strip())
+    except ValueError:
+        return None
+
+
 def source_kind(url: str) -> str:
     """'authoritative' for government/edu/standards/paper hosts, else 'web'."""
-    host = (urlparse(url).hostname or "").lower()
+    parts = _safe_parse(url)
+    try:
+        host = ((parts.hostname if parts else "") or "").lower()
+    except ValueError:
+        host = ""
     if host.endswith((".gov", ".edu")):
         return "authoritative"
     if any(host == d or host.endswith("." + d) for d in _AUTHORITATIVE):
@@ -39,7 +51,9 @@ def source_kind(url: str) -> str:
 
 def _norm_url(url: str) -> str:
     """Dedupe/cache key: no fragment, no trailing slash, lowercase scheme and host."""
-    parts = urlparse(url.strip())
+    parts = _safe_parse(url)
+    if parts is None:
+        return url.strip().lower()
     path = parts.path.rstrip("/")
     query = f"?{parts.query}" if parts.query else ""
     return f"{parts.scheme.lower()}://{parts.netloc.lower()}{path}{query}"
@@ -93,7 +107,8 @@ class Retriever:
                 seen.add(_norm_url(u))
                 unique.append(u)
         claim_words = _content_words(normalize_for_match(claim_text))
-        path_of = lambda u: (urlparse(u).netloc + " " + urlparse(u).path)  # noqa: E731
+        path_of = lambda u: ((_safe_parse(u).netloc + " " + _safe_parse(u).path)  # noqa: E731
+                             if _safe_parse(u) else u)
         scored = sorted(enumerate(unique),
                         key=lambda iu: (-len(claim_words & _content_words(path_of(iu[1]))),
                                         iu[0]))

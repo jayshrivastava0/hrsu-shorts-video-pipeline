@@ -464,3 +464,14 @@ class TestBeatDetails:
             plan["steps"][0]["claims"][0]["text"] = claim
             beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
             assert beats[1]["fact_ids"] == ["f1"], claim
+
+
+class TestStaleHoldReasons:
+    def test_successful_run_clears_stale_hold_reasons(self, tmp_path, monkeypatch):
+        plan = _plan()
+        plan["hold_reasons"] = ["old"]
+        ctx = _ctx(tmp_path, plan)
+        _install(monkeypatch, [_doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        saved = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+        assert saved["hold_reasons"] == [] and saved["status"] == "verified"

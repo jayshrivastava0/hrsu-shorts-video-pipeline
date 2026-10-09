@@ -178,3 +178,18 @@ class TestRetriever:
             raise RuntimeError("boom")
         r = Retriever([], search_fn=bad, fetch_fn=lambda u: "")
         assert r.retrieve("x y z") == []
+
+
+class TestMalformedUrls:
+    PAGE = "Calcium nitrate dissolves readily in water. It is used in fertigation."
+
+    def test_malformed_citation_does_not_lose_the_good_one(self):
+        fetched = []
+        r = Retriever(["http://[bad", "https://blog-cite.org/ref"], search_fn=lambda q: [],
+                      fetch_fn=lambda u: fetched.append(u) or self.PAGE)
+        out = r.retrieve("calcium nitrate dissolves in water")
+        assert "https://blog-cite.org/ref" in fetched
+        assert out and any(p.url == "https://blog-cite.org/ref" for p in out)
+
+    def test_source_kind_never_raises(self):
+        assert source_kind("http://[bad") == "web"

@@ -446,6 +446,12 @@ def run(ctx) -> dict[str, str]:
             json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
         raise
 
+    if plan.get("hold_reasons"):
+        # A successful run supersedes the audit trail of an earlier hold.
+        plan["hold_reasons"] = []
+        (ws / "explanation_plan.json").write_text(
+            json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
+
     payload = {"beats": beats, "critique": critique, "attempts": attempts,
                "rewrites": rewrites}
     (ws / "script.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False),
