@@ -85,7 +85,7 @@ SCRIPT_DOC = {
             "card_text": "Get the dosing guide", "broll_wish": ""},
 }
 CRITIQUE = {"actionable_score": 9, "coherence_score": 9, "hrsu_reason_score": 9,
-            "faithfulness_score": 9, "revise_notes": ""}
+            "faithfulness_score": 9, "flow_score": 9, "revise_notes": ""}
 GOOD_DESC = {"description": "A branded navy slide with clearly legible serif "
              "text describing calcium nitrate dosing for wastewater treatment, "
              "sharp typography with a gold accent underline.",

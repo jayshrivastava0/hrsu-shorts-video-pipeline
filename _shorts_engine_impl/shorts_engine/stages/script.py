@@ -10,7 +10,8 @@ one differentiator in the CTA, the 30 s floor) but there are no per-purpose word
 budgets and no filler top-up: length follows the content, with no ceiling.
 
 A critic from a different model family then scores the FINAL script (coherence,
-actionability, HRSU reason, faithfulness to the verified claims). A score below the
+actionability, HRSU reason, faithfulness to the verified claims, flow of the explanation
+chain). A score below the
 bar triggers a rewrite that is itself gated and re-scored, up to
 config.SCRIPT_MAX_REWRITES times. A script that cannot reach the bar, or fails the
 gates after LLM_MAX_RETRIES attempts, raises HoldForReview -- it never ships and is
@@ -225,10 +226,11 @@ CRITIQUE_SCHEMA: dict = {
         "coherence_score": {"type": "integer", "minimum": 0, "maximum": 10},
         "hrsu_reason_score": {"type": "integer", "minimum": 0, "maximum": 10},
         "faithfulness_score": {"type": "integer", "minimum": 0, "maximum": 10},
+        "flow_score": {"type": "integer", "minimum": 0, "maximum": 10},
         "revise_notes": {"type": "string"},
     },
     "required": ["actionable_score", "coherence_score", "hrsu_reason_score",
-                 "faithfulness_score", "revise_notes"],
+                 "faithfulness_score", "flow_score", "revise_notes"],
     "additionalProperties": False,
 }
 
@@ -266,6 +268,11 @@ _CRITIC_SYSTEM = (
     "ANYTHING not in the verified claims or the approved brand statements? any such addition "
     "scores below 5). Approved brand statements in the CTA are allowed and do not count "
     "against faithfulness, but a CTA must not add brand or product claims beyond them. "
+    "flow_score (does the script EXPLAIN rather than assert? Does each step follow from the "
+    "previous one, using its LINK claim? Is every MECHANISM actually explained -- the why/how "
+    "as cause and effect, not just asserted? Is any term used before it is defined? Does the "
+    "ending answer the question?): a bare assertion with no why/how, or a step that does not "
+    "connect to the previous one, scores below 5. "
     "Give concrete revise_notes."
 )
 
@@ -433,7 +440,18 @@ def _critic_prompt(plan: dict, beats: list[dict], brand: BrandFacts) -> str:
                  if d["id"] == plan["payoff"]["differentiator_id"]), None)
     approved = ([f"- {diff['text']}"] if diff else []) \
         + [f"- {line}" for line in brand.cta_lines] + [f"- {brand.domain}"]
-    return (f"Verified claims the script may rely on:\n{claims}\n\n"
+    chain = []
+    for i, step in enumerate(plan["steps"], start=1):
+        by_role = _supported_by_role(step)
+        lines = [f"  LINK (how it follows from the previous step): {t[4:]}"
+                 for t in by_role["link"]]
+        lines += [f"  MECHANISM (why/how): {t[4:]}" for t in by_role["mechanism"]]
+        lines += [f"  TERM: {t['term']}: {t['definition']}" for t in step.get("terms", [])]
+        chain.append(f"step_{i}:\n" + ("\n".join(lines) if lines else "  (none)"))
+    return (f"QUESTION the video must answer: {plan['question']}\n\n"
+            "EXPLANATION CHAIN to judge flow_score against (per step: how it follows from "
+            "the previous step, and the mechanism it must explain):\n" + "\n".join(chain)
+            + f"\n\nVerified claims the script may rely on:\n{claims}\n\n"
             "APPROVED BRAND STATEMENTS (the CTA beat may use these verbatim; they are "
             "pre-approved company statements, not claims to verify, so faithfulness must "
             "NOT be reduced for them; ANY other factual assertion in the CTA beat or any "
@@ -520,7 +538,8 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
             _critic_prompt(plan, beats, brand), _CRITIC_SYSTEM, CRITIQUE_SCHEMA,
             local_only=local_only, role="critic")
         lowest = min(critique["actionable_score"], critique["coherence_score"],
-                     critique["hrsu_reason_score"], critique["faithfulness_score"])
+                     critique["hrsu_reason_score"], critique["faithfulness_score"],
+                     critique["flow_score"])
         if lowest >= _CRITIQUE_PASS_THRESHOLD:
             break
         if rewrites >= config.SCRIPT_MAX_REWRITES:

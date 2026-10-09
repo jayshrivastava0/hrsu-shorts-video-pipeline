@@ -69,7 +69,7 @@ def _doc(**over):
 
 
 GOOD_CRITIQUE = {"actionable_score": 8, "coherence_score": 9, "hrsu_reason_score": 8,
-                 "faithfulness_score": 9, "revise_notes": ""}
+                 "faithfulness_score": 9, "flow_score": 8, "revise_notes": ""}
 LOW_CRITIQUE = dict(GOOD_CRITIQUE, coherence_score=3, revise_notes="Step 2 does not follow.")
 
 
@@ -164,6 +164,12 @@ class TestSchemas:
 
     def test_critique_schema_requires_faithfulness_score(self):
         bad = {k: v for k, v in GOOD_CRITIQUE.items() if k != "faithfulness_score"}
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(bad, script_stage.CRITIQUE_SCHEMA)
+
+    def test_critique_schema_requires_flow_score(self):
+        jsonschema.validate(GOOD_CRITIQUE, script_stage.CRITIQUE_SCHEMA)
+        bad = {k: v for k, v in GOOD_CRITIQUE.items() if k != "flow_score"}
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(bad, script_stage.CRITIQUE_SCHEMA)
 
@@ -384,6 +390,19 @@ class TestCriticLoop:
         script_stage.run(ctx)
         assert "Adds unsupported facts." in router.writer_prompts[1]
 
+    def test_flow_score_alone_below_bar_triggers_rewrite(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        jumpy = dict(GOOD_CRITIQUE, flow_score=4,
+                     revise_notes="Step 2 asserts drainage without explaining why.")
+        router = _install(monkeypatch, [_doc()], [jumpy, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        out = json.loads((ctx.workspace / "script.json").read_text(encoding="utf-8"))
+        assert out["rewrites"] == 1
+        assert "Step 2 asserts drainage without explaining why." in router.writer_prompts[1]
+
+    def test_max_rewrites_is_three(self):
+        assert config.SCRIPT_MAX_REWRITES == 3
+
     def test_still_low_after_max_rewrites_holds(self, tmp_path, monkeypatch):
         ctx = _ctx(tmp_path)
         router = _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
@@ -460,6 +479,8 @@ class TestCritiqueSchemaBounds:
         dict(GOOD_CRITIQUE, coherence_score=11),
         dict(GOOD_CRITIQUE, actionable_score=-1),
         dict(GOOD_CRITIQUE, surprise="x"),
+        dict(GOOD_CRITIQUE, flow_score=11),
+        dict(GOOD_CRITIQUE, flow_score=-1),
     ])
     def test_rejects_out_of_range_and_extra_keys(self, bad):
         with pytest.raises(jsonschema.ValidationError):
@@ -593,6 +614,35 @@ class TestCtaBrandStatements:
             for c in step["claims"]:
                 if c.get("verdict") == "supported":
                     assert c["text"] in prompt
+
+    def test_critic_prompt_shows_question_and_labelled_chain(self):
+        plan = _plan()
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                c["role"] = "fact"
+        plan["steps"][0]["claims"].append(_claim(
+            "m1", "Carbonate grains hold little water, so the mixture dries fast.",
+            "external_fact", role="mechanism"))
+        plan["steps"][1]["claims"].append(_claim(
+            "l2", "Because the mixture dries fast, nutrients wash through it.", "reasoning",
+            role="link"))
+        beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+        prompt = script_stage._critic_prompt(plan, beats, load_brand_facts())
+        assert plan["question"] in prompt
+        assert "LINK (how it follows from the previous step): Because the mixture dries " \
+               "fast, nutrients wash through it." in prompt
+        assert "MECHANISM (why/how): Carbonate grains hold little water" in prompt
+        assert "LINK (how it follows from the previous step): Carbonate" not in prompt
+        assert "APPROVED BRAND STATEMENTS" in prompt
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                assert c["text"] in prompt
+
+    def test_critic_system_explains_flow_score(self):
+        system = script_stage._CRITIC_SYSTEM.lower()
+        assert "flow_score" in system
+        assert "defined" in system and "answer the question" in system
+        assert "below 5" in system and "why/how" in system
 
     def test_critic_system_exempts_approved_brand_statements(self, tmp_path, monkeypatch):
         router, _ = self._critic_prompt_text(tmp_path, monkeypatch)

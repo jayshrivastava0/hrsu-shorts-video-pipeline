@@ -110,7 +110,7 @@ GOOD_DOC = {
 }
 
 CRITIQUE = {"actionable_score": 8, "coherence_score": 9, "hrsu_reason_score": 8,
-            "faithfulness_score": 9, "revise_notes": ""}
+            "faithfulness_score": 9, "flow_score": 8, "revise_notes": ""}
 
 
 def _fact_router(prompt, system, schema, **kw):
