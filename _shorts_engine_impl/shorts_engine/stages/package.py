@@ -31,16 +31,21 @@ def _key_points(ws: Path, factsheet: dict) -> list[str]:
 
     With explanation_plan.json present, ONLY a verified plan's supported, non-illustrative
     claim texts (in chain order) are used -- never the factsheet's unverified
-    claim_summary paraphrases; a plan that is not verified yields nothing. The factsheet
-    fallback is kept only for legacy runs that have no plan file at all."""
+    claim_summary paraphrases; a plan that is not verified yields nothing. Fact/mechanism
+    claims come first (a `link` only restates them as a transition); link claims fill in
+    only when fewer than 3 others exist. The factsheet fallback is kept only for legacy
+    runs that have no plan file at all."""
     plan_path = ws / "explanation_plan.json"
     if plan_path.exists():
         from shorts_engine.explanation import supported_claims
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         if plan.get("status") != "verified":
             return []
-        return [c["text"] for s in plan.get("steps") or [] for c in supported_claims(s)
-                if c.get("kind") != "illustrative" and c.get("text")][:3]
+        claims = [c for s in plan.get("steps") or [] for c in supported_claims(s)
+                  if c.get("kind") != "illustrative" and c.get("text")]
+        main = [c["text"] for c in claims if c.get("role") != "link"]
+        links = [c["text"] for c in claims if c.get("role") == "link"]
+        return (main + links)[:3]
     top = sorted(factsheet.get("facts", []),
                  key=lambda f: -int(f.get("procurement_significance", 0)))[:3]
     return [f["claim_summary"] for f in top]

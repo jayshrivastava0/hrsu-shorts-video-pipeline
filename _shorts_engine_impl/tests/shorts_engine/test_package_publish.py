@@ -131,6 +131,29 @@ class TestPackageFromVerifiedPlan:
         assert "sponge" not in cap and "unsupported leap" not in cap
         assert "dosing window" not in cap and "92 percent" not in cap
 
+    def test_key_points_prefer_fact_and_mechanism_claims_over_links(self, tmp_path):
+        from shorts_engine.stages import package
+        ws = _ws(tmp_path)
+
+        def c(cid, text, role):
+            return dict(_plan_claim(cid, text, kind="reasoning"), role=role)
+
+        steps = [{"step_id": "s1", "claims": [c("m1", "Mechanism one.", "mechanism")]},
+                 {"step_id": "s2", "claims": [c("l2", "Because one, two.", "link"),
+                                              c("m2", "Mechanism two.", "mechanism")]},
+                 {"step_id": "s3", "claims": [c("l3", "Because two, three.", "link"),
+                                              c("f3", "Fact three.", "fact")]}]
+        plan = {"question": "q", "status": "verified", "steps": steps,
+                "payoff": {"takeaway": "t", "differentiator_id": "b_purity"}}
+        (ws / "explanation_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        assert package._key_points(ws, {}) == ["Mechanism one.", "Mechanism two.",
+                                               "Fact three."]
+        steps[2]["claims"] = [c("l3", "Because two, three.", "link")]
+        (ws / "explanation_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        # fewer than 3 fact/mechanism claims: links fill the gap, in chain order
+        assert package._key_points(ws, {}) == ["Mechanism one.", "Mechanism two.",
+                                               "Because one, two."]
+
     def test_unverified_plan_never_falls_back_to_factsheet(self, tmp_path, monkeypatch):
         ws = _ws(tmp_path)
         _write_plan(ws, status="held")
