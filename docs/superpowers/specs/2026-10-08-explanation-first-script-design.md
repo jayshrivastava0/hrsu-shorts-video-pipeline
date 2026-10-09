@@ -216,3 +216,23 @@ differentiator-in-CTA gate, the schema-validated retry pattern in `text_llm`.
 - **Posts with little mechanism content** may produce short or held runs. That is intended.
 - Open for the plan: exact manifest state names for the new stages, whether holds are
   exceptions or statuses, and the retrieval passage-extraction method.
+
+## 12. Addendum (2026-10-09): explain the why, connect the steps, retry instead of dropping
+
+Found by the first live run (calcium-nitrate-vs-hygroscopic-salts-in-arid-mining): the plan stated facts ("chlorides corrode mining fleets") without saying why or how, and nothing linked a step to its neighbours. An explainer must explain the main thing, never assume the viewer knows the supporting mechanism.
+
+**Plan rules (claim `role`)**
+- Each claim gains `role`: `fact` | `mechanism` | `link`.
+- Every step needs at least one `mechanism` claim: the why/how (e.g. "chloride ions break down the protective oxide film on steel, which starts pitting"). It may be `blog_stated`, `external_fact` or `reasoning`.
+- Every step after the first needs at least one `link` claim of kind `reasoning`: how this step follows from the previous one ("because X, Y"). Link claims are verified by the existing logic check against the already-verified premises.
+- Terms introduced in a step are defined in `terms` before use.
+- The first step must follow from the plan's question; the last step must answer it.
+
+**Verification / pruning**
+- A step survives only with a supported `mechanism` claim and (if not first) a supported `link` claim.
+- Retry instead of drop: a failed claim goes through repair rounds (`PLAN_MAX_REPAIR_ROUNDS` raised to 4); the repair prompt tells the planner to re-explain the missing mechanism or link from the article text or from facts a source will confirm. A step is dropped only after the rounds are exhausted. Retrieval retries with query variants (claim text; its key terms; claim plus "why"/"how") and does not cache an empty result caused by a search failure.
+- Writer gate retries and critic-triggered rewrites (`SCRIPT_MAX_REWRITES` raised to 3) are unchanged in kind.
+
+**Script / critic**
+- The writer narrates each step as: link sentence, then the mechanism, then the supporting facts, defining each term the first time it is used, and ends the video answering the question.
+- The critic gains `flow_score` (0-10): each step follows from the previous, every mechanism is explained, no term is used before it is defined. It gates at the same threshold (7) as the other scores.
