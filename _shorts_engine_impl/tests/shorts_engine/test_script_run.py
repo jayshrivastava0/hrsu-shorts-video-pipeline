@@ -434,3 +434,33 @@ class TestBeatDetails:
     def test_writer_prompt_forbids_numbers_in_hook_and_cta(self):
         prompt = script_stage._writer_prompt(_plan(), {"title": "T"}, load_brand_facts())
         assert "The hook and the CTA must not contain any numbers." in prompt
+
+    def _dose_fact(self, value, unit):
+        quote = "dosage range of 1.5 to 3 kg per cubic meter of wastewater volume"
+        fs = {"facts": [{"id": "f_dose", "verbatim_quote": quote, "value": value,
+                         "unit": unit, "procurement_significance": 9,
+                         "citation_marker": None}]}
+        plan = _plan()
+        plan["steps"][1]["claims"] = [_claim(
+            "c2", "Plants dose 1.5 to 3 kg per cubic meter.", "blog_stated", quote)]
+        return script_stage.build_beats(_doc(), plan, fs, load_brand_facts())[0]
+
+    def test_multiword_wrong_unit_does_not_attach_fact(self):
+        assert self._dose_fact("1.5-3", "kg per tonne")[2]["fact_ids"] == []
+
+    def test_value_with_letters_does_not_attach_fact(self):
+        assert self._dose_fact("3 kg", "m3")[2]["fact_ids"] == []
+
+    def test_numeric_fact_with_empty_unit_does_not_attach(self):
+        assert self._dose_fact("1.5-3", "")[2]["fact_ids"] == []
+
+    def test_full_unit_in_claim_still_attaches(self):
+        assert self._dose_fact("1.5-3", "kg")[2]["fact_ids"] == ["f_dose"]
+
+    def test_percent_forms_still_attach(self):
+        for claim in ("Engineers use a 20% calcium carbonate sand mixture.",
+                      "Engineers use a 20 percent calcium carbonate sand mixture."):
+            plan = _plan()
+            plan["steps"][0]["claims"][0]["text"] = claim
+            beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+            assert beats[1]["fact_ids"] == ["f1"], claim

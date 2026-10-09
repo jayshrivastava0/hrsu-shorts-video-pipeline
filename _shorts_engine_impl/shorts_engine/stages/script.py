@@ -263,6 +263,11 @@ def _labels(entities: list[str]) -> list[str]:
     return [" ".join(e.split()[:3]) for e in entities[:4] if e.strip()]
 
 
+def _norm_unit_text(text: str) -> str:
+    """Lowercase, collapse whitespace, treat "percent" as "%"."""
+    return " ".join(text.lower().replace("percent", "%").split())
+
+
 def _fact_ids_for_step(step: dict, factsheet: dict) -> list[str]:
     """Ids of factsheet facts the step's verified claims actually state.
 
@@ -288,8 +293,15 @@ def _fact_ids_for_step(step: dict, factsheet: dict) -> list[str]:
         if not value_nums or not any(value_nums <= explanation.standalone_numbers(t)
                                      for t in claim_texts):
             continue
+        if re.search(r"[A-Za-z]", value):      # "3 kg": not a pure numeric value
+            continue
         pair = f"{value} {f.get('unit') or ''}".strip()
         if explanation.gate_claim_numbers(pair, claim_pool, step.get("terms")):
+            continue
+        # The pair gate sees only the unit's first token; the WHOLE unit string is what
+        # reaches the shot payload, so it must appear verbatim in the claim text.
+        unit_norm = _norm_unit_text(f.get("unit") or "")
+        if not unit_norm or unit_norm not in _norm_unit_text(claim_pool):
             continue
         ids.append(f["id"])
     return ids
