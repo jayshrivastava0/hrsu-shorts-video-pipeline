@@ -2,8 +2,9 @@
 SCRIPT stage -- verified explanation_plan.json (+ post.json, factsheet.json) to script.json.
 
 The writer no longer invents the logic: it narrates the verified plan, one beat per
-step, with a hook that poses the plan's question and a CTA that restates only the
-verified claims and cites the payoff's brand differentiator. All
+step (link transition, then the mechanism as cause and effect, then supporting facts),
+with a hook that poses the plan's question and a CTA that answers it from already
+narrated verified claims and cites the payoff's brand differentiator. All
 deterministic gates stay (number tracing, banned phrases, card_text hygiene, exactly
 one differentiator in the CTA, the 30 s floor) but there are no per-purpose word
 budgets and no filler top-up: length follows the content, with no ceiling.
@@ -236,13 +237,19 @@ _NO_NUMBERS_HOOK_CTA = "The hook and the CTA must not contain any numbers."
 _WRITER_SYSTEM = (
     "You write the narration for an explainer video for procurement managers sourcing "
     "industrial chemicals. Voice: concrete, technical, zero hype, like a good teacher. You "
-    "are given a VERIFIED explanation plan: narrate it step by step, in order. Open with a "
-    "hook that poses the plan's question. Explain each step so a viewer who knows nothing "
-    "about it can follow: define each term the first time you use it, and say why the step "
-    "leads to the next. Convey ONLY the verified claims listed for each step -- never add a "
-    "new fact, number or unit. The last item is the CTA: close by restating, in your own "
-    "words, only the verified claims you already narrated, then cite the brand "
-    "differentiator and the domain. For any statement about the company or its product the "
+    "are given a VERIFIED explanation plan: narrate it step by step, in order. The video "
+    "must EXPLAIN, not just assert. Open with a hook that poses the plan's question. "
+    "Narrate each step in this order: (1) a transition sentence built from its 'how this "
+    "follows' claim (\"Because ..., ...\"), so the step visibly follows from the previous one "
+    "(the first step follows from the question); (2) the mechanism, explained as cause and "
+    "effect, step by step in plain words, so a viewer who knows nothing about it can follow "
+    "why and how it happens; (3) the supporting facts. Define every term the first time it "
+    "is used, using ONLY the definitions provided. Never assume the viewer already knows why "
+    "something happens. Convey ONLY the verified claims listed for each step -- never add a "
+    "fact, number or unit that is not in the verified claims. The last item is the CTA: "
+    "answer the question in one or two sentences using only verified claims you already "
+    "narrated, then cite the brand differentiator and the domain, so the video ends as it "
+    "answers the question. For any statement about the company or its product the "
     "CTA may use only the cited differentiator text, the brand CTA lines and the domain; "
     "never invent additional claims about purity, QC, certifications, delivery or pricing. "
     + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
@@ -351,18 +358,43 @@ def build_beats(doc: dict, plan: dict, factsheet: dict,
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
+_LINK_LABEL = "HOW THIS FOLLOWS FROM THE PREVIOUS STEP (use as the opening transition):"
+_MECH_LABEL = "WHY / HOW (the mechanism - explain it fully, step by step, in plain words):"
+_FACT_LABEL = "SUPPORTING FACTS:"
+
+
+def _supported_by_role(step: dict) -> dict[str, list[str]]:
+    """role -> ["  - claim text", ...] for the step's supported claims. A claim without a
+    known role (a pre-role plan) counts as a supporting fact."""
+    out: dict[str, list[str]] = {r: [] for r in explanation.CLAIM_ROLES}
+    for c in explanation.supported_claims(step):
+        role = c.get("role") if c.get("role") in out else "fact"
+        out[role].append(f"  - {c['text']}")
+    return out
+
+
 def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
                    gate_errors: list[str] | None = None, revise_notes: str = "",
                    previous_beats: list[dict] | None = None) -> str:
     # Only verified text reaches the writer: the planner's step goals (claim_text) and
     # payoff.takeaway are never verified, so they are deliberately left out.
     blocks = []
-    for step in plan["steps"]:
-        claims = "\n".join(f"  - {c['text']}" for c in step["claims"]
-                           if c.get("verdict") == "supported")
+    for pos, step in enumerate(plan["steps"]):
+        by_role = _supported_by_role(step)
+        if pos == 0:
+            link_label = ("HOW THIS FOLLOWS FROM THE QUESTION (this first step must follow "
+                          "from the question; use as the opening transition):")
+            link_none = "  - (connect this step directly to the QUESTION above)"
+        else:
+            link_label = _LINK_LABEL
+            link_none = "  - (connect this step to the previous one using only verified claims)"
+        groups = [(link_label, by_role["link"] or [link_none]),
+                  (_MECH_LABEL, by_role["mechanism"]),
+                  (_FACT_LABEL, by_role["fact"])]
+        body = "".join(f"{label}\n" + "\n".join(lines) + "\n"
+                       for label, lines in groups if lines)
         terms = "\n".join(f"  - {t['term']}: {t['definition']}" for t in step.get("terms", []))
-        blocks.append(f"STEP {step['step_id']}\n"
-                      f"Verified claims:\n{claims}\n"
+        blocks.append(f"STEP {step['step_id']}\n" + body
                       + (f"Terms to define:\n{terms}\n" if terms else ""))
     diff = next((d for d in brand.differentiators
                  if d["id"] == plan["payoff"]["differentiator_id"]), None)
@@ -370,8 +402,8 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
         f"Blog: {post_meta.get('title')} | region={post_meta.get('region')} | "
         f"category={post_meta.get('category')}\n\n"
         f"QUESTION the video answers: {plan['question']}\n\n" + "\n".join(blocks)
-        + "\nCTA: close by restating, in your own words, only the verified claims above, "
-        "then cite the brand differentiator and the domain.\n"
+        + "\nCTA: answer the QUESTION in one or two sentences using only the verified claims "
+        "you already narrated, then cite the brand differentiator and the domain.\n"
         f"Brand differentiator to cite in the CTA [{plan['payoff']['differentiator_id']}]: "
         f"{diff['text'] if diff else ''}\nCTA domain: {brand.domain}\n"
         "In the CTA, make company or product statements using only the cited differentiator "

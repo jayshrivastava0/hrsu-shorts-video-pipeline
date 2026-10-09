@@ -227,6 +227,95 @@ class TestWriterPrompt:
         assert "b_purity" in prompt
         assert "no maximum" in prompt.lower()
 
+    LINK_LABEL = "HOW THIS FOLLOWS FROM THE PREVIOUS STEP (use as the opening transition):"
+    MECH_LABEL = "WHY / HOW (the mechanism - explain it fully, step by step, in plain words):"
+    FACT_LABEL = "SUPPORTING FACTS:"
+
+    @staticmethod
+    def _role_plan():
+        plan = _plan()
+        plan["steps"][0]["claims"].append(_claim(
+            "f1x", "Desert soil is mostly loose sand.", "external_fact", role="fact"))
+        plan["steps"][1]["claims"].append(_claim(
+            "l2", "Because the model soil is mostly sand, water passes through it fast.",
+            "reasoning", role="link"))
+        plan["steps"][1]["claims"].append(_claim(
+            "f2x", "Sand grains are large compared with clay particles.", "external_fact",
+            role="fact"))
+        plan["steps"][1]["claims"].append(_claim(
+            "u2", "UNSUPPORTED-MECH-MARKER drains everything.", "external_fact",
+            verdict="unsupported"))
+        plan["steps"][2]["claims"].append(_claim(
+            "l3", "Since nutrients drain away, they must be kept dissolved.", "reasoning",
+            role="link"))
+        return plan
+
+    @staticmethod
+    def _step_section(prompt, step_id):
+        body = prompt.split(f"STEP {step_id}\n", 1)[1]
+        for end in ("\nSTEP ", "\nCTA:"):
+            body = body.split(end, 1)[0]
+        return body
+
+    @staticmethod
+    def _group(section, label):
+        labels = ("HOW THIS FOLLOWS FROM", "WHY / HOW", "SUPPORTING FACTS:", "Terms to define:")
+        body = section.split(label, 1)[1]
+        cut = min((body.find(lb) for lb in labels if lb in body), default=len(body))
+        return body[:cut]
+
+    def test_prompt_groups_verified_claims_by_role(self):
+        plan = self._role_plan()
+        plan["steps"][1]["terms"] = [{"term": "EC", "definition": "conductivity", "unit": ""}]
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        s2 = self._step_section(prompt, "s2")
+        link = self._group(s2, self.LINK_LABEL)
+        mech = self._group(s2, self.MECH_LABEL)
+        facts = self._group(s2, self.FACT_LABEL)
+        assert "water passes through it fast" in link
+        assert "Sandy soil drains nutrients quickly." in mech
+        assert "Sandy soil" not in link and "water passes" not in mech
+        assert "Sand grains are large" in facts and "Sand grains" not in mech
+        assert "Terms to define:" in s2 and "EC: conductivity" in s2
+        assert "UNSUPPORTED-MECH-MARKER" not in prompt
+        s3 = self._step_section(prompt, "s3")
+        assert "kept dissolved" in self._group(s3, self.LINK_LABEL)
+        assert "held in solution" in self._group(s3, self.MECH_LABEL)
+
+    def test_first_step_transition_follows_from_the_question(self):
+        prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
+                                             load_brand_facts())
+        s1 = self._step_section(prompt, "s1")
+        transition = s1.split("\n", 1)[0] if s1.startswith("HOW THIS") else \
+            next(line for line in s1.splitlines() if line.startswith("HOW THIS FOLLOWS"))
+        assert "QUESTION" in transition.upper()
+        assert self.LINK_LABEL not in s1
+        assert "20% calcium carbonate" in self._group(s1, self.MECH_LABEL)
+        assert "mostly loose sand" in self._group(s1, self.FACT_LABEL)
+
+    def test_role_prompt_still_omits_goals_and_takeaway(self):
+        plan = self._role_plan()
+        plan["steps"][1]["claim_text"] = "UNIQUE-GOAL-MARKER"
+        plan["payoff"]["takeaway"] = "UNIQUE-TAKEAWAY-MARKER"
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        assert "UNIQUE-GOAL-MARKER" not in prompt and "UNIQUE-TAKEAWAY-MARKER" not in prompt
+
+    def test_writer_system_narrates_link_mechanism_facts_in_order(self):
+        system = script_stage._WRITER_SYSTEM.lower()
+        assert system.index("transition") < system.index("mechanism") < \
+            system.index("supporting facts")
+        assert "cause and effect" in system
+        assert "never assume the viewer already knows" in system
+        assert "answers the question" in system
+        assert "no maximum" in system and "filler" in system
+
+    def test_extra_pool_includes_claims_of_every_role(self):
+        pool = script_stage.extra_pool_by_beat(self._role_plan())
+        assert "water passes through it fast" in pool["step_2"]      # link
+        assert "Sandy soil drains nutrients quickly." in pool["step_2"]  # mechanism
+        assert "Sand grains are large" in pool["step_2"]              # fact
+        assert "UNSUPPORTED-MECH-MARKER" not in pool["step_2"]
+
     def test_prompt_echoes_gate_errors_and_revise_notes(self):
         prompt = script_stage._writer_prompt(
             _plan(), {"title": "T"}, load_brand_facts(),
