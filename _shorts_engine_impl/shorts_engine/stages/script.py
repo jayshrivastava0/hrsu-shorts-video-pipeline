@@ -242,7 +242,10 @@ _WRITER_SYSTEM = (
     "leads to the next. Convey ONLY the verified claims listed for each step -- never add a "
     "new fact, number or unit. The last item is the CTA: close by restating, in your own "
     "words, only the verified claims you already narrated, then cite the brand "
-    "differentiator and the domain. " + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
+    "differentiator and the domain. For any statement about the company or its product the "
+    "CTA may use only the cited differentiator text, the brand CTA lines and the domain; "
+    "never invent additional claims about purity, QC, certifications, delivery or pricing. "
+    + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
     "Length follows the explanation: there is a 30 second floor and no maximum, and you must "
     "never pad with filler."
 )
@@ -253,8 +256,10 @@ _CRITIC_SYSTEM = (
     "something usable?), coherence_score (does each step follow from the last, are terms "
     "defined before use, is the chemistry described clearly?), hrsu_reason_score (is there "
     "one credible reason to consider HRSU?), faithfulness_score (does the narration assert "
-    "ANYTHING not in the verified claims? any such addition scores below 5). Give concrete "
-    "revise_notes."
+    "ANYTHING not in the verified claims or the approved brand statements? any such addition "
+    "scores below 5). Approved brand statements in the CTA are allowed and do not count "
+    "against faithfulness, but a CTA must not add brand or product claims beyond them. "
+    "Give concrete revise_notes."
 )
 
 
@@ -368,7 +373,10 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
         + "\nCTA: close by restating, in your own words, only the verified claims above, "
         "then cite the brand differentiator and the domain.\n"
         f"Brand differentiator to cite in the CTA [{plan['payoff']['differentiator_id']}]: "
-        f"{diff['text'] if diff else ''}\nCTA domain: {brand.domain}\n\n"
+        f"{diff['text'] if diff else ''}\nCTA domain: {brand.domain}\n"
+        "In the CTA, make company or product statements using only the cited differentiator "
+        "text, the brand CTA lines and the domain; do not invent additional claims about "
+        "purity, QC, certifications, delivery or pricing.\n\n"
         f"Return a hook, exactly one narration per step using these step_ids in this order "
         f"{[s['step_id'] for s in plan['steps']]}, and a cta. Total narration must reach at "
         f"least {round(config.TOTAL_MIN_S * config.WORDS_PER_SECOND)} words (no maximum), "
@@ -386,10 +394,19 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
     return prompt
 
 
-def _critic_prompt(plan: dict, beats: list[dict]) -> str:
+def _critic_prompt(plan: dict, beats: list[dict], brand: BrandFacts) -> str:
     claims = "\n".join(f"- {c['text']}" for s in plan["steps"] for c in s["claims"]
                        if c.get("verdict") == "supported")
-    return (f"Verified claims the script may rely on:\n{claims}\n\nScript:\n"
+    diff = next((d for d in brand.differentiators
+                 if d["id"] == plan["payoff"]["differentiator_id"]), None)
+    approved = ([f"- {diff['text']}"] if diff else []) \
+        + [f"- {line}" for line in brand.cta_lines] + [f"- {brand.domain}"]
+    return (f"Verified claims the script may rely on:\n{claims}\n\n"
+            "APPROVED BRAND STATEMENTS (the CTA beat may use these verbatim; they are "
+            "pre-approved company statements, not claims to verify, so faithfulness must "
+            "NOT be reduced for them; ANY other factual assertion in the CTA beat or any "
+            "beat that is not in the verified claims or these approved statements still "
+            "scores below 5):\n" + "\n".join(approved) + "\n\nScript:\n"
             + json.dumps([{"beat": b["beat"], "narration": b["narration"]} for b in beats],
                          ensure_ascii=False, indent=2))
 
@@ -468,7 +485,7 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
     rewrites = 0
     while True:
         critique = text_llm.generate_schema_json(
-            _critic_prompt(plan, beats), _CRITIC_SYSTEM, CRITIQUE_SCHEMA,
+            _critic_prompt(plan, beats, brand), _CRITIC_SYSTEM, CRITIQUE_SCHEMA,
             local_only=local_only, role="critic")
         lowest = min(critique["actionable_score"], critique["coherence_score"],
                      critique["hrsu_reason_score"], critique["faithfulness_score"])

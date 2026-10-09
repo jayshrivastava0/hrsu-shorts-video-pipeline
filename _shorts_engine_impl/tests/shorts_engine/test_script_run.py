@@ -87,6 +87,7 @@ class Router:
     def __init__(self, docs, critiques):
         self.docs, self.critiques = list(docs), list(critiques)
         self.writer_prompts, self.roles, self.local_only = [], [], []
+        self.critic_prompts, self.critic_systems = [], []
 
     def __call__(self, prompt, system, schema, **kw):
         self.roles.append(kw.get("role"))
@@ -95,6 +96,8 @@ class Router:
             self.writer_prompts.append(prompt)
             return self.docs.pop(0) if len(self.docs) > 1 else self.docs[0]
         if schema is script_stage.CRITIQUE_SCHEMA:
+            self.critic_prompts.append(prompt)
+            self.critic_systems.append(system)
             return self.critiques.pop(0) if len(self.critiques) > 1 else self.critiques[0]
         raise AssertionError(schema)
 
@@ -475,3 +478,41 @@ class TestStaleHoldReasons:
         script_stage.run(ctx)
         saved = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
         assert saved["hold_reasons"] == [] and saved["status"] == "verified"
+
+
+class TestCtaBrandStatements:
+    def _critic_prompt_text(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [_doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        return router, router.critic_prompts[0]
+
+    def test_critic_prompt_lists_approved_brand_statements(self, tmp_path, monkeypatch):
+        brand = load_brand_facts()
+        diff = next(d for d in brand.differentiators if d["id"] == "b_purity")
+        _, prompt = self._critic_prompt_text(tmp_path, monkeypatch)
+        assert "APPROVED BRAND STATEMENTS" in prompt
+        section = prompt.split("APPROVED BRAND STATEMENTS", 1)[1]
+        assert diff["text"] in section
+        assert brand.cta_lines[0] in section
+        assert brand.domain in section
+
+    def test_critic_prompt_still_has_verified_claims(self, tmp_path, monkeypatch):
+        _, prompt = self._critic_prompt_text(tmp_path, monkeypatch)
+        for step in _plan()["steps"]:
+            for c in step["claims"]:
+                if c.get("verdict") == "supported":
+                    assert c["text"] in prompt
+
+    def test_critic_system_exempts_approved_brand_statements(self, tmp_path, monkeypatch):
+        router, _ = self._critic_prompt_text(tmp_path, monkeypatch)
+        system = router.critic_systems[0].lower()
+        assert "approved brand statements" in system
+        assert "do not count against faithfulness" in system
+
+    def test_writer_limits_company_claims_to_approved_text(self):
+        prompt = script_stage._writer_prompt(_plan(), {"title": "T"}, load_brand_facts())
+        text = (script_stage._WRITER_SYSTEM + prompt).lower()
+        assert "only the cited differentiator text, the brand cta lines and the domain" in text
+        assert "purity, qc, certifications, delivery or pricing" in text
+        assert "The hook and the CTA must not contain any numbers." in prompt
