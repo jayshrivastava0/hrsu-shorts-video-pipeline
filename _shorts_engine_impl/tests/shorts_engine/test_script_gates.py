@@ -497,3 +497,15 @@ class TestDiagramLabelsGate:
                   "diagram_labels": ["Stage 99 boost", "output"]}]
         errs = script.gate_numbers(beats, factsheet, brand)
         assert any("99" in e for e in errs)
+
+    def test_formula_diagram_label_passes_when_pool_has_formula(self):
+        from shorts_engine.stages import script
+        from shorts_engine.brand import BrandFacts
+        brand = BrandFacts(company="c", domain="hrsuindore.com", tagline="t",
+                           differentiators=[{"id": "b_purity", "text": "pure"}],
+                           cta_lines=["cta"], banned_claims=[])
+        beats = [{"beat": "step_1", "narration": "no numbers here", "fact_ids": [],
+                  "card_text": "clean", "diagram_labels": ["Ca(NO3)2", "output"]}]
+        errs = script.gate_numbers(beats, {"facts": []}, brand,
+                                   extra_by_beat={"step_1": "Ca(NO3)2 dissolves in water."})
+        assert errs == []

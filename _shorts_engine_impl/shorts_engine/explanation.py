@@ -92,7 +92,8 @@ KNOWN_UNITS = frozenset({
 })
 
 _NUMBER_RE = re.compile(
-    r"(?<![\w.])(?P<num>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?P<gap>[ \t]*-?)"
+    r"(?<![\w.)\]])(?:(?<![\u00b7*])|(?!\d+[A-Z]))"   # not after ")"/"]"; not a hydrate "·4H2O"
+    r"(?P<num>(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?P<gap>[ \t]*-?)"
     r"(?P<unit>%|°?[A-Za-zµ]+(?:/[A-Za-zµ]+)?[²³23]?)?"
 )
 _YEAR_RE = re.compile(r"(?:19|20)\d\d")

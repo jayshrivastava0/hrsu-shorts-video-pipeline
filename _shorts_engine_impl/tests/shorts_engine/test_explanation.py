@@ -182,3 +182,15 @@ class TestDocumentHelpers:
                            {"id": "b", "verdict": "unsupported"},
                            {"id": "c", "verdict": None}]}
         assert [c["id"] for c in ex.supported_claims(step)] == ["a"]
+
+
+class TestFormulaLabels:
+    @pytest.mark.parametrize("label", ["Ca(NO3)2", "Ca(NO3)2\u00b74H2O", "Ca(NO3)2*4H2O",
+                                       "CO2", "H2S", "NO3"])
+    def test_chemical_formula_labels_pass(self, label):
+        assert ex.gate_claim_numbers(label, label) == []
+
+    def test_real_quantities_still_gated(self):
+        assert ex.gate_claim_numbers("Dose is 5 g", "the dose is 5 kg")
+        assert any("no unit" in e for e in ex.gate_claim_numbers("425", "EC peaking at 425"))
+        assert ex.gate_claim_numbers("2 kg", "2 kg") == []
