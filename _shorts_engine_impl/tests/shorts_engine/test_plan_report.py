@@ -31,3 +31,22 @@ def test_claim_without_support_or_kind():
     out = format_plan({"question": "Q?", "steps": [{"claims": [{"text": "T", "verdict": "x"}]}],
                        "dropped_steps": [{}]})
     assert "[x] T" in out and "Step ?" in out and "DROPPED step ?" in out
+
+
+def test_report_shows_claim_roles_and_drop_reasons():
+    plan = {
+        "question": "Q?", "status": "held",
+        "steps": [{"step_id": "s1", "claims": [
+            {"text": "Ions attack the film.", "kind": "external_fact", "role": "mechanism",
+             "verdict": "supported"}]}],
+        "dropped_claims": [{"text": "Because x, y.", "kind": "reasoning", "role": "link",
+                            "verdict": "unsupported",
+                            "reason": "does not follow from the verified premises"}],
+        "dropped_steps": [{"step_id": "s2", "reason": "no verified link"}, {"step_id": "s3"}],
+    }
+    out = format_plan(plan)
+    assert "[mechanism] [supported] Ions attack the film." in out
+    assert "[link] [unsupported] Because x, y. -- does not follow from the verified premises" in out
+    assert "DROPPED step s2 -- no verified link" in out
+    assert "DROPPED step s3" in out and "DROPPED step s3 --" not in out
+    out.encode("ascii")  # report scaffolding is ASCII-safe
