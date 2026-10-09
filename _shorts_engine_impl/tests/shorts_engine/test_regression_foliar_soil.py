@@ -35,8 +35,9 @@ def _ctx(tmp_path):
     return StageContext(manifest=m, workspace=ws, flags={})
 
 
-def _step(sid, claims):
+def _step(sid, claims, depends_on=(), transition=""):
     return {"step_id": sid, "claim_text": "goal", "claims": claims, "terms": [],
+            "depends_on": list(depends_on), "transition": transition,
             "visual_intent": {"entities": ["soil"], "relationship": "r", "quantity": "q"}}
 
 
@@ -68,14 +69,18 @@ def test_soil_to_foliar_leap_is_dropped_when_nothing_supports_it(tmp_path, monke
     steps = [
         _step("s1", [_claim("c1", "Engineers model desert soil with a sand mixture.",
                             "blog_stated", SAND_QUOTE)]),
+        # the leap: nothing in the article or on the web supports soil data -> foliar
         _step("s2", [_claim("c2", "Soil infiltration data proves foliar solubility.",
                             "external_fact"),
-                     _claim("l2", "Because engineers model soil with sand, soil data carries "
-                                  "over to foliar sprays.", "reasoning", role="link")]),
+                     _claim("f2", "So soil data carries over to foliar sprays.", "reasoning",
+                            role="fact")],
+              depends_on=["c1"], transition="From the soil model, turn to the spray tank."),
+        # built only on the leap
         _step("s3", [_claim("m3", "Fully dissolved salts pass through spray nozzles.",
                             "external_fact"),
                      _claim("c3", "So foliar sprays never clog nozzles.", "reasoning",
-                            role="link")]),
+                            role="fact")],
+              depends_on=["c2"], transition="That brings us to the nozzle itself."),
     ]
     monkeypatch.setattr(explain.text_llm, "generate_schema_json",
                         lambda p, s, sc, **kw: _plan(steps))
@@ -86,7 +91,7 @@ def test_soil_to_foliar_leap_is_dropped_when_nothing_supports_it(tmp_path, monke
         if schema is vc.VERDICT_SCHEMA:
             if prompt.startswith("Claim: Engineers model desert soil"):  # c1 quote entailment
                 return {"verdict": "supported", "passage_index": 0}
-            return {"verdict": "unsupported", "passage_index": None}   # c3: premises don't carry it
+            return {"verdict": "unsupported", "passage_index": None}   # premises don't carry it
         return {"claims": []}                                          # planner repair: nothing
 
     monkeypatch.setattr(vc.text_llm, "generate_schema_json", fake_llm)
@@ -96,6 +101,11 @@ def test_soil_to_foliar_leap_is_dropped_when_nothing_supports_it(tmp_path, monke
     assert doc["status"] == "held"
     dropped = {c["id"] for c in doc["dropped_claims"]}
     assert {"c2", "c3"} <= dropped            # the unsupported leap and the claim built on it
+    reasons = {s["step_id"]: s["reason"] for s in doc["dropped_steps"]}
+    assert reasons["s2"] == "no verified mechanism"
+    assert "depends on dropped claims" in reasons["s3"]   # cascades from the dropped leap
+    surviving = " ".join(c["text"] for s in doc["steps"] for c in s["claims"])
+    assert "foliar" not in surviving.lower()
 
 
 def test_well_supported_blog_claims_are_not_over_held(tmp_path, monkeypatch):
@@ -104,17 +114,14 @@ def test_well_supported_blog_claims_are_not_over_held(tmp_path, monkeypatch):
         _step("s1", [_claim("c1", "Foliar blends need stable solutions.",
                             "blog_stated", BLEND_QUOTE)]),
         _step("s2", [_claim("c2", "Poor solubility causes nozzle clogging.",
-                            "blog_stated", NOZZLE_QUOTE),
-                     _claim("l2", "Because blends must stay stable, poor solubility shows up "
-                                  "as clogged nozzles.", "reasoning", role="link")]),
-        # s3 stays on the foliar blend (no jump to soil): its link only connects s2's
-        # clogging claim with s3's own precipitation mechanism.
+                            "blog_stated", NOZZLE_QUOTE)],
+              depends_on=["c1"],
+              transition="When a blend is not stable, the trouble shows up at the nozzle."),
+        # s3 stays on the foliar blend (no jump to soil) and builds on s2's clogging claim
         _step("s3", [_claim("c3", "Calcium ions react with sulfates or phosphates into "
-                                  "insoluble salts.", "blog_stated", GYPSUM_QUOTE),
-                     _claim("l3", "Because poor solubility causes nozzle clogging, the "
-                                  "insoluble salts calcium ions form with sulfates or "
-                                  "phosphates are what clog the nozzles.", "reasoning",
-                            role="link")]),
+                                  "insoluble salts.", "blog_stated", GYPSUM_QUOTE)],
+              depends_on=["c2"],
+              transition="To see why nozzles clog, look at what forms in the tank."),
     ]
     monkeypatch.setattr(explain.text_llm, "generate_schema_json",
                         lambda p, s, sc, **kw: _plan(steps))
@@ -127,3 +134,4 @@ def test_well_supported_blog_claims_are_not_over_held(tmp_path, monkeypatch):
     doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
     assert doc["status"] == "verified"
     assert len(doc["steps"]) == 3 and doc["dropped_claims"] == []
+    assert [s["depends_on"] for s in doc["steps"]] == [[], ["c1"], ["c2"]]

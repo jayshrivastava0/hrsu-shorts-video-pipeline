@@ -4,21 +4,19 @@
 Every factual claim is checked before it can reach the script:
   blog_stated   -> verbatim quote located in canonical.txt (+ number/unit gate)
   external_fact -> retrieved passages judged by an independent verifier model
-  reasoning     -> logic check against already-supported premises
+  reasoning     -> logic check against already-supported premises (earlier steps' plus
+                   this step's own supported claims)
   illustrative  -> no numbers allowed
-A step survives only with a supported non-illustrative `mechanism` claim (its
-why/how) and, unless it is the first step, a supported reasoning `link` claim
-(how it follows from the previous step). A link only connects: it is checked, after
-the step's own fact/mechanism claims, against the premises of earlier steps plus those
-own supported claims, and must add nothing new. A failed claim, or a step missing its mechanism/link, is
-repaired by the planner (config.PLAN_MAX_REPAIR_ROUNDS rounds) and only then
-dropped, never guessed. A step currently missing its mechanism contributes no
-premises, so a link resting on it fails (and is repaired) during the rounds. When a
-step is dropped, the reasoning claims of later steps are re-checked against the
-surviving premises ("re-link"), and a step that fails the re-link gets one more
-repair before it is dropped (bound: max_repair_calls). Empty/failed web search just means the claim is unsupported; it
-never stops the run. If fewer than config.MIN_VERIFIED_STEPS steps survive, the
-plan is saved with status "held" and HoldForReview is raised.
+How a step follows from earlier ones is not a claim and is not LLM-verified: it is the
+step's `depends_on` (ids of earlier claims), checked deterministically. A step survives
+only with a supported non-illustrative `mechanism` claim (its why/how) and, unless it is
+the plan's first step, a depends_on id naming a supported claim of an earlier SURVIVING
+step. A failed claim, a missing mechanism or a missing/invalid depends_on is repaired by
+the planner (config.PLAN_MAX_REPAIR_ROUNDS rounds; bound: max_repair_calls) and only then
+dropped, never guessed; a dropped step takes the steps that depended only on it with it.
+Empty/failed web search just means the claim is unsupported; it never stops the run. If
+fewer than config.MIN_VERIFIED_STEPS steps survive, the plan is saved with status "held"
+and HoldForReview is raised.
 """
 from __future__ import annotations
 
@@ -47,7 +45,10 @@ VERDICT_SCHEMA: dict = {
 
 REPAIR_SCHEMA: dict = {
     "type": "object",
-    "properties": {"claims": {"type": "array", "items": explanation.CLAIM_ITEM_SCHEMA}},
+    "properties": {"claims": {"type": "array", "items": explanation.CLAIM_ITEM_SCHEMA},
+                   # optional: a corrected depends_on / transition for the step
+                   "depends_on": {"type": "array", "items": {"type": "string"}},
+                   "transition": {"type": "string"}},
     "required": ["claims"],
     "additionalProperties": False,
 }
@@ -63,16 +64,6 @@ _LOGIC_SYSTEM = (
     "'supported' only if the conclusion follows from the premises alone, 'contradicted' if "
     "the premises imply the opposite, otherwise 'unsupported'. Set passage_index to null."
 )
-_LINK_SYSTEM = (
-    "You are a strict logic checker for ONE transition sentence in an explainer. You get "
-    "verified premises (claims established in earlier steps and claims established in this "
-    "step) and ONE conclusion: a transition that should connect them. Answer 'supported' "
-    "ONLY if the conclusion merely connects or combines the premises (restating them, joined "
-    "by 'because'/'so') without adding any new fact, cause, effect, property, number or "
-    "condition that no premise states. Answer 'contradicted' if the premises imply the "
-    "opposite, otherwise 'unsupported' (including whenever it adds anything new). Set "
-    "passage_index to null."
-)
 _ILLUSTRATIVE_SYSTEM = (
     "You are a strict editor. You get ONE sentence labelled as an illustration. Answer "
     "'supported' ONLY if it is a pure analogy or illustration that makes no factual assertion "
@@ -81,24 +72,20 @@ _ILLUSTRATIVE_SYSTEM = (
 )
 _REPAIR_SYSTEM = (
     "You repair one step of an explainer plan that teaches from first principles. The step "
-    "is missing a verified mechanism (its why/how), a verified link (how it follows from the "
-    "previous step), or has claims that failed verification. Return NEW claims (same schema) "
-    "that fix exactly what is missing or failed; the supported claims are kept as they are, "
-    "do not repeat them. Re-explain a missing mechanism or link from the article's own text, "
-    "or from a fact a reference source will confirm, stated plainly the way a textbook "
-    "would. Set `role` on every claim: mechanism (what physically or chemically happens), "
-    "link (kind reasoning, 'Because <earlier established claim>, <this step's mechanism>'), "
-    "or fact. A link must ONLY connect: it restates/combines a claim an earlier step "
-    "established with a claim of this step and adds NO new fact, cause, number or "
-    "condition; any new fact goes in its own mechanism or fact claim, which is verified on "
-    "its own. Good link: 'Because the rain water carries chloride ions, the chloride ions "
-    "break down the oxide film on the steel it wets.' (earlier: rain carries chloride ions; "
-    "this step: chloride ions break down the oxide film). Bad link: 'Because the salt keeps "
-    "the surface damp, it remains fluid and forms a durable matrix.' ('remains fluid' and "
-    "'durable matrix' are new facts no claim states). Set `kind` on "
-    "every claim; blog_stated claims must copy a verbatim sentence from the article into "
-    "`quote`, other kinds leave `quote` empty. Drop any number you cannot support with its "
-    "unit. An empty list is allowed only if the step truly cannot be explained honestly."
+    "is missing a verified mechanism (its why/how), has no valid depends_on (the ids of the "
+    "earlier verified claims it builds on), or has claims that failed verification. Return "
+    "NEW claims (same schema) that fix exactly what is missing or failed; the supported "
+    "claims are kept as they are, do not repeat them. Re-explain a missing mechanism from "
+    "the article's own text, or from a fact a reference source will confirm, stated plainly "
+    "the way a textbook would. Set `role` on every claim: mechanism (what physically or "
+    "chemically happens) or fact (a supporting detail). Set `kind` on every claim; "
+    "blog_stated claims must copy a verbatim sentence from the article into `quote`, other "
+    "kinds leave `quote` empty. Drop any number you cannot support with its unit. When "
+    "depends_on is the problem, also return `depends_on` (ids of verified claims of earlier "
+    "steps that hold, exactly as listed) and a `transition`: one short sentence in plain "
+    "words saying how those claims lead to this step -- no digits, no new fact, cause or "
+    "condition (it is narration guidance, not a claim). An empty claims list is allowed "
+    "when only depends_on needs fixing, or if the step truly cannot be explained honestly."
 )
 
 
@@ -172,9 +159,8 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
         if not premises:
             return _result(claim, "unsupported", "no verified premises to reason from")
         listing = "\n".join(f"- {p}" for p in premises)
-        system = _LINK_SYSTEM if _role(claim) == "link" else _LOGIC_SYSTEM
         res = text_llm.generate_schema_json(
-            f"Premises:\n{listing}\n\nConclusion: {text}", system, VERDICT_SCHEMA,
+            f"Premises:\n{listing}\n\nConclusion: {text}", _LOGIC_SYSTEM, VERDICT_SCHEMA,
             local_only=local_only, role="verifier")
         if res["verdict"] != "supported":
             return _result(claim, res["verdict"], "does not follow from the verified premises")
@@ -187,10 +173,6 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
     return _result(claim, "unsupported", f"unknown claim kind {kind!r}")
 
 
-def _role(claim: dict) -> str:
-    return claim.get("role") or "fact"   # plans stored before roles existed
-
-
 def _is_premise(claim: dict) -> bool:
     return claim.get("verdict") == "supported" and claim["kind"] != "illustrative"
 
@@ -198,110 +180,137 @@ def _is_premise(claim: dict) -> bool:
 def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = False) -> None:
     """Verify every not-yet-verified claim, in chain order (mutates `plan`).
 
-    Premises are supported non-illustrative claims. Within a step the fact/mechanism
-    claims are verified first (each also sees the earlier ones of its step), then the
-    `link` claims, whatever their stored order. A link only CONNECTS: it is judged
-    (with _LINK_SYSTEM) against the premises of earlier steps PLUS this step's own
-    supported fact/mechanism claims, and it fails outright when no earlier step
-    established anything (a link of the first step has nothing to follow from).
+    Premises are supported non-illustrative claims. Within a step the non-reasoning claims
+    are verified first, then the reasoning claims (the stored order is not changed), so a
+    reasoning claim is judged against the premises of earlier steps PLUS this step's own
+    supported claims, whatever their stored order. A step currently missing a verified
+    mechanism contributes NO premises to later steps: it may yet be dropped.
     """
     earlier: list[str] = []
     for step in plan["steps"]:
         claims = step["claims"]
-        order = ([i for i, c in enumerate(claims) if _role(c) != "link"]
-                 + [i for i, c in enumerate(claims) if _role(c) == "link"])
+        order = ([i for i, c in enumerate(claims) if c["kind"] != "reasoning"]
+                 + [i for i, c in enumerate(claims) if c["kind"] == "reasoning"])
         own: list[str] = []
-        own_links: list[str] = []
         for i in order:
-            claim = claims[i]
-            is_link = _role(claim) == "link"
-            if claim.get("verdict") is None:
-                if is_link and not earlier:
-                    claims[i] = _result(claim, "unsupported",
-                                        "no verified premises from earlier steps to link from")
-                else:
-                    claims[i] = verify_claim(
-                        claim, step=step, premises=earlier + own, canonical=canonical,
-                        retriever=retriever, local_only=local_only)
+            if claims[i].get("verdict") is None:
+                claims[i] = verify_claim(
+                    claims[i], step=step, premises=earlier + own, canonical=canonical,
+                    retriever=retriever, local_only=local_only)
             if _is_premise(claims[i]):
-                (own_links if is_link else own).append(claims[i]["text"])
-        # A step currently missing its mechanism contributes NO premises: it may yet be
-        # dropped, so a later link must not silently rest on it. That link fails now and
-        # goes through the repair rounds while this step is being repaired too.
+                own.append(claims[i]["text"])
         if _has_mechanism(step):
-            earlier += own + own_links
+            earlier += own
 
 
 def _has_mechanism(step: dict) -> bool:
-    return any(_role(c) == "mechanism" and c["kind"] != "illustrative"
+    return any(c.get("role") == "mechanism" and c["kind"] != "illustrative"
                and c.get("verdict") == "supported" for c in step["claims"])
 
 
-def _missing(step: dict, first: bool) -> list[str]:
-    """What a step lacks to survive: a verified mechanism, and (unless first) a link."""
-    sup = [c for c in step["claims"] if c.get("verdict") == "supported"]
+NO_MECHANISM = "no verified mechanism"
+NO_DEPENDS_ON = "no valid depends_on"
+DEPENDS_ON_DROPPED = "depends on dropped claims"
+
+
+def _chain_status(steps: list[dict], first) -> list[tuple[list[str], list[str]]]:
+    """For each step, in order: (what it lacks to hold, its live depends_on ids).
+
+    A step holds when it has a supported non-illustrative mechanism and -- unless it is
+    `first` (the plan's original first step, which follows from the question) -- at least
+    one depends_on id naming a SUPPORTED claim of an earlier step that itself holds. Since
+    depends_on only points backwards, one forward pass decides every step. The same
+    function drives the repair triggers and the final prune, so a step whose dependency
+    sits in a step that does not hold is repaired (it can re-point) before it is dropped.
+    """
+    held_ids: set[str] = set()
     out = []
-    if not _has_mechanism(step):
-        out.append("no verified mechanism")
-    if not first and not any(_role(c) == "link" and c["kind"] == "reasoning" for c in sup):
-        out.append("no verified link")
+    for step in steps:
+        missing = [] if _has_mechanism(step) else [NO_MECHANISM]
+        live = [d for d in explanation.depends_on_ids(step) if d in held_ids]
+        if step is not first and not live:
+            missing.append(NO_DEPENDS_ON)
+        if not missing:
+            held_ids |= {c["id"] for c in step["claims"] if c.get("verdict") == "supported"}
+        out.append((missing, live))
     return out
 
 
-def _failing_steps(plan: dict) -> list[tuple[dict, list[str]]]:
-    """Steps that need a repair round, with what each lacks. A failed link on the first
-    step is ignored (it has no previous step to follow from; prune drops the claim)."""
+def _failing_steps(plan: dict, first) -> list[tuple[dict, list[str]]]:
+    """Steps that need a repair round, with what each lacks: any claim that is not
+    supported, no verified mechanism, or (not first) no valid depends_on."""
     out = []
-    for pos, step in enumerate(plan["steps"]):
-        first = pos == 0
-        failed = [c for c in step["claims"] if c.get("verdict") != "supported"
-                  and not (first and _role(c) == "link")]
-        missing = _missing(step, first)
+    for step, (missing, _live) in zip(plan["steps"], _chain_status(plan["steps"], first)):
+        failed = [c for c in step["claims"] if c.get("verdict") != "supported"]
         if failed or missing:
             out.append((step, missing))
     return out
 
 
+def _earlier_block(plan: dict, idx: int, first) -> tuple[str, set[str]]:
+    """Listing of the earlier steps' supported claims with ids, and the ids that are valid
+    depends_on targets right now (supported claims of earlier steps that hold)."""
+    status = _chain_status(plan["steps"], first)
+    lines, valid = [], set()
+    for step, (missing, _live) in zip(plan["steps"][:idx], status[:idx]):
+        holds = not missing
+        lines.append(f"Earlier step {step['step_id']} ("
+                     + ("holds" if holds else "does NOT hold yet: " + "; ".join(missing))
+                     + f"): {step.get('claim_text', '')}")
+        for c in step["claims"]:
+            if c.get("verdict") == "supported":
+                lines.append(f"  - [{c['id']}] ({_role(c)}) {c['text']}")
+                if holds:
+                    valid.add(c["id"])
+    return "\n".join(lines), valid
+
+
+def _role(claim: dict) -> str:
+    """Stored role; anything but "mechanism" (none, or a legacy "link") is a fact."""
+    return "mechanism" if claim.get("role") == "mechanism" else "fact"
+
+
 def _repair_step(plan: dict, step: dict, missing: list[str], round_no: int,
-                 local_only: bool, canonical: str) -> None:
+                 local_only: bool, canonical: str, first) -> None:
     failed = [c for c in step["claims"] if c["verdict"] != "supported"]
     kept = [c for c in step["claims"] if c["verdict"] == "supported"]
     idx = next(i for i, s in enumerate(plan["steps"]) if s is step)
-    prev = plan["steps"][idx - 1] if idx > 0 else None
+    earlier, valid = _earlier_block(plan, idx, first)
     problems = []
-    if "no verified mechanism" in missing:
+    if NO_MECHANISM in missing:
         problems.append("MISSING MECHANISM: no verified claim with role 'mechanism' explains "
                         "why/how this step happens. Add one (kind blog_stated, external_fact "
                         "or reasoning; never illustrative).")
-    if "no verified link" in missing:
-        problems.append("MISSING LINK: no verified claim with role 'link' (kind reasoning) "
-                        "says how this step follows from the previous step. Add one, "
-                        "'Because <earlier established claim>, <this step's mechanism>'. A "
-                        "link must ONLY connect: it is checked against what earlier steps "
-                        "established (the previous step is shown above) plus this step's "
-                        "own supported claims, and it fails if it adds any new fact, cause, "
-                        "number or condition. Put any new fact in a separate mechanism or "
-                        "fact claim of this step instead.")
+    if NO_DEPENDS_ON in missing:
+        problems.append(
+            "NO VALID DEPENDS_ON: none of this step's depends_on ids names a verified claim "
+            "of an earlier step that holds. Return `depends_on` with the ids (from the "
+            "earlier steps listed above that hold) of the claims this step builds on, and a "
+            f"matching `transition`: words only, at most {config.TRANSITION_MAX_WORDS} words, "
+            "no digits, no new fact, cause or condition.")
     if failed:
         problems.append("FAILED CLAIMS: the claims listed below failed verification; "
                         "replace them with claims a source or the article supports, or "
                         "leave them out.")
-    prev_block = ""
-    if prev is not None:
-        prev_block = (f"Previous step (this step must follow from it): {prev['claim_text']}\n"
-                      + "\n".join(f"- {c['text']}" for c in prev["claims"]
-                                  if c.get("verdict") == "supported") + "\n")
+    chain = (f"{earlier}\n" if earlier
+             else "This is the first step: it follows from the question and has no "
+                  "depends_on.\n")
     prompt = (
         f"Article:\n{canonical}\n\n"
-        f"Question: {plan['question']}\n{prev_block}Step goal: {step['claim_text']}\n"
+        f"Question: {plan['question']}\n{chain}Step goal: {step['claim_text']}\n"
+        f"Current depends_on: {explanation.depends_on_ids(step)}\n"
+        f"Current transition: {step.get('transition') or ''}\n"
         "What is wrong with this step:\n" + "\n".join(f"- {p}" for p in problems)
         + "\nSupported claims (keep as they are):\n"
         + "\n".join(f"- [{_role(c)}] {c['text']}" for c in kept)
         + "\nFailed claims:\n"
         + "\n".join(f"- [{_role(c)}] {c['text']} ({c['kind']}) -> {c['verdict']}: "
                     f"{c.get('reason', '')}" for c in failed)
-        + "\nReturn only the new claims, each with `role`, `kind` and `quote` set; an "
-          "empty list is allowed only if the step truly cannot be explained.")
+        + "\nReturn only the new claims, each with `role`, `kind` and `quote` set (an empty "
+          "list is allowed when only depends_on needs fixing, or if the step truly cannot "
+          "be explained)" + ("; plus `depends_on` and `transition` when depends_on is the "
+                             "problem." if NO_DEPENDS_ON in missing and step is not first
+                             else "."))
     res = text_llm.generate_schema_json(prompt, _REPAIR_SYSTEM, REPAIR_SCHEMA,
                                         local_only=local_only, role="planner")
     plan["dropped_claims"].extend(failed)
@@ -310,68 +319,59 @@ def _repair_step(plan: dict, step: dict, missing: list[str], round_no: int,
         raw = dict(raw, id=f"{step['step_id']}_r{round_no}_{n}")
         new.append(explanation.finalize_claim(raw))
     step["claims"] = kept + new
+    # A repaired depends_on is applied only when it is valid NOW: non-empty, and every id
+    # a supported claim of an earlier step that holds. The first step never takes one.
+    deps = res.get("depends_on")
+    if (step is not first and isinstance(deps, list) and deps
+            and all(isinstance(d, str) and d in valid for d in deps)):
+        step["depends_on"] = list(dict.fromkeys(deps))
+    transition = res.get("transition")
+    if isinstance(transition, str) and not explanation.transition_errors(transition):
+        step["transition"] = transition
 
 
-def _prune(plan: dict) -> bool:
-    """Drop unsupported claims, then every step without a verified mechanism or (unless
-    it is the first surviving step) a verified link. Returns True if a step was dropped."""
-    surviving = []
+def _prune(plan: dict, first) -> None:
+    """Drop unsupported claims, then every step that does not hold (see _chain_status):
+    no verified mechanism, or (unless `first`) no depends_on id naming a supported claim
+    of an earlier SURVIVING step. Each surviving step keeps only its live depends_on ids.
+
+    Reasons: "no verified mechanism"; "depends on dropped claims" when its depends_on named
+    claims that are gone (dropped, or in a dropped step); "no valid depends_on" otherwise.
+
+    Termination: depends_on only points backwards, so the forward pass in _chain_status
+    is already a fixed point; the loop re-checks as a guard, and every pass that changes
+    anything removes at least one step, so it ends within len(steps) + 1 passes.
+    """
     for step in plan["steps"]:
-        ok = [c for c in step["claims"] if c["verdict"] == "supported"]
         plan["dropped_claims"].extend(c for c in step["claims"] if c["verdict"] != "supported")
-        step["claims"] = ok
-        missing = _missing(step, first=not surviving)
-        if missing:
-            plan["dropped_steps"].append(dict(step, reason="; ".join(missing)))
-        else:
-            surviving.append(step)
-    dropped = len(surviving) < len(plan["steps"])
-    plan["steps"] = surviving
-    return dropped
+        step["claims"] = [c for c in step["claims"] if c["verdict"] == "supported"]
+    known = {c.get("id") for c in plan["dropped_claims"]} | {
+        c["id"] for s in plan["steps"] for c in s["claims"]}
+    while True:
+        status = _chain_status(plan["steps"], first)
+        surviving = []
+        for step, (missing, live) in zip(plan["steps"], status):
+            if missing:
+                reasons = [DEPENDS_ON_DROPPED if m == NO_DEPENDS_ON and any(
+                    d in known for d in explanation.depends_on_ids(step)) else m
+                    for m in missing]
+                plan["dropped_steps"].append(dict(step, reason="; ".join(reasons)))
+            else:
+                if step is not first:
+                    step["depends_on"] = live
+                surviving.append(step)
+        if len(surviving) == len(plan["steps"]):
+            return
+        plan["steps"] = surviving
 
 
 def max_repair_calls(n_steps: int) -> int:
     """Upper bound on planner REPAIR calls for a plan of `n_steps` steps.
 
-    The repair rounds repair each step at most once per round (steps are never removed
-    during the rounds): PLAN_MAX_REPAIR_ROUNDS * n_steps. After the final prune, each
-    surviving step whose re-link fails gets at most ONE more repair (tracked per step):
-    + n_steps. Total <= (PLAN_MAX_REPAIR_ROUNDS + 1) * n_steps."""
-    return (config.PLAN_MAX_REPAIR_ROUNDS + 1) * n_steps
-
-
-def _prune_and_relink(plan: dict, *, canonical: str, retriever, local_only: bool) -> None:
-    """Prune; whenever a step is dropped, re-check the reasoning claims of the surviving
-    steps that came after it against the surviving premises only. A re-checked step that
-    now fails (typically: its link rested on the dropped step) gets ONE bounded repair --
-    the planner sees the surviving previous step -- and is re-verified; then prune again.
-    Each step gets at most one such repair (see max_repair_calls), so this terminates."""
-    relink_repaired: set[int] = set()
-    while True:
-        order = list(plan["steps"])
-        if not _prune(plan):
-            return
-        alive = {id(s) for s in plan["steps"]}
-        first_drop = next(i for i, s in enumerate(order) if id(s) not in alive)
-        later = {id(s) for s in order[first_drop + 1:]} & alive
-        reset = False
-        for step in plan["steps"]:
-            if id(step) in later:
-                for c in step["claims"]:
-                    if c["kind"] == "reasoning":
-                        c["verdict"] = None
-                        reset = True
-        if not reset:
-            return
-        verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
-        failing = [(s, m) for s, m in _failing_steps(plan)
-                   if id(s) in later and id(s) not in relink_repaired]
-        for step, missing in failing:
-            relink_repaired.add(id(step))
-            _repair_step(plan, step, missing, config.PLAN_MAX_REPAIR_ROUNDS + 1,
-                         local_only, canonical)
-        if failing:
-            verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
+    Only the repair rounds call the planner, and each round repairs each step at most once
+    (steps are never removed during the rounds): PLAN_MAX_REPAIR_ROUNDS * n_steps. The
+    final prune makes no LLM calls."""
+    return config.PLAN_MAX_REPAIR_ROUNDS * n_steps
 
 
 def run(ctx) -> dict[str, str]:
@@ -387,16 +387,18 @@ def run(ctx) -> dict[str, str]:
     post = json.loads((ws / "post.json").read_text(encoding="utf-8"))
     local_only = bool(ctx.flags.get("local_only", False))
     retriever = Retriever([c["url"] for c in post.get("citations", []) if c.get("url")])
+    # the plan's original first step follows from the question and needs no depends_on
+    first = plan["steps"][0] if plan["steps"] else None
 
     verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
     for round_no in range(1, config.PLAN_MAX_REPAIR_ROUNDS + 1):
-        failing = _failing_steps(plan)
+        failing = _failing_steps(plan, first)
         if not failing:
             break
         for step, missing in failing:
-            _repair_step(plan, step, missing, round_no, local_only, canonical)
+            _repair_step(plan, step, missing, round_no, local_only, canonical, first)
         verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
-    _prune_and_relink(plan, canonical=canonical, retriever=retriever, local_only=local_only)
+    _prune(plan, first)
 
     n_claims = sum(len(s["claims"]) for s in plan["steps"])
     logger.info(f"verify_claims: {len(plan['steps'])} steps / {n_claims} claims survived, "
