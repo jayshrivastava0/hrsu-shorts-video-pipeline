@@ -22,6 +22,8 @@ EC_QUOTE = "electrical conductivity (EC) peaking at 425"
 SAND_QUOTE = "a 20% calcium carbonate and 80% river sand mixture"
 NOZZLE_QUOTE = "solubility issues lead to nutrient precipitation, nozzle clogging, and uneven crop application"
 BLEND_QUOTE = "Maintaining the stability of precision foliar blends is a constant challenge"
+GYPSUM_QUOTE = ("the reaction between calcium ions and sulfates or phosphates, which creates "
+                "insoluble salts like calcium sulfate (gypsum)")
 
 
 def _ctx(tmp_path):
@@ -105,10 +107,13 @@ def test_well_supported_blog_claims_are_not_over_held(tmp_path, monkeypatch):
                             "blog_stated", NOZZLE_QUOTE),
                      _claim("l2", "Because blends must stay stable, poor solubility shows up "
                                   "as clogged nozzles.", "reasoning", role="link")]),
-        _step("s3", [_claim("c3", "Engineers model desert soil with a sand mixture.",
-                            "blog_stated", SAND_QUOTE),
-                     _claim("l3", "Because clogging depends on how the blend behaves, "
-                                  "engineers test it on modelled soil.", "reasoning",
+        # s3 stays on the foliar blend (no jump to soil): its link only connects s2's
+        # clogging claim with s3's own precipitation mechanism.
+        _step("s3", [_claim("c3", "Calcium ions react with sulfates or phosphates into "
+                                  "insoluble salts.", "blog_stated", GYPSUM_QUOTE),
+                     _claim("l3", "Because poor solubility causes nozzle clogging, the "
+                                  "insoluble salts calcium ions form with sulfates or "
+                                  "phosphates are what clog the nozzles.", "reasoning",
                             role="link")]),
     ]
     monkeypatch.setattr(explain.text_llm, "generate_schema_json",
