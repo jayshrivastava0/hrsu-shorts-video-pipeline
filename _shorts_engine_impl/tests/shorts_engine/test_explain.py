@@ -98,6 +98,32 @@ def test_prompt_contains_full_article_and_differentiators(tmp_path):
     assert "b_purity" in prompt
 
 
+def test_planner_is_told_to_explain_the_mechanism_and_link_the_steps():
+    system = explain._PLANNER_SYSTEM.lower()
+    assert "mechanism" in system and "link" in system and "define" in system
+    assert "role" in system
+    # worked examples use a generic illustration, never the blog under test
+    assert "oxide film" in system
+
+
+def test_missing_mechanism_and_link_errors_are_echoed_into_the_retry_prompt(tmp_path,
+                                                                             monkeypatch):
+    ctx = _ctx(tmp_path)
+    bad = _good_plan()
+    bad["steps"][1]["claims"] = [dict(bad["steps"][1]["claims"][0], role="fact")]
+    prompts = []
+
+    def fake(prompt, system, schema, **kw):
+        prompts.append(prompt)
+        return bad if len(prompts) == 1 else _good_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    assert len(prompts) == 2
+    assert "step[s2]: missing a 'mechanism' claim" in prompts[1]
+    assert "step[s2]: missing a 'link' claim" in prompts[1]
+
+
 def test_exhausted_retries_hold_for_review_and_write_no_plan(tmp_path, monkeypatch):
     ctx = _ctx(tmp_path)
     bad = _good_plan()
