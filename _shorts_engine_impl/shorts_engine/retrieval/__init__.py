@@ -74,11 +74,15 @@ def _content_words(text: str) -> set[str]:
 def query_variants(claim_text: str) -> list[str]:
     """Search queries tried in order for a claim (spec section 12): the claim itself,
     its key terms, and its key terms plus "why how" (finds mechanism explanations).
-    Duplicates and empty queries are skipped."""
+    Empty queries and duplicates (compared after normalize_for_match, so a query that
+    differs only in case is not searched twice) are skipped."""
     terms = key_terms_query(claim_text)
     out: list[str] = []
+    seen: set[str] = set()
     for q in (claim_text.strip(), terms, f"{terms} why how" if terms else ""):
-        if q and q not in out:
+        key = normalize_for_match(q)
+        if q and key not in seen:
+            seen.add(key)
             out.append(q)
     return out
 
@@ -95,10 +99,13 @@ class Retriever:
     (`query_variants`) are tried in order until one yields passages; passages of
     different variants are never merged, and they are always scored against the claim
     text. Results are cached per normalised claim so repair rounds do not repeat
-    searches -- except an EMPTY result caused by a search or fetch failure, which is
-    not cached so a later call retries. `last_search_failed` says whether the last
-    uncached retrieve() saw a search failure. Every URL is fetched at most once per
-    Retriever (failed/empty pages cached too). The fetch budget
+    searches -- except an EMPTY result caused by a search failure, which is not cached
+    so a later call retries. (A fetch failure is only detected when an injected
+    `fetch_fn` raises; the default fetch_text never raises and returns "" on failure,
+    so in production only search failures leave a result uncached.)
+    `last_search_failed` says whether the last uncached retrieve() saw a search failure.
+    Every URL is fetched at most once per Retriever (failed/empty pages cached too).
+    The fetch budget
     (config.RETRIEVAL_MAX_FETCHES, per variant; cached pages cost nothing) is shared:
     at most half goes to the blog citations that best match the claim, the rest to
     ranked search hits.

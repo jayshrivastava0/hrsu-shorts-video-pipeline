@@ -215,6 +215,24 @@ class TestKeyTermsQuery:
         assert key_terms_query("Calcium nitrate dissolves") == "calcium nitrate dissolves"
         assert key_terms_query("a an the") == ""
 
+    def test_generic_verbs_rank_below_informative_words(self):
+        from shorts_engine.retrieval.passages import key_terms_query
+        q = key_terms_query("Chloride ions break down the protective oxide film on steel, "
+                            "which starts pitting").split()
+        assert "steel" in q and "oxide" in q
+        assert "starts" not in q and "break" not in q and "which" not in q
+
+    def test_generic_words_still_used_when_nothing_else_is_left(self):
+        from shorts_engine.retrieval.passages import key_terms_query
+        assert key_terms_query("Salt helps because it remains") == "salt helps because remains"
+
+
+class TestQueryVariants:
+    def test_variants_dedupe_on_normalised_text(self):
+        from shorts_engine.retrieval import query_variants
+        assert query_variants("Calcium nitrate dissolves") == [
+            "Calcium nitrate dissolves", "calcium nitrate dissolves why how"]
+
 
 class TestRetrieverVariants:
     """Spec section 12: retry with query variants; never cache a failure-caused empty."""
