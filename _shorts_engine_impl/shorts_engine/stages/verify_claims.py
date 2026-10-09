@@ -233,7 +233,10 @@ def _repair_step(plan: dict, step: dict, missing: list[str], round_no: int,
     if "no verified link" in missing:
         problems.append("MISSING LINK: no verified claim with role 'link' (kind reasoning) "
                         "says how this step follows from the previous step. Add one, "
-                        "'because <previous step>, so <this step>'.")
+                        "'because <previous step>, so <this step>'. It is checked ONLY "
+                        "against what earlier steps established (the previous step is shown "
+                        "above): its 'so' part must follow from that alone; put any new fact in a mechanism or fact "
+                        "claim instead.")
     if failed:
         problems.append("FAILED CLAIMS: the claims listed below failed verification; "
                         "replace them with claims a source or the article supports, or "
