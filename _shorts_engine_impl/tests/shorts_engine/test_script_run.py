@@ -234,7 +234,8 @@ class TestWriterPrompt:
         assert "no maximum" in prompt.lower()
 
     LINK_LABEL = "HOW THIS FOLLOWS FROM THE PREVIOUS STEP (use as the opening transition):"
-    MECH_LABEL = "WHY / HOW (the mechanism - explain it fully, step by step, in plain words):"
+    MECH_LABEL = ("WHY / HOW (the mechanism - explain THIS claim as cause and effect in plain "
+                  "words; add no causes, steps, conditions or facts that are not listed):")
     FACT_LABEL = "SUPPORTING FACTS:"
 
     @staticmethod
@@ -298,6 +299,17 @@ class TestWriterPrompt:
         assert self.LINK_LABEL not in s1
         assert "20% calcium carbonate" in self._group(s1, self.MECH_LABEL)
         assert "mostly loose sand" in self._group(s1, self.FACT_LABEL)
+
+    def test_first_step_placeholder_uses_only_verified_claims(self):
+        prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
+                                             load_brand_facts())
+        s1 = self._step_section(prompt, "s1")
+        assert ("(connect this step directly to the QUESTION above using only verified "
+                "claims)") in s1
+
+    def test_mechanism_label_forbids_adding_causes_or_steps(self):
+        assert "explain it fully, step by step" not in script_stage._MECH_LABEL
+        assert "explain THIS claim as cause and effect" in script_stage._MECH_LABEL
 
     def test_role_prompt_still_omits_goals_and_takeaway(self):
         plan = self._role_plan()

@@ -348,8 +348,9 @@ _WRITER_SYSTEM = (
     "Narrate each step in this order: (1) a transition sentence built from its 'how this "
     "follows' claim (\"Because ..., ...\"), so the step visibly follows from the previous one "
     "(the first step follows from the question); (2) the mechanism, explained as cause and "
-    "effect, step by step in plain words, so a viewer who knows nothing about it can follow "
-    "why and how it happens; (3) the supporting facts. Define every term the first time it "
+    "effect in plain words, so a viewer who knows nothing about it can follow why and how "
+    "it happens, adding no cause, step or condition that its verified claims do not state; "
+    "(3) the supporting facts. Define every term the first time it "
     "is used, using ONLY the definitions provided. Never assume the viewer already knows why "
     "something happens. Convey ONLY the verified claims listed for each step -- never add a "
     "fact, number or unit that is not in the verified claims. The last item is the CTA: "
@@ -470,7 +471,8 @@ def build_beats(doc: dict, plan: dict, factsheet: dict,
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 _LINK_LABEL = "HOW THIS FOLLOWS FROM THE PREVIOUS STEP (use as the opening transition):"
-_MECH_LABEL = "WHY / HOW (the mechanism - explain it fully, step by step, in plain words):"
+_MECH_LABEL = ("WHY / HOW (the mechanism - explain THIS claim as cause and effect in plain "
+               "words; add no causes, steps, conditions or facts that are not listed):")
 _FACT_LABEL = "SUPPORTING FACTS:"
 
 
@@ -495,7 +497,8 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
         if pos == 0:
             link_label = ("HOW THIS FOLLOWS FROM THE QUESTION (this first step must follow "
                           "from the question; use as the opening transition):")
-            link_none = "  - (connect this step directly to the QUESTION above)"
+            link_none = ("  - (connect this step directly to the QUESTION above using only "
+                         "verified claims)")
         else:
             link_label = _LINK_LABEL
             link_none = "  - (connect this step to the previous one using only verified claims)"
