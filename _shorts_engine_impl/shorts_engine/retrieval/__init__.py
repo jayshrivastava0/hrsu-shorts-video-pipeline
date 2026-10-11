@@ -14,8 +14,8 @@ from shorts_engine.stages.facts import normalize_for_match
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Passage", "Retriever", "SearchHit", "key_terms_query", "query_variants",
-           "source_kind"]
+__all__ = ["Passage", "Retriever", "SearchHit", "authority_queries", "key_terms_query",
+           "query_variants", "source_kind"]
 
 _AUTHORITATIVE = tuple(config.PAPER_DOMAINS) + tuple(config.STANDARD_DOMAINS)
 _RANK = {"blog_citation": 0, "authoritative": 1, "web": 2}
@@ -85,6 +85,26 @@ def query_variants(claim_text: str) -> list[str]:
             seen.add(key)
             out.append(q)
     return out
+
+
+# Host groups for authority-biased searches (small groups keep the queries short).
+AUTHORITY_GROUPS = (
+    ("epa.gov", "osha.gov", "cdc.gov", "usgs.gov", "nist.gov"),
+    ("echa.europa.eu", "eur-lex.europa.eu", "who.int", "oecd.org", "fao.org"),
+    ("pubchem.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "acs.org", "rsc.org"),
+    ("sciencedirect.com", "springer.com", "tandfonline.com", "wiley.com", "iso.org"),
+)
+
+
+def authority_queries(claim_text: str) -> list[str]:
+    """Search queries biased toward authorities: the claim's key terms plus a `site:`
+    group each (government/regulators, EU/international, chemistry databases and
+    societies, publishers/standards). Empty when the claim has no key terms."""
+    terms = key_terms_query(claim_text)
+    if not terms:
+        return []
+    return [f"{terms} " + " OR ".join(f"site:{h}" for h in group)
+            for group in AUTHORITY_GROUPS]
 
 
 def _default_search(query: str) -> list[SearchHit]:
@@ -201,3 +221,44 @@ class Retriever:
         passages.sort(key=lambda p: _RANK[p.kind])  # stable: keeps page order within a kind
         fetch_ok = not any(_norm_url(u) in self._failed_urls for u, _k in candidates)
         return passages[:config.RETRIEVAL_MAX_PASSAGES], search_ok, fetch_ok
+
+    def retrieve_authoritative(self, claim_text: str) -> list[Passage]:
+        """Passages for `claim_text` from AUTHORITATIVE hosts only (source_kind), via the
+        `site:`-biased authority queries tried in order until one yields passages.
+        Never raises; cached per claim like `retrieve` (a failure-caused empty result is
+        not cached); each URL is fetched at most once and the per-query fetch budget is
+        config.RETRIEVAL_MAX_FETCHES."""
+        key = "auth:" + normalize_for_match(claim_text)
+        if key in self._cache:
+            return self._cache[key]
+        passages: list[Passage] = []
+        failed = False
+        try:
+            for query in authority_queries(claim_text):
+                try:
+                    hits = list(self._search(query))
+                except Exception as exc:
+                    logger.warning(f"authority search failed for {query!r}: {exc}")
+                    failed = True
+                    continue
+                urls, seen = [], set()
+                for h in hits:
+                    nu = _norm_url(h.url)
+                    if source_kind(h.url) == "authoritative" and nu not in seen:
+                        seen.add(nu)
+                        urls.append(h.url)
+                found: list[Passage] = []
+                for url in urls[:config.RETRIEVAL_MAX_FETCHES]:
+                    text = self._fetch_once(url)
+                    failed = failed or _norm_url(url) in self._failed_urls
+                    found.extend(Passage(url, p, "authoritative")
+                                 for p in best_passages(text, claim_text, 2))
+                if found:
+                    passages = found[:config.RETRIEVAL_MAX_PASSAGES]
+                    break
+        except Exception as exc:
+            logger.warning(f"authoritative retrieval failed for {claim_text!r}: {exc}")
+            failed = True
+        if passages or not failed:
+            self._cache[key] = passages
+        return passages

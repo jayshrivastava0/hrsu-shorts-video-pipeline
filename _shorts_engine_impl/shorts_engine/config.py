@@ -184,6 +184,10 @@ RETRIEVAL_MAX_FETCHES = 6
 RETRIEVAL_MAX_PASSAGES = 3
 RETRIEVAL_FETCH_TIMEOUT_S = 10
 RETRIEVAL_SEARCH_RETRIES = 2
+# Authority corroboration: independently find an authoritative passage per key claim so
+# the video can show a truthful source chip (never changes a claim's verdict).
+CORROBORATE_CLAIMS = True
+CORROBORATION_LIMIT = 10
 # YouTube Shorts accepts up to 3 minutes (verify against current YouTube rules);
 # anything longer is labelled long-form at packaging time.
 SHORT_FORM_MAX_S = 180.0
