@@ -10,11 +10,15 @@ from shorts_engine import config
 
 logger = logging.getLogger(__name__)
 
+# Government sites (osha.gov, ...) answer 403 to non-browser user agents.
+_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/124.0 Safari/537.36 HRSU-explainer-factcheck")
+
 
 def fetch_text(url: str, *, get=None, timeout: float = config.RETRIEVAL_FETCH_TIMEOUT_S) -> str:
     """Return the page's paragraph text, or "" on any failure or non-HTML content."""
     get = get or (lambda u, timeout: requests.get(
-        u, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (HRSU explainer fact-check)"}))
+        u, timeout=timeout, headers={"User-Agent": _UA}))
     try:
         resp = get(url, timeout=timeout)
         if resp.status_code != 200:

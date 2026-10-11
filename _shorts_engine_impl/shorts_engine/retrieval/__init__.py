@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from shorts_engine import config
 from shorts_engine.retrieval.fetch import fetch_text
+from shorts_engine.retrieval.passages import _content_words as _passage_words
 from shorts_engine.retrieval.passages import best_passages, key_terms_query
 from shorts_engine.retrieval.search import SearchHit, web_search
 from shorts_engine.stages.facts import normalize_for_match
@@ -94,6 +95,9 @@ AUTHORITY_GROUPS = (
     ("pubchem.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "acs.org", "rsc.org"),
     ("sciencedirect.com", "springer.com", "tandfonline.com", "wiley.com", "iso.org"),
 )
+
+
+AUTHORITY_STOP_COVERAGE = 0.6
 
 
 def authority_queries(claim_text: str) -> list[str]:
@@ -224,14 +228,18 @@ class Retriever:
 
     def retrieve_authoritative(self, claim_text: str) -> list[Passage]:
         """Passages for `claim_text` from AUTHORITATIVE hosts only (source_kind), via the
-        `site:`-biased authority queries tried in order until one yields passages.
-        Never raises; cached per claim like `retrieve` (a failure-caused empty result is
-        not cached); each URL is fetched at most once and the per-query fetch budget is
-        config.RETRIEVAL_MAX_FETCHES."""
+        `site:`-biased authority queries tried in order. Passages from all queries tried
+        are pooled and ranked by how much of the claim's vocabulary they cover (best
+        first, at most RETRIEVAL_MAX_PASSAGES + 1); the loop stops early once a passage
+        covers AUTHORITY_STOP_COVERAGE of it. Never raises; cached per claim (a
+        failure-caused empty result is not cached); each URL is fetched at most once and
+        at most config.RETRIEVAL_MAX_FETCHES hits are fetched per query."""
         key = "auth:" + normalize_for_match(claim_text)
         if key in self._cache:
             return self._cache[key]
-        passages: list[Passage] = []
+        want = _passage_words(claim_text)
+        scored: list[tuple[float, int, Passage]] = []
+        seen_passages: set[tuple[str, str]] = set()
         failed = False
         try:
             for query in authority_queries(claim_text):
@@ -247,18 +255,25 @@ class Retriever:
                     if source_kind(h.url) == "authoritative" and nu not in seen:
                         seen.add(nu)
                         urls.append(h.url)
-                found: list[Passage] = []
                 for url in urls[:config.RETRIEVAL_MAX_FETCHES]:
                     text = self._fetch_once(url)
                     failed = failed or _norm_url(url) in self._failed_urls
-                    found.extend(Passage(url, p, "authoritative")
-                                 for p in best_passages(text, claim_text, 2))
-                if found:
-                    passages = found[:config.RETRIEVAL_MAX_PASSAGES]
+                    snippet = next((h.snippet for h in hits if h.url == url), "") or ""
+                    # the engine's own excerpt of the page backs up pages we cannot parse
+                    for p in best_passages(text, claim_text, 2) + best_passages(
+                            snippet, claim_text, 1):
+                        if (url, p) in seen_passages:
+                            continue
+                        seen_passages.add((url, p))
+                        cover = len(want & _passage_words(p)) / len(want) if want else 0.0
+                        scored.append((cover, len(scored), Passage(url, p, "authoritative")))
+                if scored and max(c for c, _i, _p in scored) >= AUTHORITY_STOP_COVERAGE:
                     break
         except Exception as exc:
             logger.warning(f"authoritative retrieval failed for {claim_text!r}: {exc}")
             failed = True
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        passages = [p for _c, _i, p in scored[:config.RETRIEVAL_MAX_PASSAGES + 1]]
         if passages or not failed:
             self._cache[key] = passages
         return passages

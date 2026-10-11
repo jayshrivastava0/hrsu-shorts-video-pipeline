@@ -143,9 +143,9 @@ def main(argv: list[str] | None = None) -> int:
             if c["id"] not in selected:
                 continue
             co = c.get("corroboration")
-            head = c["text"][:60].ljust(60)
+            head = ascii(c["text"][:60])[1:-1].ljust(60)
             if co:
-                print(f"{head} | yes | {co['publisher']} | {co['url']} | {co['quote'][:160]!r}")
+                print(f"{head} | yes | {co['publisher']} | {co['url']} | {ascii(co['quote'][:160])}")
             else:
                 print(f"{head} | no")
     g = refs["grade"]

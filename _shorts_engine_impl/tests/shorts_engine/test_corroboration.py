@@ -85,6 +85,22 @@ class TestRetrieveAuthoritative:
         assert len(r.queries) == len(authority_queries(CLAIM))
 
 
+    def test_pools_across_queries_best_coverage_first(self):
+        weak_url = "https://www.osha.gov/hs"
+        weak_page = "Hydrogen sulfide is toxic at low concentration in workplaces."
+        by_q = {}
+
+        def search(q):
+            by_q[q] = 1
+            return [SearchHit(weak_url, "w", "")] if len(by_q) == 1 else [SearchHit(EPA, "e", "")]
+
+        r = Retriever([], search_fn=search,
+                      fetch_fn=lambda u: {weak_url: weak_page, EPA: EPA_PAGE}.get(u, ""))
+        ps = r.retrieve_authoritative(CLAIM)
+        assert [p.url for p in ps][0] == EPA and weak_url in [p.url for p in ps]
+        assert len(by_q) == 2
+
+
 class FakeAuthRetriever:
     def __init__(self, passages=None, exc=False):
         self.passages, self.exc, self.calls = passages or [], exc, []
