@@ -25,7 +25,7 @@ import json
 import logging
 from pathlib import Path
 
-from shorts_engine import config, explanation
+from shorts_engine import config, corroboration, explanation
 from shorts_engine.errors import HoldForReview
 from shorts_engine.llm import text_llm
 from shorts_engine.retrieval import Retriever
@@ -411,5 +411,12 @@ def run(ctx) -> dict[str, str]:
         path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
         raise HoldForReview(plan["hold_reasons"])
     plan["status"] = "verified"
+    if config.CORROBORATE_CLAIMS:
+        try:  # best effort: a trust signal, never a gate; must not hold or fail the run
+            counts = corroboration.corroborate_plan(
+                plan, retriever, limit=config.CORROBORATION_LIMIT, local_only=local_only)
+            logger.info(f"verify_claims: corroboration {counts}")
+        except Exception as exc:
+            logger.warning(f"verify_claims: corroboration skipped: {exc}")
     path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"explanation_plan": "explanation_plan.json"}
