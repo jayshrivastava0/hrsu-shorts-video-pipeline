@@ -223,18 +223,23 @@ def build_references(plan: dict, post: dict, canonical: str) -> dict:
         if c.get("kind") == "reasoning":
             continue
         sup = c.get("support") or {}
-        srcs: list[dict] = []
+        srcs: list[dict] | None = []
         if sup.get("type") == "source" and sup.get("url"):
             ref = by_url.get(_norm_url(sup["url"]), {})
             srcs = [source_for(sup["url"], ref.get("kind"), ref.get("title", ""))]
         elif sup.get("type") == "blog_quote":
             ms = markers_for_quote(sup.get("quote") or c.get("text", ""), clean, marks)
-            if ms is None:
-                claims[c["id"]] = {"sources": [], "tier": "none", "chip": None}
-                continue
-            srcs = [source_for(cites[n]["url"], cites[n].get("kind"), cites[n].get("title", ""))
-                    for n in ms if n in cites and cites[n].get("url")]
+            srcs = None if ms is None else [
+                source_for(cites[n]["url"], cites[n].get("kind"), cites[n].get("title", ""))
+                for n in ms if n in cites and cites[n].get("url")]
         else:
+            srcs = None
+        corr = c.get("corroboration") or {}
+        if corr.get("url") and source_tier(corr["url"], corr.get("kind")) == "authoritative":
+            extra = source_for(corr["url"], corr.get("kind"), corr.get("title", ""))
+            if extra not in (srcs or []):
+                srcs = (srcs or []) + [extra]
+        if srcs is None:
             claims[c["id"]] = {"sources": [], "tier": "none", "chip": None}
             continue
         finish(c["id"], srcs)
