@@ -96,12 +96,39 @@ export interface AuthorAssemblyCompositionDeps {
   /** Records the trusted output path, keyed by workspace_id, before spawning the child — same
    * anti-prompt-injection discipline as tool-visual-scene's registerOutputPath. */
   registerOutputPath: (workspaceId: string, outputPath: string) => void
+  /** Reads a file as text, or returns undefined if it is missing/unreadable. Defaults to a
+   * synchronous readFileSync. Injectable so the authoritative-brief lookup is unit-testable. */
+  readBriefFile?: (path: string) => string | undefined
+}
+
+function defaultReadBriefFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/** The pipeline writes <workspace>/assembly_brief.json itself before the agent runs; that file is
+ * authoritative. The LLM-relayed args.assembly_brief can lose fields (e.g. word_timings) on long
+ * videos, so it is only the fallback when the file is absent or not a JSON object. */
+function resolveBrief(workspace: string, argBrief: AssemblyBrief, deps: AuthorAssemblyCompositionDeps): AssemblyBrief {
+  const raw = (deps.readBriefFile ?? defaultReadBriefFile)(join(workspace, 'assembly_brief.json'))
+  if (raw === undefined) return argBrief
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as AssemblyBrief
+  } catch {
+    // unparseable: fall through to the arg brief
+  }
+  return argBrief
 }
 
 export async function authorAssemblyComposition(
   args: AuthorAssemblyCompositionArgs, deps: AuthorAssemblyCompositionDeps,
 ): Promise<AuthorAssemblyCompositionOutput> {
-  const { assembly_brief: brief, workspace_id: workspaceId, workspace } = args
+  const { workspace_id: workspaceId, workspace } = args
+  const brief = resolveBrief(workspace, args.assembly_brief, deps)
   const outputPath = resolveOutputPath(workspace)
   deps.registerOutputPath(workspaceId, outputPath)
 
@@ -186,7 +213,7 @@ export function apply(ctx: Context, config: Config): void {
       'Author, render, and (on repeated failure) fall back to a safety-net composition for the whole video\'s ' +
       'final assembly, by delegating composition to a creative assembly-authoring subagent.',
     parameters: {
-      assembly_brief: { type: 'object', additionalProperties: true, required: true, description: 'The run\'s assembly_brief.json contents.' },
+      assembly_brief: { type: 'object', additionalProperties: true, required: true, description: 'The run\'s assembly_brief.json contents. Best-effort only: the tool re-reads <workspace>/assembly_brief.json from disk and uses that file when present, so a truncated copy here is safe.' },
       workspace_id: { type: 'string', required: true, description: 'Run workspace id (namespaces this run\'s HyperFrames composition file).' },
       workspace: {
         type: 'string', required: true,

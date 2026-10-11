@@ -243,3 +243,10 @@ describe('renderFallbackComposition', () => {
     expect(written).toContain('shot_1.mp4')
   })
 })
+
+describe('groupWordsIntoCues defence in depth', () => {
+  test('treats a missing or non-array words as empty instead of throwing', () => {
+    expect(groupWordsIntoCues(undefined as any)).toEqual([])
+    expect(groupWordsIntoCues({} as any)).toEqual([])
+  })
+})
