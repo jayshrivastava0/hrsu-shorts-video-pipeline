@@ -73,7 +73,7 @@ def sample_shot_frames(video: Path, timeline: list[dict],
         res = subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{t['mid_s']:.3f}",
              "-i", str(video), "-frames:v", "1", str(png)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if res.returncode != 0 or not png.exists():
             raise EngineError(f"VERIFY: frame sample failed for {t['id']}")
         frames[t["id"]] = png

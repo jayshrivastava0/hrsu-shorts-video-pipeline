@@ -116,7 +116,7 @@ def build_ass(words: list[dict], out_path: Path, margin_v: int = 440) -> Path:
 
 def _ffmpeg(args: list[str], what: str) -> None:
     res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace")
     if res.returncode != 0:
         raise EngineError(f"ASSEMBLE {what} failed: {res.stderr[:800]}")
 

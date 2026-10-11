@@ -25,10 +25,12 @@ def run_creative_stage(ctx, phase: str) -> dict[str, str]:
     bridge = harness_dir / "scripts" / "run-visual-authoring.mts"
     result = subprocess.run(
         ["node", "--import", "tsx/esm", str(bridge), phase, str(workspace.resolve())],
-        cwd=harness_dir, capture_output=True, text=True,
+        cwd=harness_dir, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if result.returncode != 0:
-        raise EngineError(f"{phase}: harness bridge failed: {result.stderr[-2000:]}")
+        stderr = (result.stderr or "")[-2000:]
+        stdout = (result.stdout or "")[-500:]
+        raise EngineError(f"{phase}: harness bridge failed: {stderr} | stdout tail: {stdout}")
     # Must mirror exactly what stage_cli.py's visuals-finalize/assemble-finalize checkpoint —
     # the runner records these as the run's artifacts, so anything listed here that the bridge
     # doesn't actually write makes run_manifest.json lie. (`captions.ass` used to be listed for
