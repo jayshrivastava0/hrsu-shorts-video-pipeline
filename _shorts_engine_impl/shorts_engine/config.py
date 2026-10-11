@@ -108,7 +108,10 @@ PAPER_DOMAINS = [
     "acs.org", "pubs.acs.org", "rsc.org", "pubs.rsc.org",
     "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "arxiv.org", "doi.org",
 ]
-STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
+STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org",
+                    # intergovernmental bodies (claim -> source attribution tiers)
+                    "who.int", "unep.org", "oecd.org", "worldbank.org",
+                    "fao.org", "nist.gov"]
 
 # ── LLM behavior ───────────────────────────────────────────────────────────
 # 5, not 3: SCRIPT's writer must pass every deterministic gate at once (number
