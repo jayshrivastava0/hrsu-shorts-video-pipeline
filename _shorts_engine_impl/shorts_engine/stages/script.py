@@ -670,6 +670,11 @@ def run(ctx) -> dict[str, str]:
     (ws / "script.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                                     encoding="utf-8")
     logger.info(f"script written: {len(beats)} beats, attempts={attempts}, rewrites={rewrites}")
+    try:  # claim -> source attribution for source chips + description; never fails the stage
+        from shorts_engine import references
+        references.write_outputs(ws)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"references.json not written: {exc}")
     return {"script": "script.json"}
 
 
