@@ -5,6 +5,9 @@ setlocal
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0.."
+REM Make sure the Ollama app/server is up (this launches it if it is not running).
+ollama list >nul 2>&1
+timeout /t 5 /nobreak >nul
 if "%HRSU_PYTHON%"=="" (set "PY=python") else (set "PY=%HRSU_PYTHON%")
 if exist "venv\Scripts\activate.bat" call "venv\Scripts\activate.bat"
 if exist ".venv\Scripts\activate.bat" call ".venv\Scripts\activate.bat"
