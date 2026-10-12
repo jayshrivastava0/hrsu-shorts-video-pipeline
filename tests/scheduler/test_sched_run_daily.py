@@ -252,3 +252,18 @@ def test_seed_with_empty_discovery_fails(tmp_path):
     env = Env(tmp_path, urls=[])
     assert env.run("--seed") == 1
     assert not (tmp_path / "state.json").exists()
+
+
+def test_seed_uses_exhaustive_listing(tmp_path):
+    env = Env(tmp_path)
+    env.deps.discover_all = lambda: U + ["https://hrsuindore.com/blog/deep-archive/"]
+    seed(env)
+    assert "https://hrsuindore.com/blog/deep-archive/" in env.state().entries
+
+
+def test_burst_of_unseen_posts_is_refused(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    env.urls = ["https://hrsuindore.com/blog/p%d/" % i for i in range(11)]
+    assert env.run() == 1
+    assert env.calls["text"] == 0

@@ -22,6 +22,7 @@ logger = logging.getLogger("scheduler")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
 MAX_ATTEMPTS = 2
+MAX_NEW_BURST = 10
 RESUMABLE = ("queued", "text_done", "directed")
 
 
@@ -34,6 +35,7 @@ class Deps:
     publish: Callable         # (run_dir, video_path, url) -> dict
     preflight: Callable[[], None]
     today: Callable[[], str]
+    discover_all: Optional[Callable[[], list]] = None   # exhaustive listing used by --seed
 
 
 def default_deps() -> Deps:
@@ -41,6 +43,7 @@ def default_deps() -> Deps:
 
     return Deps(
         discover=discover.fetch_post_urls,
+        discover_all=discover.fetch_all_post_urls,
         text=lambda url, root, log_path=None: textstage.run_text_stages(url, root, log_path=log_path),
         director=lambda run_dir, proj, mode: d.direct(run_dir, proj, mode),
         gate=lambda run_dir, proj: gate.run_gate(run_dir, proj),
@@ -219,7 +222,7 @@ def run(args, deps: Deps) -> int:
     alerts = args.runs_dir.parent / "video_alerts.log"
 
     if args.seed:
-        urls = deps.discover()
+        urls = (deps.discover_all or deps.discover)()
         if not urls:
             logger.error("discovery returned no posts; nothing seeded")
             return 1
@@ -246,6 +249,11 @@ def run(args, deps: Deps) -> int:
     urls = [] if args.only_url else deps.discover()
     if not args.only_url and not urls:
         logger.warning("discovery returned no posts (site down?); only resuming known work")
+    unseen = [u for u in urls if u not in state]
+    if len(unseen) > MAX_NEW_BURST and not args.allow_backfill:
+        logger.error("%d unseen posts found at once (limit %d) -- looks like a missing seed. Run "
+                     "`python -m scheduler.run_daily --seed` or pass --allow-backfill.", len(unseen), MAX_NEW_BURST)
+        return 1
     candidates = pick_candidates(urls, state, args)
     if not candidates:
         logger.info("no new posts to process")

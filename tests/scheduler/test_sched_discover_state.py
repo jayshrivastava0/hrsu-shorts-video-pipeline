@@ -91,3 +91,14 @@ def test_lock_stale_is_taken_over(tmp_path):
     old = time.time() - 7 * 3600
     os.utime(p, (old, old))
     RunLock(p, stale_after_s=6 * 3600).acquire()
+
+
+def test_fetch_all_unions_sitemap():
+    pages = {discover.BLOG_BASE: INDEX, discover.SITEMAP_URL: SITEMAP}
+
+    def fetch(u):
+        if u in pages:
+            return pages[u]
+        raise OSError("404")
+    urls = discover.fetch_all_post_urls(fetch=fetch)
+    assert urls[-1] == "https://hrsuindore.com/blog/map-post/" and len(urls) == 4

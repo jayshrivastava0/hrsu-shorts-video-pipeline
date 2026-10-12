@@ -64,3 +64,14 @@ def fetch_post_urls(fetch: Optional[Callable[[str], str]] = None, max_pages: int
     except Exception as exc:
         logger.warning("discover: sitemap fallback failed: %s", exc)
         return []
+
+
+def fetch_all_post_urls(fetch: Optional[Callable[[str], str]] = None, max_pages: int = 100) -> list[str]:
+    """Exhaustive listing for seeding: every index page plus the sitemap, de-duplicated (index order first)."""
+    fetch = fetch or _default_fetch
+    urls = fetch_post_urls(fetch, max_pages=max_pages)
+    try:
+        urls += [u for u in parse_post_urls(fetch(SITEMAP_URL)) if u not in urls]
+    except Exception as exc:
+        logger.warning("discover: sitemap unavailable while seeding: %s", exc)
+    return urls
