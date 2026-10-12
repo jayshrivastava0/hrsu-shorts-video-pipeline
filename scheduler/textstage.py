@@ -1,0 +1,73 @@
+"""Text stages (free: Ollama + DuckDuckGo + TTS) via `python -m shorts_engine <url> --until audio`."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from scheduler.director import CmdResult, Runner, run_cmd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+ENGINE_PATH = REPO_ROOT / "_shorts_engine_impl"
+TEXT_TIMEOUT_S = 2 * 3600
+READY_STATUSES = ("audio", "visuals", "assembled", "verified", "packaged", "published")
+
+
+@dataclass
+class TextResult:
+    status: str                 # "ready" | "held" | "failed"
+    run_dir: Optional[Path] = None
+    error: Optional[str] = None
+
+
+def default_workspace_root() -> Path:
+    return REPO_ROOT / "output" / "shorts"
+
+
+def _find_run_dir(root: Path, url: str, output: str) -> Optional[Path]:
+    m = re.search(r"Pipeline completed:\s*(run-[0-9a-f]+)", output or "")
+    if m and (root / m.group(1)).exists():
+        return root / m.group(1)
+    best = None
+    for mf in root.glob("run-*/run_manifest.json"):
+        try:
+            data = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("blog_url") == url and (best is None or mf.stat().st_mtime > best[0]):
+            best = (mf.stat().st_mtime, mf.parent)
+    return best[1] if best else None
+
+
+def run_text_stages(url: str, workspace_root: Optional[Path] = None, *, until: str = "audio",
+                    run: Runner = run_cmd, timeout: float = TEXT_TIMEOUT_S,
+                    log_path: Optional[Path] = None) -> TextResult:
+    root = Path(workspace_root) if workspace_root else default_workspace_root()
+    root.mkdir(parents=True, exist_ok=True)
+    pypath = os.pathsep.join([str(ENGINE_PATH), str(REPO_ROOT), os.environ.get("PYTHONPATH", "")]).strip(os.pathsep)
+    cmd = [sys.executable, "-m", "shorts_engine", url, "--until", until, "--workspace-root", str(root)]
+    r: CmdResult = run(cmd, cwd=REPO_ROOT, timeout=timeout, env={"PYTHONPATH": pypath}, log_path=log_path)
+    if r.timed_out:
+        return TextResult("failed", None, f"text stages timed out after {timeout:.0f}s")
+    run_dir = _find_run_dir(root, url, r.output)
+    if run_dir is None:
+        return TextResult("failed", None, f"no run workspace found (rc={r.returncode}): {r.output[-300:]}")
+    try:
+        manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    except Exception as exc:
+        return TextResult("failed", run_dir, f"unreadable run_manifest.json: {exc}")
+    status = manifest.get("status")
+    if status == "hold_for_review":
+        return TextResult("held", run_dir, manifest.get("error") or "hold_for_review")
+    if r.returncode != 0 or status == "failed":
+        return TextResult("failed", run_dir, manifest.get("error") or f"rc={r.returncode}: {r.output[-300:]}")
+    if status not in READY_STATUSES:
+        return TextResult("failed", run_dir, f"stopped at status {status!r}")
+    for name in ("script.json", "references.json", "video_description.txt", "beats_audio.json"):
+        if not (run_dir / name).exists():
+            return TextResult("failed", run_dir, f"{name} missing after text stages")
+    return TextResult("ready", run_dir)
