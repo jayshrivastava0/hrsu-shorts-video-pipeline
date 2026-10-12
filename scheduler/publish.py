@@ -31,7 +31,17 @@ def get_privacy() -> str:
 
 
 def youtube_dir() -> Path:
-    return Path(os.environ.get(YOUTUBE_DIR_ENV) or REPO_ROOT)
+    """HRSU_YOUTUBE_DIR, else the first of (this repo, the main checkout when running from a
+    `.worktrees/<name>` worktree) that already holds client_secrets.json / youtube_token.json."""
+    if os.environ.get(YOUTUBE_DIR_ENV):
+        return Path(os.environ[YOUTUBE_DIR_ENV])
+    candidates = [REPO_ROOT]
+    if REPO_ROOT.parent.name == ".worktrees":
+        candidates.append(REPO_ROOT.parent.parent)
+    for c in candidates:
+        if (c / "client_secrets.json").exists() or (c / "youtube_token.json").exists():
+            return c
+    return REPO_ROOT
 
 
 def auth_paths(base: Optional[Path] = None) -> tuple[Path, Path]:

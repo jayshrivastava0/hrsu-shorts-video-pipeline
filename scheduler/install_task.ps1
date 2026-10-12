@@ -14,7 +14,9 @@ $bat = Join-Path $PSScriptRoot "run_scheduled.bat"
 $repo = Split-Path $PSScriptRoot -Parent
 if (-not (Test-Path $bat)) { throw "run_scheduled.bat not found next to this script" }
 
-$action    = New-ScheduledTaskAction -Execute $bat -WorkingDirectory $repo
+# Bake in the absolute python interpreter: the task may see a different PATH than your shell.
+$py = (Get-Command python -ErrorAction Stop).Source
+$action    = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"set HRSU_PYTHON=$py&& `"$bat`"`"" -WorkingDirectory $repo
 $trigger   = New-ScheduledTaskTrigger -Daily -At $At
 $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 6) `
               -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

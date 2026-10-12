@@ -267,3 +267,34 @@ def test_burst_of_unseen_posts_is_refused(tmp_path):
     env.urls = ["https://hrsuindore.com/blog/p%d/" % i for i in range(11)]
     assert env.run() == 1
     assert env.calls["text"] == 0
+
+
+def test_oldest_first_across_days(tmp_path):
+    env = Env(tmp_path, urls=[])
+    env.urls = ["https://hrsuindore.com/blog/%s/" % s for s in ("c", "b", "a")]  # c newest
+    env.run("--allow-backfill", "--max-uploads-per-day", "9")
+    env.run("--max-uploads-per-day", "9")
+    assert env.published == ["https://hrsuindore.com/blog/a/", "https://hrsuindore.com/blog/b/"]
+
+
+def test_ollama_down_defers_without_attempt(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    env.deps.ollama_ready = lambda: False
+    assert env.run() == 1
+    e = env.state().get(new)
+    assert e["attempts"] == 0 and e["status"] == "queued" and env.calls["text"] == 0
+    env.deps.ollama_ready = lambda: True
+    assert env.run() == 0 and env.state().get(new)["status"] == "published"
+
+
+def test_repeated_usage_deferrals_eventually_fail(tmp_path):
+    env = Env(tmp_path, director="usage")
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    for _ in range(run_daily.MAX_DEFERRALS):
+        env.run()
+    assert env.state().get(new)["status"] == "failed"

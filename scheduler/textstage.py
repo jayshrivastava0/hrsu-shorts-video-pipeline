@@ -71,3 +71,25 @@ def run_text_stages(url: str, workspace_root: Optional[Path] = None, *, until: s
         if not (run_dir / name).exists():
             return TextResult("failed", run_dir, f"{name} missing after text stages")
     return TextResult("ready", run_dir)
+
+
+def wait_for_ollama(timeout_s: float = 90.0, url: str = "http://127.0.0.1:11434/api/tags",
+                    probe=None, sleep=None) -> bool:
+    """Poll the local Ollama server until it answers (the .bat launches the app; startup can take ~15 s)."""
+    import time
+    if probe is None:
+        def probe():
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                return resp.status == 200
+    sleep = sleep or time.sleep
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            if probe():
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        sleep(3)

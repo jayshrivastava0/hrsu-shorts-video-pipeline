@@ -151,6 +151,29 @@ def run_gemma(project_dir: Path | str, run_dir: Path | str, *, timeout: float = 
     return res
 
 
+MIN_WEEKLY_REMAINING_PCT = 8     # one video costs ~4% of the weekly allowance
+MIN_SESSION_REMAINING_PCT = 10
+
+
+def claude_usage_block(run: Runner = run_cmd, cwd: Path | str = REPO_ROOT) -> Optional[str]:
+    """`npx hyperframes usage --json` -> reason string if Claude allowance is too low, else None.
+    Any failure to read usage returns None (proceed; the run itself detects real exhaustion)."""
+    try:
+        r = run([_npx(), "hyperframes", "usage", "--json"], cwd=cwd, timeout=120)
+        data = json.loads(r.output[r.output.index("{"):])
+        if data.get("status") != "known":
+            return None
+        weekly = data["weekly"]["remainingPercent"]
+        session = data["session"]["remainingPercent"]
+    except Exception:
+        return None
+    if weekly < MIN_WEEKLY_REMAINING_PCT:
+        return f"Claude weekly allowance low ({weekly}% left)"
+    if session < MIN_SESSION_REMAINING_PCT:
+        return f"Claude session allowance low ({session}% left)"
+    return None
+
+
 def direct(run_dir: Path | str, project_dir: Path | str, mode: str = "claude", *,
            run: Runner = run_cmd, timeout: float = DIRECTOR_TIMEOUT_S, prepare: bool = True) -> DirectorResult:
     """mode: claude | gemma | auto (claude, falling back to gemma only when Claude usage is exhausted)."""
@@ -163,7 +186,12 @@ def direct(run_dir: Path | str, project_dir: Path | str, mode: str = "claude", *
             return DirectorResult(False, mode, reason=f"prepare failed: {exc}")
     if mode == "gemma":
         return run_gemma(project_dir, run_dir, run=run)
-    res = run_claude(project_dir, run_dir, timeout=timeout, run=run)
+    block = claude_usage_block(run=run)
+    if block:
+        logger.warning("%s", block)
+        res = DirectorResult(False, "claude", reason=block, usage_exhausted=True)
+    else:
+        res = run_claude(project_dir, run_dir, timeout=timeout, run=run)
     if mode == "auto" and res.usage_exhausted:
         logger.warning("Claude usage exhausted; falling back to the Gemma director")
         return run_gemma(project_dir, run_dir, run=run)

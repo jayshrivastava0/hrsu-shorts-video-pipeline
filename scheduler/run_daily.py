@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = REPO_ROOT / "data"
 MAX_ATTEMPTS = 2
 MAX_NEW_BURST = 10
+MAX_DEFERRALS = 5
 RESUMABLE = ("queued", "text_done", "directed")
 
 
@@ -36,6 +37,7 @@ class Deps:
     preflight: Callable[[], None]
     today: Callable[[], str]
     discover_all: Optional[Callable[[], list]] = None   # exhaustive listing used by --seed
+    ollama_ready: Optional[Callable[[], bool]] = None   # None = assume ready
 
 
 def default_deps() -> Deps:
@@ -44,6 +46,7 @@ def default_deps() -> Deps:
     return Deps(
         discover=discover.fetch_post_urls,
         discover_all=discover.fetch_all_post_urls,
+        ollama_ready=textstage.wait_for_ollama,
         text=lambda url, root, log_path=None: textstage.run_text_stages(url, root, log_path=log_path),
         director=lambda run_dir, proj, mode: d.direct(run_dir, proj, mode),
         gate=lambda run_dir, proj: gate.run_gate(run_dir, proj),
@@ -126,6 +129,10 @@ def process_post(url: str, state: State, deps: Deps, args, alerts: Path, workspa
     # 1) text stages
     run_dir = entry.get("run_dir")
     if not _text_ready(run_dir):
+        if deps.ollama_ready is not None and not deps.ollama_ready():
+            state.update(url, last_error="Ollama not reachable (no attempt consumed)")
+            notify(alerts, f"Ollama not reachable; {url} deferred (start Ollama / check login)")
+            return "infra_down"
         logger.info("text stages for %s ...", url)
         log_path = args.runs_dir / f"{deps.today()}_{url.rstrip('/').rsplit('/', 1)[-1]}_text.log"
         res = deps.text(url, workspace_root, log_path)
@@ -164,7 +171,10 @@ def process_post(url: str, state: State, deps: Deps, args, alerts: Path, workspa
         logger.info("director (%s) for %s ...", args.director, url)
         dres = deps.director(run_dir_p, project, args.director)
         if dres.usage_exhausted:
-            state.update(url, status="text_done", last_error=dres.reason)
+            deferrals = int(entry.get("deferrals") or 0) + 1
+            if deferrals >= MAX_DEFERRALS:
+                return fail(f"Claude usage still exhausted after {deferrals} deferrals")
+            state.update(url, status="text_done", last_error=dres.reason, deferrals=deferrals)
             notify(alerts, f"Claude usage exhausted; {url} deferred to a later run")
             return "deferred"
         if not dres.ok:
@@ -259,7 +269,7 @@ def run(args, deps: Deps) -> int:
         logger.info("no new posts to process")
         return 0
 
-    for url in urls:  # record brand-new posts as queued so they are tracked even if not picked this run
+    for url in reversed(urls):  # oldest first, so resumption order stays oldest-first
         if url not in state and not args.dry_run:
             state.ensure(url, "queued")
     state.save()
@@ -281,9 +291,9 @@ def run(args, deps: Deps) -> int:
                          last_error=f"unexpected: {exc}"[:500])
             outcome = "failed"
         logger.info("=== %s -> %s", url, outcome)
-        if outcome in ("failed", "failed_gate", "auth_error"):
+        if outcome in ("failed", "failed_gate", "auth_error", "infra_down"):
             failures += 1
-        if outcome in ("deferred", "auth_error"):
+        if outcome in ("deferred", "auth_error", "infra_down"):
             break
     return 1 if failures else 0
 

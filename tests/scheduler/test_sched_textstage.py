@@ -49,3 +49,18 @@ def test_failed_and_timeout_and_missing(tmp_path):
 def test_missing_artifacts_fail(tmp_path):
     make_run(tmp_path, "audio", files=False)
     assert textstage.run_text_stages(URL, tmp_path, run=runner()).status == "failed"
+
+
+def test_wait_for_ollama_polls_then_succeeds():
+    n = {"i": 0}
+
+    def probe():
+        n["i"] += 1
+        if n["i"] < 3:
+            raise OSError("down")
+        return True
+    assert textstage.wait_for_ollama(probe=probe, sleep=lambda s: None)
+
+
+def test_wait_for_ollama_gives_up():
+    assert not textstage.wait_for_ollama(timeout_s=0, probe=lambda: False, sleep=lambda s: None)

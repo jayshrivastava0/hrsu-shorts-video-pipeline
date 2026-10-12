@@ -70,7 +70,7 @@ def test_auto_falls_back_to_gemma_on_usage(tmp_path):
     proj, run = tmp_path / "p", tmp_path / "r"
     (proj / "renders").mkdir(parents=True); run.mkdir()
     (proj / "renders" / "video.mp4").write_bytes(b"x")
-    fr = FakeRunner([CmdResult(1, "usage limit reached"), CmdResult(0, "ok")])
+    fr = FakeRunner([CmdResult(0, USAGE_OK), CmdResult(1, "usage limit reached"), CmdResult(0, "ok")])
     res = director.direct(run, proj, "auto", run=fr, prepare=False)
     assert res.ok and res.director == "gemma"
     assert read_ok(proj)
@@ -79,9 +79,25 @@ def test_auto_falls_back_to_gemma_on_usage(tmp_path):
 def test_claude_mode_does_not_fall_back(tmp_path):
     proj, run = tmp_path / "p", tmp_path / "r"
     proj.mkdir(); run.mkdir()
-    fr = FakeRunner([CmdResult(1, "usage limit reached")])
+    fr = FakeRunner([CmdResult(0, USAGE_OK), CmdResult(1, "usage limit reached")])
     res = director.direct(run, proj, "claude", run=fr, prepare=False)
-    assert res.usage_exhausted and len(fr.calls) == 1
+    assert res.usage_exhausted and len(fr.calls) == 2
+
+
+USAGE_OK = '{"status":"known","session":{"remainingPercent":79},"weekly":{"remainingPercent":92}}'
+USAGE_LOW = '{"status":"known","session":{"remainingPercent":79},"weekly":{"remainingPercent":5}}'
+
+
+def test_low_weekly_allowance_defers_before_claude_runs(tmp_path):
+    proj, run = tmp_path / "p", tmp_path / "r"
+    proj.mkdir(); run.mkdir()
+    fr = FakeRunner([CmdResult(0, USAGE_LOW)])
+    res = director.direct(run, proj, "claude", run=fr, prepare=False)
+    assert res.usage_exhausted and len(fr.calls) == 1 and "weekly" in res.reason
+
+
+def test_unreadable_usage_proceeds(tmp_path):
+    assert director.claude_usage_block(run=FakeRunner([CmdResult(1, "garbage")])) is None
 
 
 def test_gemma_failure_writes_failed_marker(tmp_path):
