@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 STRONG_SHARE = 0.70
 ADEQUATE_SHARE = 0.40
+STRATEGIC_SENTENCE = ("This video presents HRSU's analysis; the facts in it are only those "
+                      "backed by a source cited in the full article.")
 GRADE_SENTENCE = "Every claim in this video was checked against its source; references above."
 
 # Hosts that are never treated as authority (encyclopedias, forums, blog platforms).
@@ -222,6 +224,10 @@ def build_references(plan: dict, post: dict, canonical: str) -> dict:
             best = next(s for s in srcs if s["tier"] == "authoritative")
             chip = best["publisher"]
         claims[cid] = {"sources": [s["id"] for s in srcs], "tier": tier, "chip": chip}
+        if srcs:
+            claims[cid]["citations"] = [
+                {"publisher": s["publisher"], "title": s["title"], "url": s["url"],
+                 "tier": s["tier"]} for s in srcs]
 
     sid_ix = lambda sid: next(s for s in sources if s["id"] == sid)  # noqa: E731
 
@@ -280,9 +286,18 @@ def build_references(plan: dict, post: dict, canonical: str) -> dict:
     n_blog = sum(1 for c in key if claims[c["id"]]["tier"] in ("blog", "none"))
     share = n_auth / len(key) if key else 0.0
     verdict = "strong" if share >= STRONG_SHARE else "adequate" if share >= ADEQUATE_SHARE else "thin"
-    return {"claims": claims, "sources": sources,
-            "grade": {"key_claims": len(key), "authoritative": n_auth, "blog_only": n_blog,
-                      "weak": n_weak, "verdict": verdict}}
+    kind = plan.get("post_kind") or "technical"
+    out = {"claims": claims, "sources": sources, "post_kind": kind,
+           "grade": {"key_claims": len(key), "authoritative": n_auth, "blog_only": n_blog,
+                     "weak": n_weak, "verdict": verdict}}
+    if kind == "strategic":
+        for _, _, c in order:
+            if c.get("stance"):
+                claims[c["id"]]["stance"] = c["stance"]
+        out["trust_summary"] = dict(plan.get("trust_summary") or {})
+        # sources of the blog's own citations that a surviving claim really rests on
+        out["cited"] = [s["id"] for s in sources if s["claim_ids"] and not is_weak_host(s["url"])]
+    return out
 
 
 def _earlier(order, a: str, b: str) -> bool:
@@ -326,9 +341,21 @@ def render_description(refs: dict, post: dict, plan: dict) -> str:
             parts = [s["publisher"]] + ([s["title"]] if s["title"] else []) + [s["url"]]
             lines.append(f"{i}. " + " - ".join(parts))
         lines.append("")
+    if refs.get("post_kind") == "strategic":
+        cited = [s for s in refs["sources"] if s["id"] in refs.get("cited", [])
+                 and s["tier"] != "authoritative"]
+        if cited:
+            lines.append("Sources cited in the full article")
+            for i, s in enumerate(cited, 1):
+                parts = [s["publisher"]] + ([s["title"]] if s["title"] else []) + [s["url"]]
+                lines.append(f"{i}. " + " - ".join(parts))
+            lines.append("")
+        lines.append(STRATEGIC_SENTENCE)
+        lines.append("")
     if post.get("url"):
-        lines.append(f"Full technical guide: {post['url']}")
-    if refs["grade"]["verdict"] == "strong":
+        lines.append(f"Full article: {post['url']}" if refs.get("post_kind") == "strategic"
+                     else f"Full technical guide: {post['url']}")
+    if refs["grade"]["verdict"] == "strong" and refs.get("post_kind") != "strategic":
         lines.append("")
         lines.append(GRADE_SENTENCE)
     return "\n".join(lines).rstrip() + "\n"

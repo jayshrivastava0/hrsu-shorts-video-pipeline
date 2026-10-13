@@ -22,6 +22,8 @@ class TextResult:
     status: str                 # "ready" | "held" | "failed"
     run_dir: Optional[Path] = None
     error: Optional[str] = None
+    post_kind: Optional[str] = None          # "technical" | "strategic" (from the run manifest)
+    trust_summary: Optional[dict] = None     # strategic only: checkable verified/dropped, analysis kept
 
 
 def default_workspace_root() -> Path:
@@ -61,8 +63,9 @@ def run_text_stages(url: str, workspace_root: Optional[Path] = None, *, until: s
     except Exception as exc:
         return TextResult("failed", run_dir, f"unreadable run_manifest.json: {exc}")
     status = manifest.get("status")
+    kind, trust = manifest.get("post_kind"), manifest.get("trust_summary") or None
     if status == "hold_for_review":
-        return TextResult("held", run_dir, manifest.get("error") or "hold_for_review")
+        return TextResult("held", run_dir, manifest.get("error") or "hold_for_review", kind, trust)
     if r.returncode != 0 or status == "failed":
         return TextResult("failed", run_dir, manifest.get("error") or f"rc={r.returncode}: {r.output[-300:]}")
     if status not in READY_STATUSES:
@@ -70,7 +73,7 @@ def run_text_stages(url: str, workspace_root: Optional[Path] = None, *, until: s
     for name in ("script.json", "references.json", "video_description.txt", "beats_audio.json"):
         if not (run_dir / name).exists():
             return TextResult("failed", run_dir, f"{name} missing after text stages")
-    return TextResult("ready", run_dir)
+    return TextResult("ready", run_dir, None, kind, trust)
 
 
 def wait_for_ollama(timeout_s: float = 90.0, url: str = "http://127.0.0.1:11434/api/tags",

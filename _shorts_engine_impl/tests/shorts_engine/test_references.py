@@ -296,3 +296,66 @@ def test_markers_for_quote_finds_a_quote_copied_with_its_citation_digit():
     clean, marks = r.strip_markers(canonical, {3})
     assert r.markers_for_quote("Trade deals cut tariffs for buyers3.", clean, marks) == [3]
     assert r.markers_for_quote("Trade deals cut tariffs for buyers.", clean, marks) == [3]
+
+
+class TestStrategicReferences:
+    POST_S = {
+        "url": "https://hrsuindore.com/blog/x/",
+        "citations": [
+            {"marker": 1, "url": "https://www.epa.gov/wastewater/h2s", "kind": "standard", "title": "EPA H2S Control"},
+            {"marker": 3, "url": "https://tradenews.example.com/ftas", "kind": "web", "title": "FTA outlook"},
+            {"marker": 4, "url": "https://en.wikipedia.org/wiki/Nitrate", "kind": "web", "title": "Nitrate"},
+        ],
+    }
+
+    def _plan(self, *claims):
+        plan = plan_of((list(claims), []))
+        plan["post_kind"] = "strategic"
+        plan["trust_summary"] = {"checkable_verified": 2, "checkable_dropped": 1,
+                                 "analysis_attributed": 1}
+        return plan
+
+    def _c(self, cid, quote, stance):
+        c = claim(cid, quote=quote)
+        c["stance"] = stance
+        return c
+
+    def test_blog_citation_title_publisher_url_are_carried_per_claim(self):
+        plan = self._plan(self._c("m3", Q3, "checkable"))
+        refs = R.build_references(plan, self.POST_S, CANON)
+        cit = refs["claims"]["m3"]["citations"][0]
+        assert (cit["title"], cit["url"]) == ("FTA outlook", "https://tradenews.example.com/ftas")
+        assert cit["publisher"] == "example.com" and cit["tier"] == "weak"
+        assert refs["claims"]["m3"]["stance"] == "checkable"
+
+    def test_post_kind_and_trust_summary_are_recorded(self):
+        refs = R.build_references(self._plan(self._c("m3", Q3, "checkable")), self.POST_S, CANON)
+        assert refs["post_kind"] == "strategic"
+        assert refs["trust_summary"]["checkable_dropped"] == 1
+
+    def test_description_lists_article_citations_only_for_mapped_claims(self):
+        plan = self._plan(self._c("m3", Q3, "checkable"), self._c("a1", QU, "analysis"))
+        refs = R.build_references(plan, self.POST_S, CANON)
+        d = R.render_description(refs, self.POST_S, plan)
+        assert "Sources cited in the full article" in d
+        assert "example.com - FTA outlook - https://tradenews.example.com/ftas" in d
+        assert "wikipedia" not in d.lower()          # never mapped to a surviving claim
+        assert "Full article: https://hrsuindore.com/blog/x/" in d
+        assert "HRSU's analysis" in d
+        assert "Every claim in this video was checked" not in d
+
+    def test_authoritative_stay_under_sources_not_duplicated(self):
+        plan = self._plan(self._c("m1", Q1, "checkable"), self._c("m3", Q3, "checkable"))
+        refs = R.build_references(plan, self.POST_S, CANON)
+        d = R.render_description(refs, self.POST_S, plan)
+        assert d.count("epa.gov") == 1 or d.count("https://www.epa.gov/wastewater/h2s") == 1
+
+    def test_no_cited_source_means_no_section_and_nothing_fabricated(self):
+        plan = self._plan(self._c("a1", QU, "analysis"))
+        d = R.render_description(R.build_references(plan, self.POST_S, CANON), self.POST_S, plan)
+        assert "Sources cited" not in d and "Sources" not in d.split("HRSU's analysis")[0]
+
+    def test_technical_references_are_unchanged(self):
+        refs = R.build_references(plan_of(([claim("m1", quote=Q1)], [])), POST, CANON)
+        assert refs["post_kind"] == "technical" and "trust_summary" not in refs
+        assert "cited" not in refs

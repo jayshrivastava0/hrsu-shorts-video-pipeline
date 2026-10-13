@@ -137,7 +137,8 @@ def process_post(url: str, state: State, deps: Deps, args, alerts: Path, workspa
         log_path = args.runs_dir / f"{deps.today()}_{url.rstrip('/').rsplit('/', 1)[-1]}_text.log"
         res = deps.text(url, workspace_root, log_path)
         if res.status == "held":
-            state.update(url, status="held", run_dir=str(res.run_dir), last_error=res.error)
+            state.update(url, status="held", run_dir=str(res.run_dir), last_error=res.error,
+                         post_kind=getattr(res, "post_kind", None))
             notify(alerts, f"HELD (no video): {url} -- {res.error}")
             return "held"
         if res.status != "ready":
@@ -145,7 +146,11 @@ def process_post(url: str, state: State, deps: Deps, args, alerts: Path, workspa
                 state.update(url, run_dir=str(res.run_dir))
             return fail(f"text stages: {res.error}")
         run_dir = str(res.run_dir)
-        state.update(url, status="text_done", run_dir=run_dir, last_error=None)
+        state.update(url, status="text_done", run_dir=run_dir, last_error=None,
+                     post_kind=getattr(res, "post_kind", None),
+                     trust_summary=getattr(res, "trust_summary", None))
+        logger.info("text ready for %s: post_kind=%s trust_summary=%s", url,
+                    getattr(res, "post_kind", None), getattr(res, "trust_summary", None))
     run_dir_p = Path(run_dir)
     project = run_dir_p / "videos" / "explainer"
 

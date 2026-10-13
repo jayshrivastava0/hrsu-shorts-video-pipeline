@@ -54,6 +54,28 @@ stages in order. Also load `hyperframes:hyperframes-core`, `hyperframes:hyperfra
   overlapping text; labels >= 30 px, key objects >= 130 px, titles 64-96 px.
 - Contrast must pass the HyperFrames check; one paused GSAP timeline per frame; motion is seek-safe.
 
+## Strategic / executive videos (ONLY when `{{RUN_DIR}}/references.json` has `"post_kind": "strategic"`)
+Skip this section for `"technical"` videos. A strategic video is a business argument for executives, not a
+chemistry lesson, and its narration marks which statements are HRSU's analysis. Same brand tokens, safe zones,
+caption keep-out and no-invention rules as above; in addition:
+- **No chemistry diagrams.** No molecules, ions, reaction arrows, beakers, pipes or crystal lattices. The visual
+  world is a business one: frameworks, timelines, maps and flows, decision matrices, comparison columns and
+  simple charts.
+- Pick the form from the step: situation = a map or flow of the buyer's supply route (plain labelled nodes);
+  tension / risk = a branching or "exposure" diagram where the risk is drawn on the link it travels along;
+  framework = a 2x2 or criteria list that fills in one criterion per spoken word; decision = a fork with the
+  options named in the narration; the CTA = the single HRSU reason, then the domain.
+- **Charts only from verified numbers.** Draw a bar, line or gauge only if the narration states the number with
+  its unit; label it with exactly those words. Otherwise use unlabeled, schematic shapes (word "illustrative",
+  no digits). Never extrapolate, add a trend line, a percentage change or a year that is not spoken.
+- Plain labels: one to three words, everyday business language (e.g. "Spot market", "Own production"), no
+  acronyms that the narration did not define. Place names only if the narration names them.
+- Analysis vs fact: when the narration attributes a point to "HRSU's analysis" / "the argument HRSU makes", style
+  it as an argument (outlined card, "HRSU's view" tag) rather than a hard data point. Facts that the narration
+  states plainly may use the solid style.
+- Source chips: show only the chips listed in `references.json` (typically none for strategic posts); never
+  add a "source" or "study" label of your own.
+
 ## Verification (all required, in this order)
 1. `npx hyperframes lint` must report 0 errors.
 2. `npx hyperframes check` must report 0 errors (caption-word layout notices may be ignored).
