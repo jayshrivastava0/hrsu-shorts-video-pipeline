@@ -92,6 +92,74 @@ PLAN_SCHEMA: dict = {
     "additionalProperties": False,
 }
 
+# ── post kind (technical vs strategic / executive) ─────────────────────────
+POST_KINDS = ("technical", "strategic")
+# A claim's `stance` (strategic plans only): what honesty class it belongs to.
+#   checkable -- a dated / named / numeric fact (agreement, tariff, volume, price, %, named
+#                organisation): needs a cited blog quote or an authority, else it is dropped
+#   analysis  -- HRSU's interpretation, risk framing or recommendation: allowed, narrated
+#                AS the post's argument (attribution, not hedging)
+#   framework -- decision criteria / structure, each element taken from the blog
+CLAIM_STANCES = ("checkable", "analysis", "framework")
+
+_STRATEGIC_TERMS = (
+    "tariff", "trade policy", "trade agreement", "trade framework", "free trade", r"fta",
+    "supply chain", "sourcing strateg", "procurement strateg", r"capex", r"opex",
+    "resilien", r"esg", "geopolit", "sanction", "market pulse", "market trend",
+    "sustainab", "policy", "strategic", "diversif", "single-source", "executive", "board",
+)
+_TECHNICAL_TERMS = (
+    r"ppm", r"mg/l", r"kg/m", "dosage", "dosing", "corrosion", r"h2s", r"anfo",
+    "mechanism", "concentration", "wastewater", "setting time", "oxidi", "solubility",
+    "reaction", "slurry", "sulfide", "sulphide", "nitrate ion", "cold weather", "compressive",
+)
+
+
+def _term_score(text: str, terms) -> float:
+    total = 0
+    for t in terms:
+        total += min(5, len(re.findall(t, text)))
+    return total
+
+
+def heuristic_post_kind(title: str, category: str | None, text: str) -> str | None:
+    """Cheap, deterministic post-kind guess: "strategic" / "technical", or None when the
+    evidence is too close (the planner-role LLM breaks the tie). Title and category count
+    triple; body hits are capped per term. Without clear strategic evidence the answer is
+    "technical" (the pipeline's original track)."""
+    head = f"{title or ''} {category or ''}".lower()
+    body = (text or "").lower()
+    strat = 3 * _term_score(head, _STRATEGIC_TERMS) + _term_score(body, _STRATEGIC_TERMS)
+    tech = 3 * _term_score(head, _TECHNICAL_TERMS) + _term_score(body, _TECHNICAL_TERMS)
+    if strat < 8:                    # strategic needs positive evidence; technical is the default
+        return "technical"
+    if strat >= 1.8 * tech:
+        return "strategic"
+    if tech >= 1.8 * strat:
+        return "technical"
+    return None
+
+
+def _strategic_schemas() -> tuple[dict, dict]:
+    claim = copy.deepcopy(CLAIM_ITEM_SCHEMA)
+    claim["properties"]["stance"] = {"enum": list(CLAIM_STANCES)}
+    claim["required"] = claim["required"] + ["stance"]
+    plan = copy.deepcopy(PLAN_SCHEMA)
+    plan["properties"]["steps"]["items"]["properties"]["claims"]["items"] = claim
+    return claim, plan
+
+
+STRATEGIC_CLAIM_ITEM_SCHEMA, STRATEGIC_PLAN_SCHEMA = _strategic_schemas()
+
+
+def plan_schema(post_kind: str | None) -> dict:
+    return STRATEGIC_PLAN_SCHEMA if post_kind == "strategic" else PLAN_SCHEMA
+
+
+def claim_schema(post_kind: str | None) -> dict:
+    return STRATEGIC_CLAIM_ITEM_SCHEMA if post_kind == "strategic" else CLAIM_ITEM_SCHEMA
+
+
 # ── number + unit gate ──────────────────────────────────────────────────────
 KNOWN_UNITS = frozenset({
     "%", "percent", "ppm", "ppb", "mg/l", "g/l", "kg/m3", "kg/m³", "g/m3", "g/m³",
@@ -214,8 +282,10 @@ def gate_claim_numbers(text: str, source: str, terms: list[dict] | None = None, 
 
 
 # ── structural validation ───────────────────────────────────────────────────
-def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
-    """Deterministic checks on a planner draft. Returns error strings (empty = ok)."""
+def validate_plan(plan: dict, canonical: str, brand: BrandFacts, *,
+                  post_kind: str | None = None) -> list[str]:
+    """Deterministic checks on a planner draft. Returns error strings (empty = ok).
+    `post_kind="strategic"` adds the stance rules (see stance_errors)."""
     errs: list[str] = []
     steps = plan.get("steps", [])
     if len(steps) < config.MIN_VERIFIED_STEPS:
@@ -266,6 +336,8 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
                 errs.append(f"claim[{cid}]: a 'mechanism' claim must not be illustrative "
                             f"(an analogy is not a mechanism; state the real why/how)")
             kind = c.get("kind")
+            if post_kind == "strategic":
+                errs += stance_errors(c)
             if kind not in CLAIM_KINDS:
                 errs.append(f"claim[{cid}]: unknown kind {kind!r}")
             elif kind == "blog_stated":
@@ -280,6 +352,25 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
             elif kind == "illustrative" and has_number(c.get("text", "")):
                 errs.append(f"claim[{cid}]: illustrative claims must not contain numbers")
     return errs + _term_order_errors(plan)
+
+
+def stance_errors(claim: dict) -> list[str]:
+    """Strategic-track rules tying a claim's `stance` to its `kind`:
+    checkable -> blog_stated or external_fact; analysis/framework -> blog_stated (the
+    post's own words) or reasoning from verified premises -- never an outside "fact";
+    illustrative claims may carry any stance."""
+    cid, stance, kind = claim.get("id"), claim.get("stance"), claim.get("kind")
+    if stance not in CLAIM_STANCES:
+        return [f"claim[{cid}]: unknown stance {stance!r} (must be one of {list(CLAIM_STANCES)})"]
+    if kind == "illustrative":
+        return []
+    if stance == "checkable" and kind not in ("blog_stated", "external_fact"):
+        return [f"claim[{cid}]: a 'checkable' fact must be blog_stated (a quote that carries "
+                f"the blog's citation) or external_fact, not {kind!r}"]
+    if stance in ("analysis", "framework") and kind not in ("blog_stated", "reasoning"):
+        return [f"claim[{cid}]: an '{stance}' claim is the post's own argument: kind must be "
+                f"blog_stated (quote it) or reasoning, not {kind!r}"]
+    return []
 
 
 def transition_errors(transition) -> list[str]:
@@ -380,7 +471,7 @@ def finalize_claim(raw: dict) -> dict:
     "link" (plans stored before depends_on replaced link claims) becomes a "fact".
     """
     role = raw.get("role")
-    return {
+    out = {
         "id": raw["id"],
         "text": raw["text"],
         "kind": raw["kind"],
@@ -390,9 +481,12 @@ def finalize_claim(raw: dict) -> dict:
         "verdict": None,
         "needs_number": has_number(raw["text"]),
     }
+    if raw.get("stance") in CLAIM_STANCES:
+        out["stance"] = raw["stance"]
+    return out
 
 
-def to_plan_document(raw: dict, attempts: int) -> dict:
+def to_plan_document(raw: dict, attempts: int, post_kind: str | None = None) -> dict:
     """Planner output -> explanation_plan.json document (input is not mutated)."""
     doc = copy.deepcopy(raw)
     for step in doc["steps"]:
@@ -400,6 +494,7 @@ def to_plan_document(raw: dict, attempts: int) -> dict:
         step["depends_on"] = depends_on_ids(step)
         step["transition"] = step.get("transition") or ""
     doc["status"] = "planned"
+    doc["post_kind"] = post_kind or "technical"
     doc["attempts"] = attempts
     doc["dropped_claims"] = []
     doc["dropped_steps"] = []

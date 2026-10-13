@@ -444,3 +444,67 @@ class TestFormulaLabels:
         assert ex.gate_claim_numbers("Dose is 5 g", "the dose is 5 kg")
         assert any("no unit" in e for e in ex.gate_claim_numbers("425", "EC peaking at 425"))
         assert ex.gate_claim_numbers("2 kg", "2 kg") == []
+
+
+class TestPostKindHeuristic:
+    STRAT = ("Trade policy and tariff changes reshape the supply chain. A free trade agreement "
+             "shifts sourcing strategy; resilience and geopolitical risk drive CapEx versus "
+             "OpEx choices. Strategic diversification beats single-source exposure. ESG policy "
+             "and sustainability matter to the board. " * 3)
+    TECH = ("Dosage of 40 mg/L controls H2S in wastewater. The mechanism: nitrate oxidises "
+            "sulfide; corrosion falls; concentration of 5 ppm; setting time shortens. " * 3)
+
+    def test_strategic_text_is_strategic(self):
+        assert ex.heuristic_post_kind("Trade frameworks and supply chain risk", None,
+                                      self.STRAT) == "strategic"
+
+    def test_technical_text_is_technical(self):
+        assert ex.heuristic_post_kind("H2S dosing", None, self.TECH) == "technical"
+
+    def test_no_strategic_evidence_defaults_to_technical(self):
+        assert ex.heuristic_post_kind("T", "c", "Calcium nitrate dissolves in water.") == "technical"
+
+    def test_mixed_evidence_is_a_tie_for_the_llm(self):
+        assert ex.heuristic_post_kind("x", None, self.STRAT + self.TECH * 2) is None
+
+
+class TestStrategicSchemaAndStances:
+    def test_strategic_schema_requires_stance_technical_does_not(self):
+        assert "stance" in ex.STRATEGIC_CLAIM_ITEM_SCHEMA["required"]
+        assert "stance" not in ex.CLAIM_ITEM_SCHEMA["required"]
+        assert ex.plan_schema("strategic") is ex.STRATEGIC_PLAN_SCHEMA
+        assert ex.plan_schema("technical") is ex.PLAN_SCHEMA and ex.plan_schema(None) is ex.PLAN_SCHEMA
+        assert ex.claim_schema("strategic") is ex.STRATEGIC_CLAIM_ITEM_SCHEMA
+
+    def test_technical_plan_still_validates_against_original_schema(self):
+        jsonschema.validate(_plan(), ex.PLAN_SCHEMA)
+
+    def test_stance_kind_rules(self):
+        ok = lambda **kw: ex.stance_errors({"id": "c", **kw}) == []  # noqa: E731
+        assert ok(stance="checkable", kind="blog_stated")
+        assert ok(stance="checkable", kind="external_fact")
+        assert not ok(stance="checkable", kind="reasoning")
+        assert ok(stance="analysis", kind="blog_stated") and ok(stance="analysis", kind="reasoning")
+        assert not ok(stance="analysis", kind="external_fact")
+        assert not ok(stance="framework", kind="external_fact")
+        assert not ok(stance="opinion", kind="blog_stated")
+        assert not ok(kind="blog_stated")
+        assert ok(stance="analysis", kind="illustrative")
+
+    def test_validate_plan_enforces_stance_only_for_strategic(self):
+        plan = _plan()
+        assert ex.validate_plan(plan, CANONICAL, BRAND) == []
+        errs = ex.validate_plan(plan, CANONICAL, BRAND, post_kind="strategic")
+        assert any("stance" in e for e in errs)
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                c["stance"] = "analysis"
+        assert not any("stance" in e for e in ex.validate_plan(
+            plan, CANONICAL, BRAND, post_kind="strategic"))
+
+    def test_finalize_claim_keeps_stance_only_when_present(self):
+        raw = {"id": "a", "text": "t", "kind": "reasoning", "role": "fact", "quote": ""}
+        assert "stance" not in ex.finalize_claim(raw)
+        assert ex.finalize_claim(dict(raw, stance="analysis"))["stance"] == "analysis"
+        assert ex.to_plan_document(_plan(), 1, "strategic")["post_kind"] == "strategic"
+        assert ex.to_plan_document(_plan(), 1)["post_kind"] == "technical"

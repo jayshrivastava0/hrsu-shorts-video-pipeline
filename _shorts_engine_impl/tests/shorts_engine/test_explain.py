@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from shorts_engine import config
+from shorts_engine import explanation as explanation_mod
 from shorts_engine.errors import HoldForReview
 from shorts_engine.manifest import RunManifest
 from shorts_engine.runner import StageContext
@@ -199,3 +200,99 @@ def test_thin_plan_holds_instead_of_crashing_on_schema(tmp_path, monkeypatch):
     assert not isinstance(e.value, EngineLLMError)
     assert len(calls) == config.LLM_MAX_RETRIES
     assert any("structure" in r for r in e.value.reasons)
+
+
+STRAT_CANONICAL = ("Trade policy and tariff changes reshape the supply chain. A free trade "
+                   "agreement3 shifts sourcing strategy; resilience and geopolitical risk "
+                   "drive CapEx versus OpEx. Strategic diversification beats single-source "
+                   "exposure. ESG policy and sustainability matter to the board. " * 2)
+QUOTE = "Trade policy and tariff changes reshape the supply chain."
+
+
+def _strategic_plan(quote=QUOTE):
+    def step(sid, claims, depends_on=()):
+        return {"step_id": sid, "claim_text": f"goal {sid}", "claims": claims, "terms": [],
+                "depends_on": list(depends_on), "transition": "",
+                "visual_intent": {"entities": ["trade"], "relationship": "r", "quantity": "q"}}
+
+    def claim(cid, text, kind="blog_stated", role="mechanism", stance="analysis"):
+        return {"id": cid, "text": text, "kind": kind, "role": role, "stance": stance,
+                "quote": quote if kind == "blog_stated" else ""}
+    return {"question": "Should we diversify sourcing?",
+            "steps": [step("s1", [claim("c1", "Tariff changes reshape the supply chain.")]),
+                      step("s2", [claim("c2", "Resilience drives the choice.")], ["c1"]),
+                      step("s3", [claim("c3", "So diversify.", "reasoning")], ["c2"])],
+            "payoff": {"takeaway": "Diversify.", "differentiator_id": "b_supply"}}
+
+
+def test_strategic_post_uses_strategic_planner_schema_and_records_kind(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    (ctx.workspace / "canonical.txt").write_text(STRAT_CANONICAL, encoding="utf-8")
+    (ctx.workspace / "post.json").write_text(json.dumps(
+        {"url": URL, "title": "Trade frameworks and supply chain resilience", "region": "eu",
+         "category": None, "citations": [], "images": []}), encoding="utf-8")
+    seen = {}
+
+    def fake(prompt, system, schema, **kw):
+        seen.update(system=system, schema=schema)
+        return _strategic_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+    assert doc["post_kind"] == "strategic"
+    assert seen["system"] is explain._PLANNER_SYSTEM_STRATEGIC
+    assert seen["schema"] is explanation_mod.STRATEGIC_PLAN_SCHEMA
+    assert doc["steps"][0]["claims"][0]["stance"] == "analysis"
+    assert ctx.manifest.post_kind == "strategic"
+    assert json.loads((ctx.workspace / "run_manifest.json").read_text())["post_kind"] == "strategic"
+
+
+def test_technical_post_keeps_the_original_prompt_and_schema(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    seen = {}
+
+    def fake(prompt, system, schema, **kw):
+        seen.update(system=system, schema=schema)
+        return _good_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    assert seen["system"] is explain._PLANNER_SYSTEM
+    assert seen["schema"] is explanation_mod.PLAN_SCHEMA
+    assert ctx.manifest.post_kind == "technical"
+
+
+def test_strategic_plan_with_bad_stance_is_sent_back(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    (ctx.workspace / "canonical.txt").write_text(STRAT_CANONICAL, encoding="utf-8")
+    ctx.flags["post_kind"] = "strategic"
+    bad = _strategic_plan()
+    bad["steps"][0]["claims"][0]["stance"] = "bogus"
+    prompts = []
+
+    def fake(prompt, system, schema, **kw):
+        prompts.append(prompt)
+        return bad if len(prompts) == 1 else _strategic_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    assert "unknown stance" in prompts[1]
+
+
+def test_tie_break_uses_planner_role_and_defaults_to_technical_on_failure(monkeypatch):
+    calls = []
+
+    def fake(prompt, system, schema, **kw):
+        calls.append(kw.get("role"))
+        return {"post_kind": "strategic"}
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    tie = ("Trade policy tariff supply chain sourcing strategy resilience " * 3
+           + "dosage corrosion wastewater mechanism concentration " * 3)
+    assert explain.detect_post_kind({"title": "x"}, tie) == "strategic" and calls == ["planner"]
+
+    def boom(*a, **k):
+        raise RuntimeError("offline")
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", boom)
+    assert explain.detect_post_kind({"title": "x"}, tie) == "technical"
