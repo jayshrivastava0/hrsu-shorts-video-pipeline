@@ -129,3 +129,17 @@ class TestReappeared:
 def test_brand_name_used_for_attribution_is_not_an_invented_entity():
     b = _beats("The argument HRSU makes is that costs fluctuate with market demand and logistics.")
     assert pv.check_provenance(b, _plan(), BRAND) == []
+
+
+class TestSanitizeTransitions:
+    def test_transition_smuggling_a_new_claim_is_cleared(self):
+        plan = _plan()
+        plan["steps"][1]["transition"] = "This shift transforms spending into a strategic advantage."
+        cleared = pv.sanitize_transitions(plan)
+        assert [c["step_id"] for c in cleared] == ["s2"] and plan["steps"][1]["transition"] == ""
+
+    def test_connective_transition_built_from_claim_words_is_kept(self):
+        plan = _plan()
+        plan["steps"][1]["transition"] = "With costs tied to market demand, look at integration."
+        assert pv.sanitize_transitions(plan) == []
+        assert plan["steps"][1]["transition"].startswith("With costs")

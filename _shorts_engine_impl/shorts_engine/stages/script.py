@@ -468,6 +468,10 @@ _WRITER_SYSTEM_STRATEGIC = (
 )
 
 _CRITIC_SYSTEM_STRATEGIC_EXTRA = (
+    " The OPENING TRANSITION lines and the TERM definitions listed in the chain are approved "
+    "wording, and a CTA sentence that merely answers the question from claims already "
+    "narrated is allowed: do not penalise them; penalise only a NEW fact, number, name, "
+    "cause or an ANALYSIS stated as fact. When you list `edits`, quote the exact sentence."
     " This is an executive-audience STRATEGIC script and each verified claim is tagged "
     "CHECKABLE FACT, ANALYSIS or FRAMEWORK. faithfulness_score: an ANALYSIS claim narrated "
     "as established fact (no attribution to HRSU / the article's argument) scores below 5; "
@@ -807,6 +811,10 @@ def run(ctx) -> dict[str, str]:
     factsheet = json.loads((ws / "factsheet.json").read_text(encoding="utf-8"))
     brand = load_brand_facts()
     local_only = bool(ctx.flags.get("local_only", False))
+    if is_strategic(plan):      # a transition must not carry a claim of its own
+        for c in provenance.sanitize_transitions(plan):
+            logger.info(f"script: cleared transition of {c['step_id']} (new material "
+                        f"{c['novel']}): {c['transition']!r}")
     extra = extra_pool_by_beat(plan)
 
     try:

@@ -151,13 +151,30 @@ def _valid_index(idx, n: int) -> bool:
     return isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < n
 
 
-def _citation_ctx(post: dict, canonical: str) -> dict:
+def _citation_ctx(post: dict, canonical: str, question: str = "") -> dict:
     """Context for the strategic 'checkable' rule: the blog's citation table and the
     positions of its citation markers in the canonical text."""
     cites = {c.get("marker"): c for c in (post.get("citations") or [])
              if c.get("marker") is not None}
     clean, marks = references.strip_markers(canonical or "", set(cites))
-    return {"cites": cites, "clean": clean, "marks": marks}
+    return {"cites": cites, "clean": clean, "marks": marks, "question": question}
+
+
+_RELEVANCE_SYSTEM = (
+    "You are an editor for an executive explainer video. You get the ONE decision question "
+    "the video answers and ONE claim. Answer 'supported' if the claim helps an executive "
+    "understand or decide that question (the situation, the risk, the criteria, the "
+    "implication for sourcing). Answer 'unsupported' if it is off-topic for that question "
+    "(for example an emergency-response procedure in a trade-policy video). Set "
+    "passage_index to null."
+)
+
+
+def _is_relevant(claim: dict, question: str, local_only: bool) -> bool:
+    res = text_llm.generate_schema_json(
+        f"Question: {question}\n\nClaim: {claim['text']}", _RELEVANCE_SYSTEM,
+        VERDICT_SCHEMA, local_only=local_only, role="verifier")
+    return res.get("verdict") == "supported"
 
 
 def _apply_checkable_rule(res: dict, ctx: dict, retriever, step: dict,
@@ -191,6 +208,10 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
     `stance_ctx` (strategic plans only, see _citation_ctx) adds the checkable-fact rule."""
     res = _verify_claim(claim, step=step, premises=premises, canonical=canonical,
                         retriever=retriever, local_only=local_only)
+    if (stance_ctx is not None and res["verdict"] == "supported" and stance_ctx.get("question")
+            and res["kind"] != "illustrative"
+            and not _is_relevant(res, stance_ctx["question"], local_only)):
+        return _result(res, "unsupported", "off-topic for the video's decision question")
     if (stance_ctx is not None and res["verdict"] == "supported"
             and res["kind"] == "blog_stated" and effective_stance(res) == "checkable"):
         res = _apply_checkable_rule(res, stance_ctx, retriever, step, local_only)
@@ -504,7 +525,7 @@ def run(ctx) -> dict[str, str]:
     post = json.loads((ws / "post.json").read_text(encoding="utf-8"))
     local_only = bool(ctx.flags.get("local_only", False))
     retriever = Retriever([c["url"] for c in post.get("citations", []) if c.get("url")])
-    stance_ctx = _citation_ctx(post, canonical) if plan.get("post_kind") == "strategic" else None
+    stance_ctx = _citation_ctx(post, canonical, plan.get("question", "")) if plan.get("post_kind") == "strategic" else None
     # the plan's original first step follows from the question and needs no depends_on
     first = plan["steps"][0] if plan["steps"] else None
 

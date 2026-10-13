@@ -198,3 +198,31 @@ def reappeared(forbidden: list[str], beats: list[dict]) -> list[str]:
         if fw and any(_jaccard(fw, sw) >= 0.8 for sw in sents):
             back.append(f)
     return back
+
+
+TRANSITION_MAX_NOVEL = 1
+
+
+def sanitize_transitions(plan: dict) -> list[dict]:
+    """Planner transitions are narration guidance, but the planner sometimes smuggles a new
+    claim into one ("This shift transforms procurement into a strategic advantage"), and the
+    writer then narrates it. Clear every transition that brings in more than
+    TRANSITION_MAX_NOVEL content words not found in its step's verified claims, the claims it
+    builds on, its terms or the question (mutates `plan`; returns what was cleared)."""
+    from shorts_engine.stages import script as script_stage
+    cleared = []
+    for pos, step in enumerate(plan.get("steps", [])):
+        t = step.get("transition") or ""
+        if not t.strip():
+            continue
+        claims = explanation.supported_claims(step) + script_stage._builds_on_claims(plan, pos)
+        pool = " ".join([c.get("text", "") for c in claims]
+                        + [f"{x.get('term', '')} {x.get('definition', '')}"
+                           for x in step.get("terms", [])]
+                        + [plan.get("question", "")])
+        novel = _content_stems(t) - _content_stems(pool)
+        if len(novel) > TRANSITION_MAX_NOVEL:
+            cleared.append({"step_id": step.get("step_id"), "transition": t,
+                            "novel": sorted(novel)})
+            step["transition"] = ""
+    return cleared

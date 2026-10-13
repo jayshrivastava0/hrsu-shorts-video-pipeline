@@ -175,3 +175,21 @@ class TestStrategicRepair:
         _, _, router = _run(tmp_path, monkeypatch, _plan(steps, kind="technical"))
         assert [c for c in router.calls if c[0] is vc.REPAIR_SCHEMA]
         assert not [c for c in router.calls if c[0] is vc.STRATEGIC_REPAIR_SCHEMA]
+
+
+class TestRelevance:
+    def test_off_topic_claim_is_dropped_with_reason(self, tmp_path, monkeypatch):
+        class R(Router):
+            def __call__(self, prompt, system, schema, **kw):
+                if system is vc._RELEVANCE_SYSTEM and "Safety perimeter" in prompt:
+                    return {"verdict": "unsupported", "passage_index": None}
+                return super().__call__(prompt, system, schema, **kw)
+        extra = _claim("cx", "Safety perimeter planning matters.", Q_ANALYSIS, "analysis",
+                       role="fact")
+        doc, _, _ = _run(tmp_path, monkeypatch, _plan(_good_steps(extra)), R())
+        dropped = {c["id"]: c["reason"] for c in doc["dropped_claims"]}
+        assert "off-topic" in dropped["cx"] and len(doc["steps"]) == 3
+
+    def test_relevance_is_not_asked_on_the_technical_track(self, tmp_path, monkeypatch):
+        _, _, router = _run(tmp_path, monkeypatch, _plan(_good_steps(), kind="technical"))
+        assert not [c for c in router.calls if c[1] is vc._RELEVANCE_SYSTEM]
