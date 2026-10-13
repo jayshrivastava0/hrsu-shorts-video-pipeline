@@ -28,7 +28,7 @@ import logging
 import re
 from pathlib import Path
 
-from shorts_engine import config, explanation
+from shorts_engine import config, explanation, provenance
 from shorts_engine.brand import BrandFacts, load_brand_facts
 from shorts_engine.errors import EngineError, HoldForReview
 from shorts_engine.llm import text_llm
@@ -181,6 +181,29 @@ def gate_differentiator(beats: list[dict], brand: BrandFacts) -> list[str]:
     return errs
 
 
+# ── gate_cta_reason: the CTA names its one specific HRSU reason ──────────────
+def gate_cta_reason(beats: list[dict], brand: BrandFacts) -> list[str]:
+    """The CTA narration must actually STATE the cited differentiator (not just cite its
+    id): at least min(2, n) of the differentiator text's content stems appear in it."""
+    if not beats:
+        return []
+    cta = beats[-1]
+    diff_ids = {d["id"]: d["text"] for d in brand.differentiators}
+    cited = [f for f in cta.get("fact_ids", []) if f in diff_ids]
+    if len(cited) != 1:
+        return []                     # gate_differentiator reports it
+    want = provenance._content_stems(diff_ids[cited[0]])
+    if not want:
+        return []
+    have = provenance._content_stems(cta.get("narration", ""))
+    need = min(2, len(want))
+    if len(want & have) < need:
+        return [f"cta_reason[cta]: the CTA must state its one specific HRSU reason in the "
+                f"brand's own words -- {diff_ids[cited[0]]!r} -- and tie it to the problem "
+                f"the video explained (without adding any claim beyond it)"]
+    return []
+
+
 # ── gate_flow: the script explains, in order ────────────────────────────────
 _FLOW_WORD_RE = re.compile(r"[A-Za-z]+")
 _FLOW_STOPWORDS = frozenset({
@@ -301,6 +324,7 @@ def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts,
             + gate_total_duration(beats)
             + gate_card_text(beats)
             + gate_differentiator(beats, brand)
+            + gate_cta_reason(beats, brand)
             + (gate_flow(beats, plan) if plan is not None else []))
 
 
@@ -334,6 +358,16 @@ CRITIQUE_SCHEMA: dict = {
         "faithfulness_score": {"type": "integer", "minimum": 0, "maximum": 10},
         "flow_score": {"type": "integer", "minimum": 0, "maximum": 10},
         "revise_notes": {"type": "string"},
+        # optional, machine-checkable fixes: each quotes ONE offending narration sentence
+        # and names the verified claim whose wording replaces it
+        "edits": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"beat": {"type": "string"},
+                           "offending_sentence": {"type": "string"},
+                           "issue": {"type": "string"},
+                           "replacement_claim_id": {"type": "string"}},
+            "required": ["beat", "offending_sentence", "issue", "replacement_claim_id"],
+            "additionalProperties": False}},
     },
     "required": ["actionable_score", "coherence_score", "hrsu_reason_score",
                  "faithfulness_score", "flow_score", "revise_notes"],
@@ -388,7 +422,13 @@ _CRITIC_SYSTEM = (
     "why/how as cause and effect, not just asserted? Is any term used before it is defined? "
     "Does the ending answer the question?): a bare assertion with no why/how, or a step "
     "that does not connect to what it builds on, scores below 5. "
-    "Give concrete revise_notes."
+    "Give concrete revise_notes. For every sentence that adds something not in the verified "
+    "claims, ALSO add an `edits` entry: `beat`, the offending sentence copied EXACTLY from the "
+    "script, the `issue`, and `replacement_claim_id` = the [id] of the verified claim whose "
+    "wording should replace it (empty string if the sentence should simply be removed). When "
+    "the CTA lacks a specific reason to choose HRSU, name ONLY an approved brand statement "
+    "as the reason; never suggest a capability, certification or claim that is not in the "
+    "approved list."
 )
 
 
@@ -522,7 +562,8 @@ def _transition(step: dict) -> str:
 
 def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
                    gate_errors: list[str] | None = None, revise_notes: str = "",
-                   previous_beats: list[dict] | None = None) -> str:
+                   previous_beats: list[dict] | None = None,
+                   edit_instructions: list[str] | None = None) -> str:
     # Only verified claim text reaches the writer as content: the planner's step goals
     # (claim_text) and payoff.takeaway are never verified, so they are left out. The one
     # unverified planner text shown is each step's `transition`, and only under the
@@ -574,12 +615,16 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
             prompt += ("\n\nThe reviewer scored this previous draft:\n"
                        + "\n".join(f"- {b['beat']}: {b['narration']}" for b in previous_beats))
         prompt += f"\n\nReviewer notes to address:\n{revise_notes}"
+    if edit_instructions:
+        prompt += ("\n\nEDIT INSTRUCTIONS -- apply EACH one exactly; the sentence quoted is "
+                   "unsupported and must not come back in any wording:\n"
+                   + "\n".join(f"{i}. {t}" for i, t in enumerate(edit_instructions, 1)))
     return prompt
 
 
 def _critic_prompt(plan: dict, beats: list[dict], brand: BrandFacts) -> str:
-    claims = "\n".join(f"- {c['text']}" for s in plan["steps"] for c in s["claims"]
-                       if c.get("verdict") == "supported")
+    claims = "\n".join(f"- [{c['id']}] {c['text']}" for s in plan["steps"]
+                       for c in s["claims"] if c.get("verdict") == "supported")
     diff = next((d for d in brand.differentiators
                  if d["id"] == plan["payoff"]["differentiator_id"]), None)
     approved = ([f"- {diff['text']}"] if diff else []) \
@@ -609,23 +654,47 @@ def _critic_prompt(plan: dict, beats: list[dict], brand: BrandFacts) -> str:
 
 
 # ── Writing loop ─────────────────────────────────────────────────────────────
+PROVENANCE_MAX_ROUNDS = 2     # soft pre-critic rewrites per drafting episode (never a hold)
+
+
 def _write_until_gates_pass(plan, post_meta, factsheet, brand, extra, local_only, *,
                             revise_notes: str = "",
-                            previous_beats: list[dict] | None = None
+                            previous_beats: list[dict] | None = None,
+                            edit_instructions: list[str] | None = None,
+                            forbidden: list[str] | None = None
                             ) -> tuple[list[dict], int]:
+    """Writer loop: hard gates (a draft that never passes them holds), then the soft
+    provenance check -- unsupported sentences, or a sentence the critic already rejected
+    coming back, go straight back to the writer as edit instructions without spending a
+    critic call. After PROVENANCE_MAX_ROUNDS (or on the last attempt) the draft goes on to
+    the critic anyway; provenance never holds a run by itself."""
     terms = terms_by_step_beat(plan)
     errors: list[str] = []
+    soft: list[str] = []
+    prov_rounds = 0
     for attempt in range(1, config.LLM_MAX_RETRIES + 1):
         doc = text_llm.generate_schema_json(
             _writer_prompt(plan, post_meta, brand, gate_errors=errors or None,
-                           revise_notes=revise_notes, previous_beats=previous_beats),
+                           revise_notes=revise_notes, previous_beats=previous_beats,
+                           edit_instructions=(edit_instructions or []) + soft or None),
             _WRITER_SYSTEM, SCRIPT_SCHEMA, local_only=local_only, role="writer")
         beats, errors = build_beats(doc, plan, factsheet, brand)
         if not errors:
             errors = run_gates(beats, factsheet, brand, extra_by_beat=extra,
                                terms_by_beat=terms, plan=plan)
         if not errors:
-            return beats, attempt
+            findings = provenance.check_provenance(beats, plan, brand)
+            soft = provenance.provenance_instructions(findings)
+            back = provenance.reappeared(forbidden or [], beats)
+            soft += [f"The sentence \"{b}\" was already rejected; it is back. Remove it."
+                     for b in back]
+            if not soft or prov_rounds >= PROVENANCE_MAX_ROUNDS                     or attempt == config.LLM_MAX_RETRIES:
+                return beats, attempt
+            prov_rounds += 1
+            logger.info(f"provenance: {len(soft)} unsupported sentence(s), rewriting "
+                        f"before the critic ({prov_rounds}/{PROVENANCE_MAX_ROUNDS})")
+            continue
+        soft = []
         logger.warning(f"script gates failed (attempt {attempt}/{config.LLM_MAX_RETRIES}): "
                        f"{errors}")
     raise HoldForReview(errors)
@@ -685,6 +754,7 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
     beats, attempts = _write_until_gates_pass(plan, post_meta, factsheet, brand, extra,
                                               local_only)
     rewrites = 0
+    forbidden: list[str] = []
     while True:
         critique = text_llm.generate_schema_json(
             _critic_prompt(plan, beats, brand), _CRITIC_SYSTEM, CRITIQUE_SCHEMA,
@@ -700,8 +770,11 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
         rewrites += 1
         logger.info(f"critique below bar ({lowest}), rewrite {rewrites}: "
                     f"{critique['revise_notes']}")
-        beats, n = _write_until_gates_pass(plan, post_meta, factsheet, brand, extra,
-                                           local_only, revise_notes=critique["revise_notes"],
-                                           previous_beats=beats)
+        edits = provenance.resolve_critic_edits(critique.get("edits"), beats, plan)
+        forbidden += [e["sentence"] for e in edits]
+        beats, n = _write_until_gates_pass(
+            plan, post_meta, factsheet, brand, extra, local_only,
+            revise_notes=critique["revise_notes"], previous_beats=beats,
+            edit_instructions=provenance.critic_instructions(edits), forbidden=forbidden)
         attempts += n
     return beats, critique, attempts, rewrites

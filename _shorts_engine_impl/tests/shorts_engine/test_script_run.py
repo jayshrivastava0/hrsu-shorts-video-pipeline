@@ -738,3 +738,83 @@ class TestCtaBrandStatements:
         assert "only the cited differentiator text, the brand cta lines and the domain" in text
         assert "purity, qc, certifications, delivery or pricing" in text
         assert "The hook and the CTA must not contain any numbers." in prompt
+
+
+class TestEditInstructionsAndProvenance:
+    BAD = "Sandy soil drains nutrients quickly, thanks to the Zanzibar Protocol."
+
+    def _doc_with(self, s2=None):
+        d = _doc()
+        if s2:
+            d["steps"][1]["narration"] = s2 + " " + " ".join(["word"] * 12) + "."
+        return d
+
+    def test_critic_edit_becomes_explicit_instruction_with_plan_claim_text(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        d = _doc()
+        sent = "Sandy soil drains nutrients quickly."
+        crit = dict(LOW_CRITIQUE, edits=[{"beat": "step_2", "offending_sentence": sent,
+                                          "issue": "not verified", "replacement_claim_id": "c3"}])
+        router = _install(monkeypatch, [d], [crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        p = router.writer_prompts[1]
+        assert "EDIT INSTRUCTIONS" in p and sent in p
+        assert "So nutrients must be held in solution." in p      # the plan's claim text
+        assert "Do NOT re-add" in p
+        assert "EDIT INSTRUCTIONS" not in router.writer_prompts[0]
+
+    def test_phantom_critic_edit_is_not_forwarded(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        crit = dict(LOW_CRITIQUE, edits=[{"beat": "step_2", "offending_sentence": "Never said.",
+                                          "issue": "x", "replacement_claim_id": "c3"}])
+        router = _install(monkeypatch, [_doc()], [crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert "EDIT INSTRUCTIONS" not in router.writer_prompts[1]
+
+    def test_unsupported_sentence_is_sent_back_before_any_critic_call(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [self._doc_with(self.BAD), _doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert router.roles[:2] == ["writer", "writer"] and router.roles.count("critic") == 1
+        assert "Zanzibar" in router.writer_prompts[1] and "EDIT INSTRUCTIONS" in router.writer_prompts[1]
+
+    def test_provenance_never_holds_after_its_round_cap(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [self._doc_with(self.BAD)], [GOOD_CRITIQUE])
+        script_stage.run(ctx)                       # writer stubborn: critic still gets the draft
+        assert router.roles.count("writer") == 1 + script_stage.PROVENANCE_MAX_ROUNDS
+        assert router.roles.count("critic") == 1
+
+    def test_rejected_sentence_coming_back_is_caught_without_the_critic(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        sent = "Sandy soil drains nutrients quickly."
+        crit = dict(LOW_CRITIQUE, edits=[{"beat": "step_2", "offending_sentence": sent,
+                                          "issue": "x", "replacement_claim_id": "c3"}])
+        fixed = self._doc_with("So nutrients must be held in solution.")
+        router = _install(monkeypatch, [_doc(), _doc(), fixed], [crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert "was already rejected" in router.writer_prompts[2]
+        assert router.roles.count("critic") == 2
+
+
+class TestCtaReasonGate:
+    def test_cta_that_only_cites_the_id_but_never_states_the_reason_fails(self):
+        from shorts_engine.stages.script import gate_cta_reason
+        brand = load_brand_facts()
+        beats = [{"beat": "cta", "purpose": "cta", "fact_ids": ["b_purity"],
+                  "narration": "Sandy soil drains fast. Visit hrsuindore.com."}]
+        assert gate_cta_reason(beats, brand)
+
+    def test_cta_stating_the_reason_passes(self):
+        from shorts_engine.stages.script import gate_cta_reason
+        brand = load_brand_facts()
+        beats = [{"beat": "cta", "purpose": "cta", "fact_ids": ["b_supply"],
+                  "narration": "HRSU offers flexible minimum order quantities for trial orders."}]
+        assert gate_cta_reason(beats, brand) == []
+
+    def test_critic_prompt_labels_claims_with_ids_and_system_forbids_invented_reasons(self):
+        plan = _plan()
+        beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+        prompt = script_stage._critic_prompt(plan, beats, load_brand_facts())
+        assert "- [c2] Sandy soil drains nutrients quickly." in prompt
+        assert "ONLY an approved brand statement" in script_stage._CRITIC_SYSTEM
