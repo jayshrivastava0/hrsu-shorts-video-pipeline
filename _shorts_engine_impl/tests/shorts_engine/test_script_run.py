@@ -829,3 +829,7 @@ class TestHeldDraft:
         draft = json.loads((ctx.workspace / "script_held_draft.json").read_text(encoding="utf-8"))
         assert draft["critique"]["coherence_score"] == 3 and draft["beats"][0]["beat"] == "hook"
         assert not (ctx.workspace / "script.json").exists()
+
+
+def test_diagram_labels_never_carry_digits():
+    assert script_stage._labels(["Node 1", "Main supplier", "Hub 2", "Buyer"]) == ["Main supplier", "Buyer"]

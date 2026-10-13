@@ -123,7 +123,8 @@ _PLANNER_SYSTEM_STRATEGIC = (
     "decision (flexible order quantities and responsive quoting for sourcing, supply and "
     "trade-risk posts; solar and steam reuse for ESG posts; purity and batch QC only when "
     "the post is about quality). `visual_intent` says what a diagram for the step should "
-    "show (entities, their relationship, the quantity that changes); prefer frameworks, "
+    "show (entities as plain words with NO digits and no numbering, "
+    "e.g. 'Main supplier' not 'Supplier 1'; their relationship, the quantity that changes); prefer frameworks, "
     "flows, timelines and comparisons over chemistry."
 )
 

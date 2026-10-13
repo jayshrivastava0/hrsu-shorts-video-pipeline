@@ -533,7 +533,8 @@ _CRITIC_SYSTEM = (
 
 # ── Beat construction ────────────────────────────────────────────────────────
 def _labels(entities: list[str]) -> list[str]:
-    return [" ".join(e.split()[:3]) for e in entities[:4] if e.strip()]
+    # a label with a digit ("Node 1") is a number on screen that no claim states: skip it
+    return [" ".join(e.split()[:3]) for e in entities if e.strip() and not re.search(r"\d", e)][:4]
 
 
 def _norm_unit_text(text: str) -> str:
