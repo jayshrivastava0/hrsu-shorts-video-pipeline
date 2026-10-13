@@ -665,3 +665,17 @@ class TestGateFlow:
         errs = run_gates(beats, FACTSHEET, BRAND, plan=plan)
         assert errs == ["flow[step_1]: mechanism not narrated (explain: "
                         "'Zeolites capture ammonium ions.')"]
+
+
+class TestSourceStatedUnitInNarration:
+    def test_prose_unit_from_a_verified_claim_passes_the_number_gate(self):
+        beats = [{"beat": "step_1", "narration": "Ports within 1600 meters of the hub win.",
+                  "card_text": "", "fact_ids": []}]
+        extra = {"step_1": "Ports within 1600 meters of the rail hub cut handling time."}
+        assert gate_numbers(beats, FACTSHEET, BRAND, extra_by_beat=extra) == []
+
+    def test_unit_the_claims_never_paired_with_the_number_still_fails(self):
+        beats = [{"beat": "step_1", "narration": "Ports within 1600 widgets of the hub win.",
+                  "card_text": "", "fact_ids": []}]
+        extra = {"step_1": "Ports within 1600 meters of the rail hub cut handling time."}
+        assert gate_numbers(beats, FACTSHEET, BRAND, extra_by_beat=extra) != []

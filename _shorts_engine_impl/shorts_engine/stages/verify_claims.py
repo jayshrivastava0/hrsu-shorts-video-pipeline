@@ -114,7 +114,7 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
         if len(quote.split()) < MIN_QUOTE_WORDS:
             return _result(claim, "unsupported",
                            f"quote too short (need at least {MIN_QUOTE_WORDS} words)")
-        errs = explanation.gate_claim_numbers(text, quote, terms)
+        errs = explanation.gate_claim_numbers(text, quote, terms, source_units=True)
         if errs:
             return _result(claim, "unsupported", "; ".join(errs))
         res = text_llm.generate_schema_json(

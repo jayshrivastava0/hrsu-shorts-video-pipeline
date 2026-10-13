@@ -104,7 +104,7 @@ def gate_numbers(beats: list[dict], factsheet: dict, brand: BrandFacts,
                     errs.append(f"numbers[{beat}]: {tok!r} in {name} does not "
                                 f"trace to any referenced fact")
                     reported.add(tok)
-            for e in explanation.gate_claim_numbers(text, raw_pool, terms):
+            for e in explanation.gate_claim_numbers(text, raw_pool, terms, source_units=True):
                 m = _UNIT_ERR_NUM_RE.search(e)
                 num = m.group(1) if m else e
                 if num in reported:
@@ -430,7 +430,8 @@ def _fact_ids_for_step(step: dict, factsheet: dict) -> list[str]:
         if re.search(r"[A-Za-z]", value):      # "3 kg": not a pure numeric value
             continue
         pair = f"{value} {f.get('unit') or ''}".strip()
-        if explanation.gate_claim_numbers(pair, claim_pool, step.get("terms")):
+        if explanation.gate_claim_numbers(pair, claim_pool, step.get("terms"),
+                                          source_units=True):
             continue
         # The pair gate sees only the unit's first token; the WHOLE unit string is what
         # reaches the shot payload, so it must appear verbatim in the claim text.

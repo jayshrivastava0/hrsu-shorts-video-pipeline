@@ -100,7 +100,20 @@ KNOWN_UNITS = frozenset({
     "mpa", "kpa", "psi", "mol/l", "mmol/l", "h", "hr", "hours", "hour", "min",
     "minutes", "minute", "s", "seconds", "days", "day", "weeks", "months", "years",
     "x", "times", "fold", "steps", "stages", "cycles", "batches", "samples",
+    # length / distance
+    "meter", "meters", "metre", "metres", "kilometer", "kilometers", "kilometre",
+    "kilometres", "mile", "miles", "ft", "feet", "foot", "nm", "inch", "inches",
+    # money, magnitude and rates
+    "usd", "eur", "inr", "gbp", "aud", "cny", "dollar", "dollars", "euro", "euros",
+    "rupee", "rupees", "yuan", "million", "billion", "trillion", "thousand", "crore",
+    "lakh", "bn", "bps", "pp", "basis",
+    # logistics and counts
+    "teu", "teus", "container", "containers", "vessel", "vessels", "ship", "ships",
+    "shipment", "shipments", "mt", "kt", "mtpa", "tpa", "ktpa", "tonne", "ton",
+    "countries", "country", "plants", "suppliers", "months", "month", "week", "year",
+    "quarter", "quarters", "$", "€", "£", "₹", "¥",
 })
+_CURRENCY_SYMBOLS = ("$", "€", "£", "₹", "¥")
 
 _NUMBER_RE = re.compile(
     r"(?<![\w.)\]])(?:(?<![\u00b7*])|(?!\d+[A-Z]))"   # not after ")"/"]"; not a hydrate "·4H2O"
@@ -137,16 +150,27 @@ def _tokens(text: str) -> list[dict]:
         toks.append({
             "num": m.group("num").replace(",", ""),
             "unit": None if is_open else _norm_unit(m.group("unit")),
+            "raw_unit": m.group("unit") or "",
             "open": is_open,
             "before": text[:m.start()].lower(),
         })
     for i in range(len(toks) - 2, -1, -1):
         if toks[i]["open"]:
             toks[i]["unit"] = toks[i + 1]["unit"]
+    for t in toks:  # "$1,600": a leading currency symbol is the unit
+        if t["unit"] is None and not t["open"] and t["before"].rstrip().endswith(_CURRENCY_SYMBOLS):
+            t["unit"] = t["before"].rstrip()[-1]
     return toks
 
 
-def gate_claim_numbers(text: str, source: str, terms: list[dict] | None = None) -> list[str]:
+def _is_prose_unit(raw: str) -> bool:
+    """A plain lowercase word of >= 3 letters ("meters", "vessels") as the source writes it.
+    All-caps / mixed-case tokens ("EC", "dS") are never accepted on the source's say-so."""
+    return len(raw) >= 3 and raw.isalpha() and raw == raw.lower()
+
+
+def gate_claim_numbers(text: str, source: str, terms: list[dict] | None = None, *,
+                       source_units: bool = False) -> list[str]:
     """Errors for numbers in `text` that do not trace to `source`, or lack a unit.
 
     Every number must appear as a standalone number in `source` (not inside a
@@ -155,6 +179,12 @@ def gate_claim_numbers(text: str, source: str, terms: list[dict] | None = None) 
     exact (number, unit) PAIR must appear in `source` ("%" and "percent" are
     equivalent). A range opener ("1.5 to 3 kg") takes the closing number's
     unit. Years and numbers after pH/step/stage/phase only need to trace.
+
+    `source_units=True` (only for text gated against the blog's OWN words: a blog quote or
+    the verified-claim pool) also accepts an otherwise-unknown unit when it is a plain
+    lowercase word AND the exact (number, unit) pair appears in `source` -- the source
+    states it, so the pair match is what matters ("1600 meters"). The pair requirement and
+    the in-word/decimal/substring rules are unchanged; acronyms like "EC" stay unknown.
     """
     src = _tokens(normalize_for_match(source))
     src_nums = {t["num"] for t in src}
@@ -172,7 +202,9 @@ def gate_claim_numbers(text: str, source: str, terms: list[dict] | None = None) 
         if not unit:
             if not t["open"]:
                 errs.append(f"number {num!r} has no unit")
-        elif unit not in KNOWN_UNITS and unit not in term_units:
+        elif (unit not in KNOWN_UNITS and unit not in term_units
+              and not (source_units and _is_prose_unit(t["raw_unit"])
+                       and (num, unit) in src_pairs)):
             errs.append(f"number {num!r} has unknown unit {unit!r} (not a known unit and "
                         f"not defined in the step's terms)")
         elif (num, unit) not in src_pairs:
@@ -243,7 +275,8 @@ def validate_plan(plan: dict, canonical: str, brand: BrandFacts) -> list[str]:
                                 f"in the article")
                 else:
                     errs += [f"claim[{cid}]: {e}"
-                             for e in gate_claim_numbers(c["text"], quote, s.get("terms"))]
+                             for e in gate_claim_numbers(c["text"], quote, s.get("terms"),
+                                                source_units=True)]
             elif kind == "illustrative" and has_number(c.get("text", "")):
                 errs.append(f"claim[{cid}]: illustrative claims must not contain numbers")
     return errs + _term_order_errors(plan)

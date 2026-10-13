@@ -119,6 +119,72 @@ class TestGateClaimNumbers:
         assert ex.gate_claim_numbers("graph 5 widgets", "graph 5 widgets") != []
 
 
+class TestExtendedUnits:
+    def test_length_units_are_known(self):
+        for unit in ("meters", "metres", "km", "kilometers", "miles", "ft", "feet", "nm"):
+            assert ex.gate_claim_numbers(f"within 12 {unit} of the port",
+                                         f"within 12 {unit} of the port") == [], unit
+
+    def test_money_logistics_and_time_units_are_known(self):
+        for unit in ("million", "billion", "bps", "TEU", "containers", "vessels", "MT",
+                     "months", "USD"):
+            assert ex.gate_claim_numbers(f"about 7 {unit}", f"about 7 {unit}") == [], unit
+
+    def test_currency_symbol_counts_as_unit(self):
+        assert ex.gate_claim_numbers("price of $1,600", "price of $1,600") == []
+        assert ex.gate_claim_numbers("price of $1,600", "price of 1,600") != []
+
+    def test_known_unit_still_needs_the_pair(self):
+        assert ex.gate_claim_numbers("12 miles away", "12 meters away") != []
+
+
+class TestSourceStatedUnits:
+    TEXT = "Plants sit 1600 widgets from the coast."
+    QUOTE = "Many plants sit 1,600 Widgets from the coast, the blog says."
+
+    def test_unknown_unit_rejected_by_default(self):
+        assert any("unknown unit" in e for e in
+                   ex.gate_claim_numbers("sites 1600 widgets away", "sites 1600 widgets away"))
+
+    def test_unknown_prose_unit_accepted_when_pair_in_source(self):
+        assert ex.gate_claim_numbers("sites 1600 widgets away", "sites 1,600 widgets away",
+                                     source_units=True) == []
+
+    def test_case_and_whitespace_insensitive(self):
+        assert ex.gate_claim_numbers(self.TEXT, self.QUOTE, source_units=True) == []
+        assert ex.gate_claim_numbers("sites 1600  widgets away", "SITES 1600 \n Widgets away",
+                                     source_units=True) == []
+
+    def test_pair_must_be_in_source_even_for_prose_unit(self):
+        errs = ex.gate_claim_numbers("1600 widgets", "1600 gadgets", source_units=True)
+        assert any("1600" in e for e in errs)
+        assert ex.gate_claim_numbers("1500 widgets", "1600 widgets", source_units=True) != []
+
+    def test_acronym_units_are_never_accepted_on_the_sources_say_so(self):
+        assert ex.gate_claim_numbers("EC peaked at 425 EC", "EC peaking at 425 EC",
+                                     source_units=True) != []
+
+    def test_substring_and_in_word_loopholes_stay_closed(self):
+        assert ex.gate_claim_numbers("5 widget", "5 widgets", source_units=True) != []
+        assert ex.gate_claim_numbers("2 widgets", "H2 widgets", source_units=True) != []
+
+    def test_the_1600_meters_case_from_the_east_asia_post(self):
+        quote = "Ports within 1600 meters of the rail hub cut handling time."
+        text = "Handling time falls for ports within 1600 meters of the rail hub."
+        assert ex.gate_claim_numbers(text, quote) == []          # meters is now known
+        assert ex.gate_claim_numbers(text.replace("meters", "paces"),
+                                     quote.replace("meters", "paces"), source_units=True) == []
+
+    def test_validate_plan_accepts_source_stated_unit(self):
+        plan = _plan()
+        canon = CANONICAL + " Ports sit 1600 paces from the hub."
+        plan["steps"][0]["claims"][0].update(
+            text="Ports sit 1600 paces from the hub.", kind="blog_stated",
+            quote="Ports sit 1600 paces from the hub.")
+        errs = ex.validate_plan(plan, canon, BRAND)
+        assert not any("unknown unit" in e for e in errs), errs
+
+
 class TestValidatePlan:
     def test_valid_plan_has_no_errors(self):
         assert ex.validate_plan(_plan(), CANONICAL, BRAND) == []
