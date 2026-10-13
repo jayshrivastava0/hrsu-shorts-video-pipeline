@@ -80,7 +80,7 @@ def _read(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def build_package(run_dir: Path | str, blog_url: str, privacy: str):
+def build_package(run_dir: Path | str, blog_url: str, privacy: str, thumbnail_path: Optional[Path | str] = None):
     from video_agent.config import YOUTUBE_CATEGORY_ID, YOUTUBE_DESC_MAX, YOUTUBE_TITLE_MAX
     from video_agent.harness.manifest import PublishPackage
 
@@ -100,7 +100,8 @@ def build_package(run_dir: Path | str, blog_url: str, privacy: str):
         if post.get(key):
             tags.append(str(post[key]).replace("_", " "))
     return PublishPackage(title=title, description=description, tags=tags,
-                          category_id=YOUTUBE_CATEGORY_ID, privacy_status=privacy)
+                          category_id=YOUTUBE_CATEGORY_ID, privacy_status=privacy,
+                          thumbnail_path=str(thumbnail_path) if thumbnail_path else None)
 
 
 def read_privacy(service, video_id: str) -> Optional[str]:
@@ -115,8 +116,14 @@ def publish_video(run_dir: Path | str, video_path: Path | str, blog_url: str, *,
                   service_factory: Optional[Callable] = None) -> dict[str, Any]:
     """Upload and verify. Returns {video_id, url, privacy_requested, privacy_actual}."""
     privacy = get_privacy()
-    package = build_package(run_dir, blog_url, privacy)
     run = Path(run_dir)
+    thumb = None
+    if not dry_run:
+        from scheduler.thumbnail import make_thumbnail
+        thumb = make_thumbnail(video_path, run / "thumbnail.jpg")
+        if thumb is None:
+            logger.warning("thumbnail generation failed; uploading with YouTube's auto thumbnail")
+    package = build_package(run_dir, blog_url, privacy, thumb)
     if dry_run:
         return {"video_id": None, "url": None, "privacy_requested": privacy,
                 "privacy_actual": None, "title": package.title}

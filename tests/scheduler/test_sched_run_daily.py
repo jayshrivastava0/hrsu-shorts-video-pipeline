@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import json
 from types import SimpleNamespace
 
@@ -21,7 +22,7 @@ class Env:
         self.calls = {"text": 0, "director": 0, "gate": 0, "publish": 0, "discover": 0}
         self.text_mode, self.director_mode, self.gate_ok = text, director, gate_ok
         self.publish_priv, self.auth_error = publish_priv, auth_error
-        self.today = "2026-10-12"
+        self.today = datetime.now().date().isoformat()   # published_at comes from the real clock
         self.published = []
         self.deps = run_daily.Deps(
             discover=self._discover, text=self._text, director=self._director, gate=self._gate,
@@ -108,7 +109,7 @@ def test_new_post_published_end_to_end(tmp_path):
     e = env.state().get("https://hrsuindore.com/blog/brand-new/")
     assert e["status"] == "published" and e["video_id"] == "V1" and e["privacy_actual"] == "public"
     assert e["director"] == "claude"
-    assert (tmp_path / "runs" / "2026-10-12.log").exists()
+    assert (tmp_path / "runs" / f"{env.today}.log").exists()
 
 
 def test_held_never_directs(tmp_path):
@@ -195,7 +196,7 @@ def test_daily_upload_cap(tmp_path):
     assert len(env.published) == 1
     env.run()
     assert len(env.published) == 1                                 # same day
-    env.today = "2026-10-13"
+    env.today = (datetime.now().date() + timedelta(days=1)).isoformat()
     env.run()
     assert len(env.published) == 2
 
@@ -215,7 +216,7 @@ def test_only_url_without_state_and_force_published_skipped(tmp_path):
     url = "https://hrsuindore.com/blog/solo/"
     assert env.run("--only-url", url) == 0
     assert env.published == [url] and env.calls["discover"] == 0
-    env.today = "2026-10-14"
+    env.today = (datetime.now().date() + timedelta(days=2)).isoformat()
     env.run("--only-url", url)
     assert env.published == [url]                                   # already published
 
