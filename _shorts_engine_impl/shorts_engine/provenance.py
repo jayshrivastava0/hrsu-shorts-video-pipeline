@@ -226,3 +226,26 @@ def sanitize_transitions(plan: dict) -> list[dict]:
                             "novel": sorted(novel)})
             step["transition"] = ""
     return cleared
+
+
+def remove_sentences(beats: list[dict], edits: list[dict]) -> list[dict] | None:
+    """Copy of `beats` with each edit's quoted sentence deleted from its beat's narration
+    (None when there is nothing to delete). A beat left empty is not allowed."""
+    import copy
+    if not edits:
+        return None
+    out = copy.deepcopy(beats)
+    removed = 0
+    for e in edits:
+        key = normalize_for_match(e["sentence"]).rstrip(".!? ")
+        for b in out:
+            if b["beat"] != e["beat"]:
+                continue
+            kept = [s for s in split_sentences(b.get("narration", ""))
+                    if key not in normalize_for_match(s)]
+            if len(kept) < len(split_sentences(b.get("narration", ""))):
+                removed += 1
+                b["narration"] = " ".join(kept)
+    if not removed or any(not b.get("narration", "").strip() for b in out):
+        return None
+    return out

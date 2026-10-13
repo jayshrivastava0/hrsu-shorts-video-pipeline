@@ -833,3 +833,29 @@ class TestHeldDraft:
 
 def test_diagram_labels_never_carry_digits():
     assert script_stage._labels(["Node 1", "Main supplier", "Hub 2", "Buyer"]) == ["Main supplier", "Buyer"]
+
+
+class TestSurgeryAfterRewrites:
+    def test_stubborn_quoted_sentence_is_cut_and_rescored(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        sent = "Sandy soil drains nutrients quickly."
+        bad["steps"][1]["narration"] = f"{sent} Dry sand also loses water fast. {' '.join(['word'] * 20)}."
+        bad["steps"][1]["narration"] = bad["steps"][1]["narration"]
+        crit = dict(LOW_CRITIQUE, faithfulness_score=3,
+                    edits=[{"beat": "step_2", "offending_sentence": "Dry sand also loses water fast.",
+                            "issue": "unsupported", "replacement_claim_id": ""}])
+        router = _install(monkeypatch, [bad], [crit, crit, crit, crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        out = json.loads((ctx.workspace / "script.json").read_text(encoding="utf-8"))
+        step2 = next(b for b in out["beats"] if b["beat"] == "step_2")["narration"]
+        assert "Dry sand" not in step2 and sent in step2
+        assert router.roles.count("critic") == script_stage.config.SCRIPT_MAX_REWRITES + 2
+        assert out["critique"] == GOOD_CRITIQUE
+
+    def test_no_edits_means_no_surgery_and_still_holds(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
+        with pytest.raises(HoldForReview):
+            script_stage.run(ctx)
+        assert router.roles.count("critic") == config.SCRIPT_MAX_REWRITES + 1

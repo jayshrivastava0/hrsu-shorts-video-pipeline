@@ -143,3 +143,23 @@ class TestSanitizeTransitions:
         plan["steps"][1]["transition"] = "With costs tied to market demand, look at integration."
         assert pv.sanitize_transitions(plan) == []
         assert plan["steps"][1]["transition"].startswith("With costs")
+
+
+class TestRemoveSentences:
+    def test_quoted_sentence_is_cut_and_others_kept(self):
+        beats = _beats("Costs fluctuate with demand. Traditional procurement often involves the Spot Market.")
+        edits = [{"beat": "step_1", "sentence": "Traditional procurement often involves the Spot Market.",
+                  "issue": "x", "claim_id": None, "claim_text": None}]
+        out = pv.remove_sentences(beats, edits)
+        assert out[1]["narration"] == "Costs fluctuate with demand."
+        assert "Spot Market" in beats[1]["narration"]            # input untouched
+
+    def test_nothing_to_cut_or_would_empty_a_beat_returns_none(self):
+        beats = _beats("Only sentence here.")
+        assert pv.remove_sentences(beats, []) is None
+        e = [{"beat": "step_1", "sentence": "Only sentence here.", "issue": "x",
+              "claim_id": None, "claim_text": None}]
+        assert pv.remove_sentences(beats, e) is None
+        e2 = [{"beat": "step_1", "sentence": "Absent one.", "issue": "x", "claim_id": None,
+               "claim_text": None}]
+        assert pv.remove_sentences(beats, e2) is None

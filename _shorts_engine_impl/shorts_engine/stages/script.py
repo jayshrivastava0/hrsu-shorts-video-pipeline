@@ -879,6 +879,7 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
     beats, attempts = _write_until_gates_pass(plan, post_meta, factsheet, brand, extra,
                                               local_only)
     rewrites = 0
+    surgery_done = False
     forbidden: list[str] = []
     while True:
         critique = text_llm.generate_schema_json(
@@ -891,6 +892,19 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
                      critique["flow_score"])
         if lowest >= _CRITIQUE_PASS_THRESHOLD:
             break
+        if rewrites >= config.SCRIPT_MAX_REWRITES and not surgery_done:
+            # Last resort before holding: the writer keeps re-adding a sentence the critic
+            # quoted. Deleting a quoted unsupported sentence can only raise faithfulness, so
+            # cut exactly those sentences, re-run every gate, and let the critic judge once more.
+            edits = provenance.resolve_critic_edits(critique.get("edits"), beats, plan)
+            cut = provenance.remove_sentences(beats, edits)
+            if cut is not None and not run_gates(cut, factsheet, brand, extra_by_beat=extra,
+                                                 terms_by_beat=terms_by_step_beat(plan),
+                                                 plan=plan):
+                logger.info(f"critique still below bar: removing {len(edits)} quoted "
+                            f"sentence(s) and re-scoring")
+                beats, surgery_done = cut, True
+                continue
         if rewrites >= config.SCRIPT_MAX_REWRITES:
             hold = HoldForReview([
                 f"critique below bar after {rewrites} rewrite(s): {critique['revise_notes']}"])
