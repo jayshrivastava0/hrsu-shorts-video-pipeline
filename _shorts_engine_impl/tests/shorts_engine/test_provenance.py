@@ -124,3 +124,8 @@ class TestReappeared:
         old = "Traditional procurement often involves the Spot Market."
         assert pv.reappeared([old], _beats("Traditional procurement often involves the spot market!"))
         assert pv.reappeared([old], _beats("Costs fluctuate with demand.")) == []
+
+
+def test_brand_name_used_for_attribution_is_not_an_invented_entity():
+    b = _beats("The argument HRSU makes is that costs fluctuate with market demand and logistics.")
+    assert pv.check_provenance(b, _plan(), BRAND) == []

@@ -33,7 +33,7 @@ from shorts_engine.brand import BrandFacts, load_brand_facts
 from shorts_engine.errors import EngineError, HoldForReview
 from shorts_engine.llm import text_llm
 from shorts_engine.stages.facts import normalize_for_match
-from shorts_engine.stages.verify_claims import MIN_QUOTE_WORDS
+from shorts_engine.stages.verify_claims import MIN_QUOTE_WORDS, effective_stance
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +204,39 @@ def gate_cta_reason(beats: list[dict], brand: BrandFacts) -> list[str]:
     return []
 
 
+# ── gate_attribution: the post's analysis is presented AS analysis ──────────
+_ATTRIBUTION_RE = re.compile(
+    r"\b(?:hrsu(?:'s)?|the (?:article|post|author|argument|analysis|case)|argues?|argument|"
+    r"analysis|according to|in (?:its|the article's|hrsu's) view|makes the case|contends?|"
+    r"frames?|the way (?:hrsu|the article)|(?:article|post) (?:says|sets out|lays out|"
+    r"proposes|suggests|recommends))\b", re.IGNORECASE)
+
+
+def is_strategic(plan: dict | None) -> bool:
+    return bool(plan) and plan.get("post_kind") == "strategic"
+
+
+def gate_attribution(beats: list[dict], plan: dict) -> list[str]:
+    """Strategic plans: a step beat that narrates any ANALYSIS claim (HRSU's / the post's
+    interpretation, risk framing or recommendation) must say whose argument it is ("The
+    argument HRSU makes is ...", "HRSU's analysis points to ..."). Attribution, not
+    hedging: the claim itself is still stated plainly."""
+    errs: list[str] = []
+    steps = {f"step_{i}": s for i, s in enumerate(plan.get("steps", []), start=1)}
+    for b in beats:
+        step = steps.get(b.get("beat"))
+        if step is None:
+            continue
+        analysis = [c for c in explanation.supported_claims(step)
+                    if effective_stance(c) == "analysis"]
+        if analysis and not _ATTRIBUTION_RE.search(b.get("narration", "")):
+            errs.append(f"attribution[{b['beat']}]: this step narrates the post's own analysis "
+                        f"({analysis[0]['text']!r}) -- present it as HRSU's / the article's "
+                        f"argument, e.g. 'The argument HRSU makes is ...' or 'HRSU's analysis "
+                        f"points to ...', not as established fact")
+    return errs
+
+
 # ── gate_flow: the script explains, in order ────────────────────────────────
 _FLOW_WORD_RE = re.compile(r"[A-Za-z]+")
 _FLOW_STOPWORDS = frozenset({
@@ -325,7 +358,8 @@ def run_gates(beats: list[dict], factsheet: dict, brand: BrandFacts,
             + gate_card_text(beats)
             + gate_differentiator(beats, brand)
             + gate_cta_reason(beats, brand)
-            + (gate_flow(beats, plan) if plan is not None else []))
+            + (gate_flow(beats, plan) if plan is not None else [])
+            + (gate_attribution(beats, plan) if is_strategic(plan) else []))
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
@@ -403,6 +437,45 @@ _WRITER_SYSTEM = (
     + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and must not repeat the narration. "
     "Length follows the explanation: there is a 30 second floor and no maximum, and you must "
     "never pad with filler."
+)
+
+_WRITER_SYSTEM_STRATEGIC = (
+    "You write the narration for a short explainer video aimed at EXECUTIVES and senior "
+    "procurement decision makers who buy industrial chemicals. Voice: plain, calm, direct, "
+    "zero hype and zero jargon: define every business or trade term the first time it is "
+    "used, using ONLY the definitions provided. You are given a VERIFIED plan built from a "
+    "strategic article: narrate it step by step, in order, as a decision story -- the "
+    "situation the buyer is in, the tension or risk in it, the framework or decision "
+    "criteria, what it means for the viewer's sourcing decision. Open with a hook that poses "
+    "the plan's question. For every step: (1) connect it to the BUILDS ON claims in your own "
+    "words, guided by its OPENING TRANSITION, adding no cause, number or fact; (2) say WHY "
+    "this point matters to someone making the decision and explain the logic (the "
+    "MECHANISM) as cause and effect; (3) then the supporting detail. Claims are tagged: "
+    "CHECKABLE FACT = state it plainly, exactly as given; ANALYSIS = the article's / HRSU's "
+    "own interpretation or recommendation -- you MUST attribute it, e.g. 'The argument HRSU "
+    "makes is ...' or 'HRSU's analysis points to ...' (this is attribution, not hedging: "
+    "then state the claim plainly, with no 'might' or 'could'); FRAMEWORK = a decision "
+    "criterion: present it as a test the buyer can apply. Never present an ANALYSIS claim "
+    "as settled fact and never add a fact, number, name, place, date or unit that is not in "
+    "the verified claims. The last item is the CTA: answer the question in one or two "
+    "sentences using only claims you already narrated, then state the ONE specific HRSU "
+    "reason given (in its own words) and tie it to the decision the video explained, then "
+    "the domain. The CTA may use only the cited differentiator text, the brand CTA lines "
+    "and the domain; never invent claims about purity, QC, certifications, delivery, "
+    "pricing or capabilities. " + _NO_NUMBERS_HOOK_CTA + " card_text is at most 7 words and "
+    "must not repeat the narration. Length follows the explanation: there is a 30 second "
+    "floor and no maximum, and you must never pad with filler."
+)
+
+_CRITIC_SYSTEM_STRATEGIC_EXTRA = (
+    " This is an executive-audience STRATEGIC script and each verified claim is tagged "
+    "CHECKABLE FACT, ANALYSIS or FRAMEWORK. faithfulness_score: an ANALYSIS claim narrated "
+    "as established fact (no attribution to HRSU / the article's argument) scores below 5; "
+    "a CHECKABLE FACT stated differently from its verified wording, or any fact not listed, "
+    "scores below 5. actionable_score: could a decision maker use this to frame their "
+    "sourcing decision? coherence_score also asks: is every business term defined, and does "
+    "each step say why it matters to the decision? hrsu_reason_score: the CTA must state "
+    "the one approved HRSU reason and tie it to the decision."
 )
 
 _CRITIC_SYSTEM = (
@@ -532,13 +605,20 @@ _MECH_LABEL = ("WHY / HOW (the mechanism - explain THIS claim as cause and effec
 _FACT_LABEL = "SUPPORTING FACTS:"
 
 
-def _supported_by_role(step: dict) -> dict[str, list[str]]:
+_STANCE_TAG = {"checkable": "CHECKABLE FACT", "analysis": "ANALYSIS -- attribute to HRSU's "
+               "argument", "framework": "FRAMEWORK"}
+
+
+def _supported_by_role(step: dict, tagged: bool = False) -> dict[str, list[str]]:
     """{"mechanism": [...], "fact": [...]} of "  - claim text" lines for the step's
     supported claims. Any role other than "mechanism" (none, or a legacy stored "link")
-    counts as a supporting fact."""
+    counts as a supporting fact. `tagged` (strategic plans) prefixes each line with the
+    claim's stance tag."""
     out: dict[str, list[str]] = {"mechanism": [], "fact": []}
     for c in explanation.supported_claims(step):
-        out["mechanism" if c.get("role") == "mechanism" else "fact"].append(f"  - {c['text']}")
+        tag = _STANCE_TAG.get(effective_stance(c) or "") if tagged else None
+        out["mechanism" if c.get("role") == "mechanism" else "fact"].append(
+            f"  - [{tag}] {c['text']}" if tag else f"  - {c['text']}")
     return out
 
 
@@ -560,6 +640,10 @@ def _transition(step: dict) -> str:
     return t.strip() if isinstance(t, str) else ""
 
 
+def _banned_words(brand: BrandFacts) -> list[str]:
+    return list(dict.fromkeys(list(config.FEAR_FILLER_PATTERNS) + list(brand.banned_claims)))
+
+
 def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
                    gate_errors: list[str] | None = None, revise_notes: str = "",
                    previous_beats: list[dict] | None = None,
@@ -571,7 +655,7 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
     # the writer may not add any cause, condition, number or fact through it).
     blocks = []
     for pos, step in enumerate(plan["steps"]):
-        by_role = _supported_by_role(step)
+        by_role = _supported_by_role(step, tagged=is_strategic(plan))
         builds = [f"  - {c['text']}" for c in _builds_on_claims(plan, pos)]
         if pos == 0:
             builds = ["  - (none: this first step follows directly from the QUESTION above; "
@@ -604,7 +688,9 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
         f"Return a hook, exactly one narration per step using these step_ids in this order "
         f"{[s['step_id'] for s in plan['steps']]}, and a cta. Total narration must reach at "
         f"least {round(config.TOTAL_MIN_S * config.WORDS_PER_SECOND)} words (no maximum), "
-        f"through explanation, never filler. {_NO_NUMBERS_HOOK_CTA}\n\n"
+        f"through explanation, never filler. {_NO_NUMBERS_HOOK_CTA}\n"
+        f"Never use these words or phrases, even when a verified claim does -- restate the "
+        f"idea in neutral words: {', '.join(sorted(_banned_words(brand)))}.\n\n"
         f"Write the script now as JSON."
     )
     if gate_errors:
@@ -623,8 +709,11 @@ def _writer_prompt(plan: dict, post_meta: dict, brand: BrandFacts, *,
 
 
 def _critic_prompt(plan: dict, beats: list[dict], brand: BrandFacts) -> str:
-    claims = "\n".join(f"- [{c['id']}] {c['text']}" for s in plan["steps"]
-                       for c in s["claims"] if c.get("verdict") == "supported")
+    strategic = is_strategic(plan)
+    claims = "\n".join(
+        f"- [{c['id']}]" + (f" ({_STANCE_TAG.get(effective_stance(c) or '', '')})"
+                           if strategic and effective_stance(c) else "") + f" {c['text']}"
+        for s in plan["steps"] for c in s["claims"] if c.get("verdict") == "supported")
     diff = next((d for d in brand.differentiators
                  if d["id"] == plan["payoff"]["differentiator_id"]), None)
     approved = ([f"- {diff['text']}"] if diff else []) \
@@ -677,7 +766,8 @@ def _write_until_gates_pass(plan, post_meta, factsheet, brand, extra, local_only
             _writer_prompt(plan, post_meta, brand, gate_errors=errors or None,
                            revise_notes=revise_notes, previous_beats=previous_beats,
                            edit_instructions=(edit_instructions or []) + soft or None),
-            _WRITER_SYSTEM, SCRIPT_SCHEMA, local_only=local_only, role="writer")
+            (_WRITER_SYSTEM_STRATEGIC if is_strategic(plan) else _WRITER_SYSTEM),
+            SCRIPT_SCHEMA, local_only=local_only, role="writer")
         beats, errors = build_beats(doc, plan, factsheet, brand)
         if not errors:
             errors = run_gates(beats, factsheet, brand, extra_by_beat=extra,
@@ -757,7 +847,9 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
     forbidden: list[str] = []
     while True:
         critique = text_llm.generate_schema_json(
-            _critic_prompt(plan, beats, brand), _CRITIC_SYSTEM, CRITIQUE_SCHEMA,
+            _critic_prompt(plan, beats, brand),
+            _CRITIC_SYSTEM + (_CRITIC_SYSTEM_STRATEGIC_EXTRA if is_strategic(plan) else ""),
+            CRITIQUE_SCHEMA,
             local_only=local_only, role="critic")
         lowest = min(critique["actionable_score"], critique["coherence_score"],
                      critique["hrsu_reason_score"], critique["faithfulness_score"],

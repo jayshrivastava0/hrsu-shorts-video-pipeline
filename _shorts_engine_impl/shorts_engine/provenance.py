@@ -71,13 +71,14 @@ def _entities(sentence: str) -> list[str]:
     return out
 
 
-def _step_pool(plan: dict, pos: int) -> str:
+def _step_pool(plan: dict, pos: int, brand) -> str:
     from shorts_engine.stages import script as script_stage   # lazy: script imports us
     step = plan["steps"][pos]
     claims = explanation.supported_claims(step) + script_stage._builds_on_claims(plan, pos)
     parts = [c.get("text", "") for c in claims]
     parts += [f"{t.get('term', '')} {t.get('definition', '')}" for t in step.get("terms", [])]
     parts += [plan.get("question", ""), step.get("transition") or ""]
+    parts += [brand.company, brand.domain]      # attribution cues ("HRSU's analysis ...")
     return " ".join(parts)
 
 
@@ -112,7 +113,7 @@ def check_provenance(beats: list[dict], plan: dict, brand) -> list[dict]:
     findings: list[dict] = []
     for b in beats:
         name = b.get("beat")
-        pool = _step_pool(plan, step_beats[name]) if name in step_beats else plan_pool
+        pool = _step_pool(plan, step_beats[name], brand) if name in step_beats else plan_pool
         pool_stems = _content_stems(pool)
         pool_low = normalize_for_match(pool)
         for sent in split_sentences(b.get("narration", "")):
