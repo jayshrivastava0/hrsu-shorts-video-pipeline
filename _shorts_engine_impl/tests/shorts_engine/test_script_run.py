@@ -818,3 +818,14 @@ class TestCtaReasonGate:
         prompt = script_stage._critic_prompt(plan, beats, load_brand_facts())
         assert "- [c2] Sandy soil drains nutrients quickly." in prompt
         assert "ONLY an approved brand statement" in script_stage._CRITIC_SYSTEM
+
+
+class TestHeldDraft:
+    def test_critic_hold_keeps_the_last_draft_and_critique_for_review(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
+        with pytest.raises(HoldForReview):
+            script_stage.run(ctx)
+        draft = json.loads((ctx.workspace / "script_held_draft.json").read_text(encoding="utf-8"))
+        assert draft["critique"]["coherence_score"] == 3 and draft["beats"][0]["beat"] == "hook"
+        assert not (ctx.workspace / "script.json").exists()

@@ -845,6 +845,10 @@ def run(ctx) -> dict[str, str]:
     except HoldForReview as hold:
         # Audit trail: record why on the plan; status stays "verified" so SCRIPT can re-run.
         plan["hold_reasons"] = list(hold.reasons)
+        draft = getattr(hold, "draft", None)
+        if draft:       # the best draft, for a human deciding whether to release it
+            (ws / "script_held_draft.json").write_text(
+                json.dumps(draft, indent=2, ensure_ascii=False), encoding="utf-8")
         (ws / "explanation_plan.json").write_text(
             json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
         raise
@@ -887,8 +891,10 @@ def _write_and_critique(plan, post_meta, factsheet, brand, extra, local_only):
         if lowest >= _CRITIQUE_PASS_THRESHOLD:
             break
         if rewrites >= config.SCRIPT_MAX_REWRITES:
-            raise HoldForReview([
+            hold = HoldForReview([
                 f"critique below bar after {rewrites} rewrite(s): {critique['revise_notes']}"])
+            hold.draft = {"beats": beats, "critique": critique, "rewrites": rewrites}
+            raise hold
         rewrites += 1
         logger.info(f"critique below bar ({lowest}), rewrite {rewrites}: "
                     f"{critique['revise_notes']}")
