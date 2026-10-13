@@ -229,11 +229,31 @@ def gate_attribution(beats: list[dict], plan: dict) -> list[str]:
             continue
         analysis = [c for c in explanation.supported_claims(step)
                     if effective_stance(c) == "analysis"]
-        if analysis and not _ATTRIBUTION_RE.search(b.get("narration", "")):
+        if not analysis:
+            continue
+        narration = b.get("narration", "")
+        if not _ATTRIBUTION_RE.search(narration):
             errs.append(f"attribution[{b['beat']}]: this step narrates the post's own analysis "
                         f"({analysis[0]['text']!r}) -- present it as HRSU's / the article's "
                         f"argument, e.g. 'The argument HRSU makes is ...' or 'HRSU's analysis "
                         f"points to ...', not as established fact")
+            continue
+        # every analysis claim: the sentence that states it (or the one before it) attributes
+        sents = provenance.split_sentences(narration)
+        for c in analysis:
+            want = provenance._content_stems(c.get("text", ""))
+            best, best_n = None, 0
+            for i, sent in enumerate(sents):
+                n = len(want & provenance._content_stems(sent))
+                if n > best_n:
+                    best, best_n = i, n
+            if best is None or best_n < max(2, len(want) * 0.4):
+                continue
+            window = " ".join(sents[max(0, best - 1):best + 1])
+            if not _ATTRIBUTION_RE.search(window):
+                errs.append(f"attribution[{b['beat']}]: the sentence {sents[best]!r} states the "
+                            f"post's analysis as fact -- attribute it ('The argument HRSU "
+                            f"makes is ...', 'HRSU's analysis points to ...')")
     return errs
 
 
@@ -457,8 +477,10 @@ _WRITER_SYSTEM_STRATEGIC = (
     "then state the claim plainly, with no 'might' or 'could'); FRAMEWORK = a decision "
     "criterion: present it as a test the buyer can apply. Never present an ANALYSIS claim "
     "as settled fact and never add a fact, number, name, place, date or unit that is not in "
-    "the verified claims. The last item is the CTA: answer the question in one or two "
-    "sentences using only claims you already narrated, then state the ONE specific HRSU "
+    "the verified claims. Attribute EVERY sentence that states an ANALYSIS claim, not just "
+    "one per step. The last item is the CTA: its first sentence must begin 'The argument "
+    "HRSU makes is' and restate, almost word for word, ONE analysis claim you already "
+    "narrated (no new recommendation); then state the ONE specific HRSU "
     "reason given (in its own words) and tie it to the decision the video explained, then "
     "the domain. The CTA may use only the cited differentiator text, the brand CTA lines "
     "and the domain; never invent claims about purity, QC, certifications, delivery, "

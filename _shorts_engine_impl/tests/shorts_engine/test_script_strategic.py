@@ -119,3 +119,32 @@ class TestStrategicPrompts:
         router = _install(monkeypatch, [_doc()], [GOOD_CRITIQUE])
         script_stage.run(ctx)
         assert "catastrophic" in router.writer_prompts[0]
+
+
+class TestPerClaimAttribution:
+    def test_second_unattributed_analysis_sentence_in_a_step_is_caught(self):
+        plan = _strategic_plan()
+        plan["steps"][1]["claims"].append({
+            "id": "c2b", "text": "Frequent resupply keeps margins steady.", "kind": "reasoning",
+            "role": "fact", "stance": "analysis", "verdict": "supported", "needs_number": False,
+            "support": {"type": None, "quote": "", "url": None}})
+        d = _attributed_doc()
+        d["steps"][1]["narration"] = (
+            f"The argument HRSU makes is that sandy soil drains nutrients quickly. "
+            f"Here is a plain bridge sentence. Frequent resupply keeps margins steady. {WORDS}.")
+        beats, _ = script_stage.build_beats(d, plan, FACTSHEET, load_brand_facts())
+        errs = script_stage.gate_attribution(beats, plan)
+        assert len(errs) == 1 and "Frequent resupply" in errs[0]
+
+    def test_attribution_in_the_previous_sentence_covers_the_next(self):
+        plan = _strategic_plan()
+        d = _attributed_doc()
+        d["steps"][1]["narration"] = (
+            f"HRSU's analysis points to a simple reason. Sandy soil drains nutrients quickly. "
+            f"{WORDS}.")
+        beats, _ = script_stage.build_beats(d, plan, FACTSHEET, load_brand_facts())
+        assert script_stage.gate_attribution(beats, plan) == []
+
+    def test_cta_instruction_is_in_the_strategic_system_prompt(self):
+        low = script_stage._WRITER_SYSTEM_STRATEGIC
+        assert "begin 'The argument HRSU makes is'" in low and "EVERY sentence" in low
