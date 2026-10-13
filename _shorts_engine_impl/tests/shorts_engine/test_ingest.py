@@ -503,3 +503,19 @@ class TestRunFunction:
                 assert "marker" in citation
                 assert "url" in citation
                 assert "kind" in citation
+
+
+class TestDecodePage:
+    class R:
+        def __init__(self, content, text):
+            self.content, self.text = content, text
+
+    def test_utf8_bytes_win_over_a_latin1_guess(self):
+        from shorts_engine.stages.ingest import decode_page
+        raw = "melts at 561°C".encode("utf-8")
+        assert decode_page(self.R(raw, raw.decode("latin-1"))) == "melts at 561°C"
+
+    def test_non_utf8_bytes_fall_back_to_requests_text(self):
+        from shorts_engine.stages.ingest import decode_page
+        raw = "caf\xe9".encode("latin-1")
+        assert decode_page(self.R(raw, "café")) == "café"

@@ -320,6 +320,19 @@ def _extract_and_clean_body(container: Any) -> str:
     return inner_html
 
 
+def decode_page(response) -> str:
+    """Decode a fetched page as UTF-8 when the bytes are valid UTF-8 (requests falls back to
+    latin-1 for a text/html response with no charset, turning "°C" into "Â°C" mojibake that
+    no quote or unit can then match); otherwise whatever requests decided."""
+    raw = getattr(response, "content", None)
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            return bytes(raw).decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    return response.text
+
+
 def _extract_canonical_text(body_html: str) -> str:
     """Extract plain text from body HTML."""
     soup = BeautifulSoup(body_html, "html.parser")
@@ -502,7 +515,7 @@ def run(ctx: Any) -> dict[str, str]:
         logger.debug(f"Fetching URL: {url}")
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
-        page_html = response.text
+        page_html = decode_page(response)
 
     # ── Isolate the post ───────────────────────────────────────────────────
     isolated = isolate_post(page_html, ctx.manifest.blog_url)
