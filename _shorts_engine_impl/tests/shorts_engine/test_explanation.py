@@ -508,3 +508,15 @@ class TestStrategicSchemaAndStances:
         assert ex.finalize_claim(dict(raw, stance="analysis"))["stance"] == "analysis"
         assert ex.to_plan_document(_plan(), 1, "strategic")["post_kind"] == "strategic"
         assert ex.to_plan_document(_plan(), 1)["post_kind"] == "technical"
+
+
+class TestUnitAliases:
+    def test_spellings_of_one_unit_match_each_other(self):
+        assert ex.gate_claim_numbers("1600 m", "1600 meters") == []
+        assert ex.gate_claim_numbers("1600 meters", "1600 m") == []
+        assert ex.gate_claim_numbers("3 container", "3 containers") == []
+
+    def test_different_units_never_alias(self):
+        assert ex.gate_claim_numbers("5 m", "5 miles") != []
+        assert ex.gate_claim_numbers("5 g", "5 kg") != []
+        assert ex.gate_claim_numbers("5 m", "5 km") != []

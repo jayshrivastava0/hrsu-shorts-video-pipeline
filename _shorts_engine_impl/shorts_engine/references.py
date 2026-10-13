@@ -151,10 +151,17 @@ def _norm_canon(text: str) -> str:
 def markers_for_quote(quote: str, clean: str, marks: list[tuple[int, int]]) -> list[int] | None:
     """Markers attached to the quoted sentence(s), in order: those inside the span, plus
     any marker directly after it. None when the quote cannot be located."""
-    pat = _quote_pattern(_norm_canon(quote))
-    if pat is None:
-        return None
-    m = pat.search(_norm_canon(clean))
+    haystack = _norm_canon(clean)
+    m = None
+    # the planner copies sentences with their citation digits ("...directions1."), while
+    # `clean` has them stripped: try the quote as written, then without marker digits
+    for q in (quote, _MARKER_RE.sub("", quote)):
+        pat = _quote_pattern(_norm_canon(q))
+        if pat is None:
+            return None
+        m = pat.search(haystack)
+        if m is not None:
+            break
     if m is None:
         return None
     start, end = m.start(), m.end()

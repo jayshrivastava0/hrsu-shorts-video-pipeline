@@ -288,3 +288,11 @@ class TestOutputs:
         R.write_outputs(tmp_path)
         out = json.loads((tmp_path / "references.json").read_text(encoding="utf-8"))
         assert out["grade"]["verdict"] == "thin"
+
+
+def test_markers_for_quote_finds_a_quote_copied_with_its_citation_digit():
+    from shorts_engine import references as r
+    canonical = "Trade deals cut tariffs for buyers3. Next sentence follows here."
+    clean, marks = r.strip_markers(canonical, {3})
+    assert r.markers_for_quote("Trade deals cut tariffs for buyers3.", clean, marks) == [3]
+    assert r.markers_for_quote("Trade deals cut tariffs for buyers.", clean, marks) == [3]

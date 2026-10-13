@@ -202,11 +202,24 @@ def standalone_numbers(text: str) -> set[str]:
     return {t["num"] for t in _tokens(normalize_for_match(text or ""))}
 
 
+# Spellings of ONE unit are interchangeable ("1600 meters" == "1600 m"); different units
+# never are ("m" != "miles", "g" != "kg").
+_UNIT_ALIASES = {
+    "percent": "%", "meter": "m", "meters": "m", "metre": "m", "metres": "m",
+    "kilometer": "km", "kilometers": "km", "kilometre": "km", "kilometres": "km",
+    "mile": "miles", "foot": "ft", "feet": "ft", "tonne": "tonnes", "ton": "tons",
+    "day": "days", "week": "weeks", "month": "months", "year": "years", "hour": "hours",
+    "hr": "hours", "container": "containers", "vessel": "vessels", "ship": "ships",
+    "shipment": "shipments", "dollar": "dollars", "euro": "euros", "rupee": "rupees",
+    "quarter": "quarters", "teus": "teu",
+}
+
+
 def _norm_unit(unit: str | None) -> str | None:
     if not unit:
         return None
     unit = unit.lower()
-    return "%" if unit == "percent" else unit
+    return _UNIT_ALIASES.get(unit, unit)
 
 
 def _tokens(text: str) -> list[dict]:

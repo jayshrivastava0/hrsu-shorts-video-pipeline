@@ -25,7 +25,9 @@ import json
 import logging
 from pathlib import Path
 
-from shorts_engine import config, corroboration, explanation
+import re
+
+from shorts_engine import config, corroboration, explanation, references
 from shorts_engine.errors import HoldForReview
 from shorts_engine.llm import text_llm
 from shorts_engine.retrieval import Retriever
@@ -52,6 +54,53 @@ REPAIR_SCHEMA: dict = {
     "required": ["claims"],
     "additionalProperties": False,
 }
+
+STRATEGIC_REPAIR_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"claims": {"type": "array", "items": explanation.STRATEGIC_CLAIM_ITEM_SCHEMA},
+                   "depends_on": {"type": "array", "items": {"type": "string"}},
+                   "transition": {"type": "string"}},
+    "required": ["claims"],
+    "additionalProperties": False,
+}
+
+_STRATEGIC_REPAIR_NOTE = (
+    " This is a STRATEGIC post: every claim also needs a `stance`. A 'checkable' fact (a "
+    "date, named agreement or organisation, tariff, volume, price or percentage) survives "
+    "only if its quote carries the article's own citation number or an authority confirms "
+    "it. If the article only ARGUES something, restate it as an 'analysis' claim in the "
+    "article's own words (blog_stated quote) so the video can present it as the post's "
+    "argument; if it cannot be supported, leave it out. Never turn the article's argument "
+    "into an established fact."
+)
+
+_NAMED_RE = re.compile(r"\b(?:Agreement|Treaty|Accord|Directive|Partnership|Protocol)\b")
+_ACRONYM_RE = re.compile(r"\b[A-Z]{3,}\b")
+_NOT_NAMED_FACTS = frozenset({"CAPEX", "OPEX", "ESG", "THE", "AND"})
+
+
+def looks_checkable(text: str) -> bool:
+    """A claim that carries a number, a named agreement/treaty or an acronym (CPTPP, ECHA)
+    is a checkable FACT whatever the planner called it: the planner cannot launder a
+    figure or a named instrument into 'analysis'."""
+    if explanation.has_number(text):
+        return True
+    if _NAMED_RE.search(text):
+        return True
+    return any(a.upper() not in _NOT_NAMED_FACTS for a in _ACRONYM_RE.findall(text)
+               if not a.isdigit())
+
+
+def effective_stance(claim: dict) -> str | None:
+    """The stance the claim is TREATED as: stored stance, upgraded to 'checkable' when the
+    text itself carries checkable content (see looks_checkable). None = technical track."""
+    st = claim.get("stance")
+    if st is None:
+        return None
+    if st in ("analysis", "framework") and looks_checkable(claim.get("text", "")):
+        return "checkable"
+    return st
+
 
 _VERIFIER_SYSTEM = (
     "You are a strict fact-checker. You get ONE claim and numbered source passages. Answer "
@@ -102,9 +151,54 @@ def _valid_index(idx, n: int) -> bool:
     return isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < n
 
 
+def _citation_ctx(post: dict, canonical: str) -> dict:
+    """Context for the strategic 'checkable' rule: the blog's citation table and the
+    positions of its citation markers in the canonical text."""
+    cites = {c.get("marker"): c for c in (post.get("citations") or [])
+             if c.get("marker") is not None}
+    clean, marks = references.strip_markers(canonical or "", set(cites))
+    return {"cites": cites, "clean": clean, "marks": marks}
+
+
+def _apply_checkable_rule(res: dict, ctx: dict, retriever, step: dict,
+                          local_only: bool) -> dict:
+    """A supported blog_stated 'checkable' claim stays supported only when its quote
+    carries one of the blog's own citations (recorded in support["cited"]) or an
+    authoritative source corroborates it (recorded in claim["corroboration"])."""
+    quote = res["support"].get("quote") or ""
+    ms = references.markers_for_quote(quote, ctx["clean"], ctx["marks"]) or []
+    cited = [{"marker": n, "title": ctx["cites"][n].get("title", ""),
+              "url": ctx["cites"][n].get("url", "")}
+             for n in ms if n in ctx["cites"] and ctx["cites"][n].get("url")]
+    if cited:
+        res["support"] = dict(res["support"], cited=cited)
+        res["reason"] = "verbatim quote carrying the blog's own citation"
+        return res
+    found = corroboration.corroborate_claim(res, retriever, local_only=local_only,
+                                            terms=step.get("terms", []))
+    if found:
+        res["corroboration"] = found
+        res["reason"] = "uncited in the blog but corroborated by an authority"
+        return res
+    return _result(res, "unsupported",
+                   "checkable fact: the blog's quote carries no citation and no authority "
+                   "confirms it")
+
+
 def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str,
-                 retriever, local_only: bool = False) -> dict:
-    """Return a copy of `claim` with `verdict`, `reason` and (if sourced) `support` set."""
+                 retriever, local_only: bool = False, stance_ctx: dict | None = None) -> dict:
+    """Return a copy of `claim` with `verdict`, `reason` and (if sourced) `support` set.
+    `stance_ctx` (strategic plans only, see _citation_ctx) adds the checkable-fact rule."""
+    res = _verify_claim(claim, step=step, premises=premises, canonical=canonical,
+                        retriever=retriever, local_only=local_only)
+    if (stance_ctx is not None and res["verdict"] == "supported"
+            and res["kind"] == "blog_stated" and effective_stance(res) == "checkable"):
+        res = _apply_checkable_rule(res, stance_ctx, retriever, step, local_only)
+    return res
+
+
+def _verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str,
+                  retriever, local_only: bool = False) -> dict:
     kind, text, terms = claim["kind"], claim["text"], step.get("terms", [])
 
     if kind == "blog_stated":
@@ -177,7 +271,8 @@ def _is_premise(claim: dict) -> bool:
     return claim.get("verdict") == "supported" and claim["kind"] != "illustrative"
 
 
-def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = False) -> None:
+def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = False,
+                stance_ctx: dict | None = None) -> None:
     """Verify every not-yet-verified claim, in chain order (mutates `plan`).
 
     Premises are supported non-illustrative claims. Within a step the non-reasoning claims
@@ -196,7 +291,7 @@ def verify_plan(plan: dict, *, canonical: str, retriever, local_only: bool = Fal
             if claims[i].get("verdict") is None:
                 claims[i] = verify_claim(
                     claims[i], step=step, premises=earlier + own, canonical=canonical,
-                    retriever=retriever, local_only=local_only)
+                    retriever=retriever, local_only=local_only, stance_ctx=stance_ctx)
             if _is_premise(claims[i]):
                 own.append(claims[i]["text"])
         if _has_mechanism(step):
@@ -311,8 +406,11 @@ def _repair_step(plan: dict, step: dict, missing: list[str], round_no: int,
           "be explained)" + ("; plus `depends_on` and `transition` when depends_on is the "
                              "problem." if NO_DEPENDS_ON in missing and step is not first
                              else "."))
-    res = text_llm.generate_schema_json(prompt, _REPAIR_SYSTEM, REPAIR_SCHEMA,
-                                        local_only=local_only, role="planner")
+    strategic = plan.get("post_kind") == "strategic"
+    res = text_llm.generate_schema_json(
+        prompt, _REPAIR_SYSTEM + (_STRATEGIC_REPAIR_NOTE if strategic else ""),
+        STRATEGIC_REPAIR_SCHEMA if strategic else REPAIR_SCHEMA,
+        local_only=local_only, role="planner")
     plan["dropped_claims"].extend(failed)
     new = []
     for n, raw in enumerate(res["claims"], start=1):
@@ -365,6 +463,25 @@ def _prune(plan: dict, first) -> None:
         plan["steps"] = surviving
 
 
+def trust_summary(plan: dict) -> dict:
+    """Readiness signal for the scheduler (strategic plans): how many 'checkable' facts
+    survived with a citation/authority vs were dropped, and how many analysis / framework
+    claims survive (the script must attribute the analysis ones)."""
+    def stance_of(c):
+        return effective_stance(c)
+
+    kept = [c for st in plan["steps"] for c in st["claims"]]
+    lost = list(plan.get("dropped_claims", [])) + [
+        c for st in plan.get("dropped_steps", []) for c in st.get("claims", [])]
+    return {
+        "checkable_verified": sum(1 for c in kept if stance_of(c) == "checkable"),
+        "checkable_dropped": sum(1 for c in lost if stance_of(c) == "checkable"),
+        "analysis_attributed": sum(1 for c in kept if stance_of(c) == "analysis"),
+        "framework": sum(1 for c in kept if stance_of(c) == "framework"),
+        "steps": len(plan["steps"]),
+    }
+
+
 def max_repair_calls(n_steps: int) -> int:
     """Upper bound on planner REPAIR calls for a plan of `n_steps` steps.
 
@@ -387,18 +504,26 @@ def run(ctx) -> dict[str, str]:
     post = json.loads((ws / "post.json").read_text(encoding="utf-8"))
     local_only = bool(ctx.flags.get("local_only", False))
     retriever = Retriever([c["url"] for c in post.get("citations", []) if c.get("url")])
+    stance_ctx = _citation_ctx(post, canonical) if plan.get("post_kind") == "strategic" else None
     # the plan's original first step follows from the question and needs no depends_on
     first = plan["steps"][0] if plan["steps"] else None
 
-    verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
+    verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only,
+                stance_ctx=stance_ctx)
     for round_no in range(1, config.PLAN_MAX_REPAIR_ROUNDS + 1):
         failing = _failing_steps(plan, first)
         if not failing:
             break
         for step, missing in failing:
             _repair_step(plan, step, missing, round_no, local_only, canonical, first)
-        verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only)
+        verify_plan(plan, canonical=canonical, retriever=retriever, local_only=local_only,
+                    stance_ctx=stance_ctx)
     _prune(plan, first)
+    if plan.get("post_kind") == "strategic":
+        plan["trust_summary"] = trust_summary(plan)
+        ctx.manifest.trust_summary = plan["trust_summary"]
+        ctx.manifest.save()
+        logger.info(f"verify_claims: trust_summary {plan['trust_summary']}")
 
     n_claims = sum(len(s["claims"]) for s in plan["steps"])
     logger.info(f"verify_claims: {len(plan['steps'])} steps / {n_claims} claims survived, "
