@@ -43,6 +43,9 @@ _smart_client = None
 def _get_smart_client(**kwargs):
     """Lazy-load smart_client from video_agent.ollama_client."""
     global _smart_client
+    from video_agent.claude_client import ClaudeCliClient, backend_is_claude, claude_model_for
+    if backend_is_claude():
+        return ClaudeCliClient(model=claude_model_for(None))
     if _smart_client is None:
         try:
             from video_agent.ollama_client import smart_client
@@ -57,6 +60,11 @@ def _get_role_client(role: str):
     """OllamaClient for a configured role. Cloud models go through the Python SDK
     (they reject /api/generate, see OllamaClient._generate_via_sdk)."""
     from shorts_engine import config
+    from video_agent.claude_client import ClaudeCliClient, backend_is_claude, claude_model_for
+    if backend_is_claude():
+        # Claude backend: verifier/critic use a separate Claude model (HRSU_CLAUDE_MODEL_<ROLE>)
+        # in a fresh, context-free call; the family-independence check does not apply.
+        return ClaudeCliClient(model=claude_model_for(role))
     config.check_role_independence(role)
     from video_agent.ollama_client import OllamaClient
     model = config.model_for_role(role)
@@ -109,6 +117,8 @@ def generate_schema_json(
     else:
         client = _get_smart_client()
 
+    if hasattr(client, "json_schema"):
+        client.json_schema = schema
     system_with_schema = (
         f"{system}\n\nYour entire response MUST be a single JSON value that "
         f"validates against this JSON Schema exactly -- correct top-level "

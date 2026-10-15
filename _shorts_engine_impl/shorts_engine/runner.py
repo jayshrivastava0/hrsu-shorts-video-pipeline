@@ -120,15 +120,19 @@ def run(
     # ── Create or load manifest ────────────────────────────────────────────
     if resume:
         # Resume mode: load existing manifest from the workspace
-        slug = slug_from_url(blog_url)
-        # Find workspace with matching blog_url or slug
-        # For now, assume we can derive the workspace from blog_url's slug
-        # In practice, this might be parameterized differently
-        # For the implementation, we'll need to find the right workspace.
-        # Let's adjust: resume should be given a workspace path or we search
-        # For now, let's assume the caller provides proper context.
-        # This will be clarified in tests.
-        pass
+        # Newest run under workspace_root recorded for this blog_url.
+        manifest = None
+        for mf in sorted(workspace_root.glob("run-*/run_manifest.json"),
+                         key=lambda f: f.stat().st_mtime, reverse=True):
+            try:
+                cand = RunManifest.load(mf.parent)
+            except Exception:
+                continue
+            if cand.blog_url == blog_url:
+                manifest = cand
+                break
+        if manifest is None:
+            raise FileNotFoundError(f"no earlier run found for {blog_url} under {workspace_root}")
     else:
         # Create new manifest
         manifest = RunManifest.create(blog_url=blog_url, workspace_root=workspace_root)
