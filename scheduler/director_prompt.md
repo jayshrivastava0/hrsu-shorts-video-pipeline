@@ -21,10 +21,10 @@ stages in order. Also load `hyperframes:hyperframes-core`, `hyperframes:hyperfra
 `hyperframes:hyperframes-cli` when the workflow says so.
 
 ## Required recipe (proven on earlier videos)
-1. **BRIEF.md**: portrait 1080x1920, `voice_mode: verbatim`, `flow: automation`, audience = procurement
+1. **BRIEF.md**: {{ORIENTATION}} {{CANVAS}} (the project is already initialised at this size; do not change it), `voice_mode: verbatim`, `flow: automation`, audience = procurement
    officers and executives at industrial buyers (mining, water utilities, agriculture, construction).
    Brand: dark navy canvas `#0a192f`, gold accent `#d4af37`, text tint `#ccd6f6`, muted `#8892b0`, small
-   letter-spaced "HRSU INDORE" wordmark at the top (about y=70). Font: Arial only. Only facts that appear in
+   letter-spaced "HRSU INDORE" wordmark at the top (about y={{WORDMARK_Y}}). Font: Arial only. Only facts that appear in
    `user_script.txt` / the plan may appear on screen.
 2. **frame.md** (design spec) with those tokens; dark canvas only; no purple gradients, no stock icons.
 3. **STORYBOARD.md**: time-coded, paced to the REAL word timings in `audio_meta.json` (each element enters
@@ -47,10 +47,33 @@ stages in order. Also load `hyperframes:hyperframes-core`, `hyperframes:hyperfra
   missing, show NO source chips at all.
 - Anything that is an analogy rather than a verified claim must be marked with the word "illustration".
 - No narration sentences on screen: terms and short labels only (the hook may show its question).
-- Captions occupy the bottom band: keep ALL your content above y = 1594 (caption keep-out is y >= 1594).
+- Captions occupy the bottom band: keep ALL your content above y = {{CAPTION_KEEPOUT_Y}} (caption keep-out is y >= {{CAPTION_KEEPOUT_Y}}).
+
+## Hook and motion (required: a static diagram video is a failed video)
+The viewer decides in 3 seconds. A video that opens on a still diagram and then "builds" is boring; this one
+must feel like motion graphics from the first frame to the last.
+- **Hook = the first 4 seconds.** Frame 0 already has movement and impact: never a blank or still title. Open
+  with the hook question as bold kinetic typography (key words slam in with overshoot, exactly on the spoken
+  words) over a graphic that visualises the tension itself (two options pulling apart, a split screen, a swinging
+  balance, a rising pressure bar). Something new must move every ~0.5 s. The question text is the only
+  sentence allowed on screen.
+- **Entrances**: ease out strongly (`expo.out` / `power4.out` / `cubic-bezier(0.16,1,0.3,1)`), nodes and cards pop with
+  `back.out(1.4)`; **exits** run at half the entrance duration; **stagger** words and list items about 0.09 s apart.
+  Arrows and links draw on from source to target (stroke-dashoffset); lines never just appear.
+- **Never a dead frame.** Every held element keeps subtle life for as long as it is on screen: slow background
+  grid/glow drift, a pulse or glow ring on the element currently being spoken about, 2-4% scale "breathing",
+  parallax between layers. Dim everything except the active element (focus pull) when the narration moves on.
+- **Camera**: slow push-in (scale 1.00 -> 1.06) across each beat, and a pan/zoom to the region being discussed
+  when a diagram is larger than the screen. Beats connect with a match-cut or whip/slide transition that carries
+  one element across the cut; no plain fades between beats.
+- **Emphasis on the spoken word**: when the narrator says the key term, it gets an underline wipe, highlight
+  sweep or scale pop. Numbers that the narration states count up/roll in; nothing else is animated as a number.
+- Motion is for clarity and energy, never for new information: every rule in "Hard content rules" still holds.
+- If the canvas is landscape, use its width: side-by-side compositions (diagram on one side, the big term on the
+  other), long horizontal flows and multi-column comparisons rather than a narrow centred stack.
 
 ## Visual quality bar
-- Fill the canvas: content spans y 130-1590 and the full width; no more than ~15% empty area; no clipped or
+- Fill the canvas: content spans y {{CONTENT_Y}} and the full width; no more than ~15% empty area; no clipped or
   overlapping text; labels >= 30 px, key objects >= 130 px, titles 64-96 px.
 - Contrast must pass the HyperFrames check; one paused GSAP timeline per frame; motion is seek-safe.
 
@@ -77,6 +100,11 @@ caption keep-out and no-invention rules as above; in addition:
   add a "source" or "study" label of your own.
 
 ## Verification (all required, in this order)
+0. **Review loop (do this before lint, and again after every fix round):** render a quick draft or use
+   `npx hyperframes snapshot` at one frame per ~4 s plus the first 4 s at 0.5 s steps, build a contact sheet and LOOK at it.
+   Reject and fix: any panel/box that is empty for a stretch, a frame that is still compared with the frame 0.7 s
+   earlier (sample pairs and compare pixel differences; at least 90% of 0.7 s pairs must differ visibly), an
+   opening that is not moving, text overlap or clipping, anything inside the caption keep-out.
 1. `npx hyperframes lint` must report 0 errors.
 2. `npx hyperframes check` must report 0 errors (caption-word layout notices may be ignored).
 3. Snapshot-review EVERY frame (`npx hyperframes snapshot`, then look at the images). Fix any empty areas,

@@ -1,6 +1,6 @@
 """Custom YouTube thumbnail (1280x720 JPEG) cut from the video's own hook frame.
 
-The explainer videos are portrait, the thumbnail is landscape. The hook card (question + lead
+Portrait explainers get a two-panel composite; landscape ones (1.5 min or longer) use their best frame directly. The hook card (question + lead
 diagram) shown at ~6 s is scaled to 1280 wide and a 720-tall window is cut from it, choosing
 the window with the most visual content. Nothing is drawn or written that is not already in
 the video, so the thumbnail cannot claim anything the video does not.
@@ -14,6 +14,7 @@ from typing import Optional
 W, H = 1280, 720
 HOOK_SECONDS = 6.0
 CAPTION_CUT = 0.81             # drop the burned-in caption band (keep-out starts at ~83% of the frame)
+LANDSCAPE_CAPTION_CUT = 0.83   # landscape caption keep-out starts at ~84% of the height
 MAX_BYTES = 2_000_000          # YouTube limit is 2 MB
 
 
@@ -63,6 +64,21 @@ def make_thumbnail(video: Path | str, out_jpg: Path | str, *, at_s: float = HOOK
         workdir = out_jpg.parent
         hook_png = extract_frame(video, workdir / (out_jpg.stem + ".hook.png"), at_s)
         hook = Image.open(hook_png).convert("RGB")
+        if hook.width > hook.height:
+            # Landscape video: a frame already is a 16:9 thumbnail. Use the busiest mid-video frame,
+            # minus the caption band, scaled to cover 1280x720.
+            best = _mechanism_frame(video, workdir) or hook
+            best = best.crop((0, 0, best.width, round(best.height * LANDSCAPE_CAPTION_CUT)))
+            scale = max(W / best.width, H / best.height)
+            best = best.resize((round(best.width * scale), round(best.height * scale)), Image.LANCZOS)
+            left, top = (best.width - W) // 2, (best.height - H) // 2
+            bg = best.crop((left, top, left + W, top + H))
+            for quality in (92, 85, 75, 65):
+                bg.save(out_jpg, "JPEG", quality=quality, optimize=True)
+                if out_jpg.stat().st_size <= MAX_BYTES:
+                    break
+            hook_png.unlink(missing_ok=True)
+            return out_jpg
         mech = _mechanism_frame(video, workdir) or hook
         bg = hook.resize((W, round(hook.height * W / hook.width)), Image.LANCZOS)
         bg = bg.crop((0, 0, W, H)).filter(ImageFilter.GaussianBlur(28))

@@ -75,6 +75,32 @@ def _npx() -> str:
     return shutil.which("npx") or "npx"
 
 
+LANDSCAPE_MIN_SECONDS = 90.0   # videos of 1.5 min or more are landscape (1920x1080), shorter ones portrait
+WORDS_PER_SECOND = 2.5         # fallback estimate from the narration when no audio duration is available
+
+
+def narration_seconds(run_dir: Path | str) -> float:
+    """Voice length of a run: real voiceover duration when present, else narration words / 2.5."""
+    run_dir = Path(run_dir)
+    vo = run_dir / "voiceover.mp3"
+    if vo.exists():
+        try:
+            out = subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                           "-of", "csv=p=0", str(vo)], timeout=60)
+            return float(out.decode().strip())
+        except Exception:
+            pass
+    try:
+        beats = json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("beats", [])
+        return sum(len((b.get("narration") or "").split()) for b in beats) / WORDS_PER_SECOND
+    except Exception:
+        return 0.0
+
+
+def orientation_for(run_dir: Path | str) -> str:
+    return "landscape" if narration_seconds(run_dir) >= LANDSCAPE_MIN_SECONDS else "portrait"
+
+
 def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = run_cmd) -> None:
     """npx hyperframes init + scripts/hf_prepare_project.py. Recreates the project dir from scratch."""
     run_dir, project_dir = Path(run_dir), Path(project_dir)
@@ -82,7 +108,7 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
         shutil.rmtree(project_dir)
     project_dir.parent.mkdir(parents=True, exist_ok=True)
     r = run([_npx(), "hyperframes", "init", str(project_dir), "--non-interactive", "--example=blank",
-             "--resolution=portrait"], cwd=project_dir.parent, timeout=900)
+             f"--resolution={orientation_for(run_dir)}"], cwd=project_dir.parent, timeout=900)
     if r.returncode != 0 or r.timed_out:
         raise RuntimeError(f"hyperframes init failed (rc={r.returncode}): {r.output[-300:]}")
     r = run([sys.executable, str(REPO_ROOT / "scripts" / "hf_prepare_project.py"), str(run_dir), str(project_dir)],
@@ -93,7 +119,16 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
 
 def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH) -> str:
     text = template.read_text(encoding="utf-8")
-    return text.replace("{{PROJECT_DIR}}", str(project_dir)).replace("{{RUN_DIR}}", str(run_dir))
+    land = orientation_for(run_dir) == "landscape"
+    fill = {"{{PROJECT_DIR}}": str(project_dir), "{{RUN_DIR}}": str(run_dir),
+            "{{ORIENTATION}}": "landscape" if land else "portrait",
+            "{{CANVAS}}": "1920x1080" if land else "1080x1920",
+            "{{CAPTION_KEEPOUT_Y}}": "905" if land else "1594",
+            "{{CONTENT_Y}}": "110-895" if land else "130-1590",
+            "{{WORDMARK_Y}}": "50" if land else "70"}
+    for k, v in fill.items():
+        text = text.replace(k, v)
+    return text
 
 
 def read_done(project_dir: Path | str) -> Optional[dict]:
