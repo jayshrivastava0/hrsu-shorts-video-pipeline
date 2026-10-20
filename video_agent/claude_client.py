@@ -1,7 +1,7 @@
 """Text-LLM backend that shells out to the Claude Code CLI (`claude -p`).
 
 Drop-in for OllamaClient where the pipeline only needs `generate` / `generate_json`.
-Enabled with env HRSU_LLM_BACKEND=claude; the model per role comes from
+Default backend (HRSU_LLM_BACKEND=ollama switches back to Ollama); the model per role comes from
 HRSU_CLAUDE_MODEL_<ROLE> (planner|writer|verifier|critic), then HRSU_CLAUDE_MODEL,
 default "sonnet". Tools, skills, hooks and MCP are all off: it is a pure text call.
 """
@@ -21,7 +21,8 @@ CLAUDE_TIMEOUT_S = 600
 
 
 def backend_is_claude() -> bool:
-    return os.environ.get("HRSU_LLM_BACKEND", "").strip().lower() == "claude"
+    # Claude is the default text backend; set HRSU_LLM_BACKEND=ollama to go back to Gemma/Nemotron.
+    return os.environ.get("HRSU_LLM_BACKEND", "claude").strip().lower() == "claude"
 
 
 def claude_model_for(role: str | None) -> str:

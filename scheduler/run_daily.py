@@ -42,11 +42,12 @@ class Deps:
 
 def default_deps() -> Deps:
     from scheduler import director as d, discover, gate, publish, textstage
+    from video_agent.claude_client import backend_is_claude
 
     return Deps(
         discover=discover.fetch_post_urls,
         discover_all=discover.fetch_all_post_urls,
-        ollama_ready=textstage.wait_for_ollama,
+        ollama_ready=None if backend_is_claude() else textstage.wait_for_ollama,
         text=lambda url, root, log_path=None: textstage.run_text_stages(url, root, log_path=log_path),
         director=lambda run_dir, proj, mode: d.direct(run_dir, proj, mode),
         gate=lambda run_dir, proj: gate.run_gate(run_dir, proj),

@@ -19,6 +19,7 @@ PROMPT_PATH = Path(__file__).with_name("director_prompt.md")
 DIRECTOR_TIMEOUT_S = 90 * 60
 CLAUDE_TOOLS = "Bash,Edit,Write,Read,Glob,Grep,Skill,Agent,TodoWrite,WebFetch"
 USAGE_RE = re.compile(r"usage limit|rate limit|limit reached|limit will reset|out of (extra )?usage|"
+                      r"hit your (session |weekly )?limit|session limit|weekly limit|"
                       r"credit balance is too low|quota", re.IGNORECASE)
 
 
@@ -160,6 +161,7 @@ def run_claude(project_dir: Path | str, run_dir: Path | str, *, timeout: float =
     (project / "DIRECTOR_DONE.json").unlink(missing_ok=True)
     cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits",
            "--allowedTools", CLAUDE_TOOLS, "--add-dir", str(run_dir)]
+    model = model or os.environ.get("HRSU_DIRECTOR_MODEL", "sonnet")
     if model:
         cmd += ["--model", model]
     r = run(cmd, cwd=project, timeout=timeout, input_text=build_prompt(project, run_dir),
