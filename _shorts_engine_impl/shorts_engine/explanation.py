@@ -222,9 +222,34 @@ def _norm_unit(unit: str | None) -> str | None:
     return _UNIT_ALIASES.get(unit, unit)
 
 
+# Narration spells units out for the voice ("1290 grams per litre at 20 degrees Celsius");
+# map them back to the symbols the sources use so the (number, unit) pair still has to match.
+_SPOKEN_UNITS = [
+    (r"milligrams? per (?:litre|liter)s?", "mg/l"), (r"grams? per (?:litre|liter)s?", "g/l"),
+    (r"kilograms? per cubic (?:metre|meter)s?", "kg/m3"), (r"grams? per cubic (?:metre|meter)s?", "g/m3"),
+    (r"milligrams? per kilogram", "mg/kg"), (r"grams? per kilogram", "g/kg"),
+    (r"millimoles? per (?:litre|liter)", "mmol/l"), (r"moles? per (?:litre|liter)", "mol/l"),
+    (r"decisiemens per (?:metre|meter)", "ds/m"), (r"parts per million", "ppm"),
+    (r"parts per billion", "ppb"), (r"degrees? (?:celsius|centigrade|c)\b", "°c"),
+    (r"degrees? (?:fahrenheit|f)\b", "°f"), (r"milligrams?", "mg"), (r"kilograms?", "kg"),
+    (r"grams?", "g"), (r"millilitres?|milliliters?", "ml"), (r"litres?|liters?", "l"),
+    (r"cubic (?:metre|meter)s?", "m3"), (r"millimet(?:re|er)s?", "mm"),
+    (r"centimet(?:re|er)s?", "cm"), (r"megapascals?", "mpa"), (r"kilopascals?", "kpa"),
+]
+_SPOKEN_UNIT_RES = [(re.compile(r"(?<=\d)(\s+)(?:" + pat + ")", re.IGNORECASE), sym)
+                    for pat, sym in _SPOKEN_UNITS]
+
+
+def _symbolize_units(text: str) -> str:
+    for rx, sym in _SPOKEN_UNIT_RES:
+        text = rx.sub(lambda m, s=sym: m.group(1) + s, text)
+    return text
+
+
 def _tokens(text: str) -> list[dict]:
     """Numbers in `text` with their unit. A range opener ("1.5 to 3 kg") takes
-    the unit of the number that closes the range."""
+    the unit of the number that closes the range. Spoken units are read as symbols."""
+    text = _symbolize_units(text or "")
     toks: list[dict] = []
     for m in _NUMBER_RE.finditer(text or ""):
         is_open = bool(_RANGE_TAIL_RE.match(text[m.end("num"):]))

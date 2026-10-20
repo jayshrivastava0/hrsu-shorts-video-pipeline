@@ -520,3 +520,11 @@ class TestUnitAliases:
         assert ex.gate_claim_numbers("5 m", "5 miles") != []
         assert ex.gate_claim_numbers("5 g", "5 kg") != []
         assert ex.gate_claim_numbers("5 m", "5 km") != []
+
+
+def test_spoken_units_must_match_the_source_pair():
+    from shorts_engine.explanation import gate_claim_numbers
+    src = "Solubility: 1290 g/L at 20°C"
+    assert gate_claim_numbers("about 1290 grams per litre at 20 degrees Celsius", src) == []
+    assert gate_claim_numbers("about 1290 kilograms per litre at 20 degrees Celsius", src)
+    assert gate_claim_numbers("1290 grams at 20 degrees", src)
