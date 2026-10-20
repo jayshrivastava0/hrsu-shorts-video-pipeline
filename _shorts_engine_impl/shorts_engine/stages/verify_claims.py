@@ -31,7 +31,7 @@ from shorts_engine import config, corroboration, explanation, references
 from shorts_engine.errors import HoldForReview
 from shorts_engine.llm import text_llm
 from shorts_engine.retrieval import Retriever
-from shorts_engine.stages.facts import locate_verbatim
+from shorts_engine.stages.facts import locate_verbatim, normalize_for_match
 
 logger = logging.getLogger(__name__)
 
@@ -218,13 +218,28 @@ def verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str
     return res
 
 
+CONTEXT_CHARS = 400
+
+
+def _antecedent_context(canonical: str, offset: int) -> str:
+    """The article text just before a quote, so a strict verifier can resolve 'this'/'it'/'its'
+    in the quote (a quote like 'This mechanism prevents dust' never names the chemical itself)."""
+    before = normalize_for_match(canonical)[max(0, offset - CONTEXT_CHARS):offset].strip()
+    if not before:
+        return ""
+    return ("\n\nContext (the article text just before passage [0]; use it ONLY to resolve what "
+            "words like 'this', 'it' or 'its' in passage [0] refer to -- the claim itself must "
+            f"still be supported by passage [0]): ...{before}")
+
+
 def _verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: str,
                   retriever, local_only: bool = False) -> dict:
     kind, text, terms = claim["kind"], claim["text"], step.get("terms", [])
 
     if kind == "blog_stated":
         quote = claim["support"]["quote"]
-        if not quote or locate_verbatim(quote, canonical) is None:
+        offset = locate_verbatim(quote, canonical) if quote else None
+        if offset is None:
             return _result(claim, "unsupported", "quote not found verbatim in the article")
         if len(quote.split()) < MIN_QUOTE_WORDS:
             return _result(claim, "unsupported",
@@ -233,7 +248,8 @@ def _verify_claim(claim: dict, *, step: dict, premises: list[str], canonical: st
         if errs:
             return _result(claim, "unsupported", "; ".join(errs))
         res = text_llm.generate_schema_json(
-            f"Claim: {text}\n\nPassages:\n[0] (article) {quote}", _VERIFIER_SYSTEM,
+            f"Claim: {text}\n\nPassages:\n[0] (article) {quote}"
+            + _antecedent_context(canonical, offset), _VERIFIER_SYSTEM,
             VERDICT_SCHEMA, local_only=local_only, role="verifier")
         if res["verdict"] != "supported" or not _valid_index(res.get("passage_index"), 1):
             verdict = res["verdict"] if res["verdict"] != "supported" else "unsupported"
