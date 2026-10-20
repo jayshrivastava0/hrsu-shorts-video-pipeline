@@ -160,7 +160,7 @@ def run_claude(project_dir: Path | str, run_dir: Path | str, *, timeout: float =
     project, run_dir = Path(project_dir), Path(run_dir)
     (project / "DIRECTOR_DONE.json").unlink(missing_ok=True)
     cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits",
-           "--allowedTools", CLAUDE_TOOLS, "--add-dir", str(run_dir)]
+           "--allowedTools", CLAUDE_TOOLS, "--add-dir", str(run_dir), "--strict-mcp-config"]
     model = model or os.environ.get("HRSU_DIRECTOR_MODEL", "sonnet")
     if model:
         cmd += ["--model", model]

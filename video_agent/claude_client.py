@@ -41,7 +41,7 @@ class ClaudeCliClient(OllamaClient):
     def generate(self, prompt: str, system: str | None = None, **_kw) -> str:
         cmd = [shutil.which("claude") or "claude", "-p", "--model", self.model,
                "--tools", "", "--disable-slash-commands", "--no-session-persistence",
-               "--setting-sources", ""]
+               "--setting-sources", "", "--strict-mcp-config"]   # no MCP: ~39k tokens of tool defs per call
         if system:
             cmd += ["--system-prompt", system]
         if self.json_schema is not None:
