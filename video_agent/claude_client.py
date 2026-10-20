@@ -33,6 +33,22 @@ def claude_model_for(role: str | None) -> str:
     return os.environ.get("HRSU_CLAUDE_MODEL", "sonnet")
 
 
+def _log_cost(model: str, envelope: dict) -> None:
+    """Append one line per call (API-equivalent USD reported by the CLI) to HRSU_COST_LOG, if set."""
+    path = os.environ.get("HRSU_COST_LOG")
+    if not path:
+        return
+    try:
+        u = envelope.get("usage") or {}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"model": model, "usd": envelope.get("total_cost_usd"),
+                                "in": u.get("input_tokens"), "out": u.get("output_tokens"),
+                                "cache_read": u.get("cache_read_input_tokens"),
+                                "cache_write": u.get("cache_creation_input_tokens")}) + "\n")
+    except OSError:
+        pass
+
+
 class ClaudeCliClient(OllamaClient):
     def __init__(self, model: str = "sonnet", timeout: float | None = None):
         super().__init__(model=model, timeout=timeout)
@@ -60,6 +76,7 @@ class ClaudeCliClient(OllamaClient):
         if self.json_schema is not None:
             try:
                 env = json.loads(out)
+                _log_cost(self.model, env)
                 if env.get("structured_output") is not None:
                     return json.dumps(env["structured_output"])
                 out = (env.get("result") or "").strip()
