@@ -1,24 +1,28 @@
 """Comprehension test: does the video actually convey the explanation? (HRSU-VideoBench, tier 2)
 
 Each task has a frozen multiple-choice quiz (videobench/quizzes/<task>.json) written from the
-run's verified explanation plan; every question names the beat that explains it. A viewer model
-answers each question under these conditions:
+run's verified explanation plan, one question per verified claim, each naming the beat that
+explains it. Frontier viewers already know this chemistry (they score 100% with no video), so
+"did accuracy go up with the video?" measures nothing. Instead the viewer must answer ONLY from
+the frames, with an explicit way out:
 
-  none      no video at all          -> what the model already knows (prior)
-  visual    frames from that beat, MUTED and cropped above the caption band, so burned-in
-            captions cannot leak the narration -> what the VISUALS teach
-  both      the same frames + the beat's narration -> what the finished video conveys
+  E) Not shown in these frames
 
-  visual_lift = acc(visual) - acc(none)   the headline number: knowledge the visuals add
+and every question is asked twice:
 
-Canary (anti-cheating check): each quiz plants one FALSE fact. The planted label is drawn onto
-that beat's frames (and, for "both", stated in the narration). A trustworthy viewer gives the
-real answer with no video, but the planted answer when shown the doctored video -- proving it
-reads the media instead of answering from what it already knows. `grounded` is false otherwise,
-and a viewer that is not grounded must not be used as a judge.
+  matched   frames from the beat that should explain it (muted, captions cropped away)
+  control   a FIXED foreign set of frames (another task's hook) that contains none of the
+            answers -> the right answer is always E; anything else is prior-knowledge leakage
 
-Each question is asked `reps` times with the options in a different order (position bias),
-and the viewer keeps its reasoning ("thinking") on.
+  conveyed     = share of questions answered correctly from the matched frames
+  leakage      = share of questions NOT answered E on the control frames
+  comprehension = conveyed - leakage          (the headline number; abstaining scores 0)
+
+Canary (planted false fact, the user's anti-cheating check): a FALSE label is drawn onto the
+hook frames. A grounded viewer gives the real answer with no video, and the planted answer when
+shown the doctored frames. A viewer that fails the canary must not be used as a judge.
+
+Options are reshuffled per repetition (position bias); the viewer keeps its thinking on.
 
   python -m videobench.comprehension <task-id> <video.mp4> [--model bonsai-2:9b] [--reps 2]
 """
@@ -39,8 +43,8 @@ TASKS = Path(__file__).resolve().parent / "tasks.json"
 
 CROP_TOP, CROP_BOTTOM = 0.05, 0.80   # keep the content area; drop wordmark strip and captions
 FRAMES_PER_BEAT = 6
-LETTERS = "ABCD"
-CONDITIONS = ("none", "visual", "both")
+LETTERS = "ABCDE"
+NOT_SHOWN = "Not shown in these frames"
 
 ANSWER_SCHEMA = {"type": "object", "properties": {"answer": {"type": "string", "enum": list(LETTERS)}},
                  "required": ["answer"]}
@@ -53,14 +57,13 @@ def task(task_id: str) -> dict:
     raise SystemExit(f"unknown task {task_id}")
 
 
+def quiz(task_id: str) -> dict:
+    return json.loads((QUIZZES / f"{task_id}.json").read_text(encoding="utf-8"))
+
+
 def beat_windows(run: Path) -> dict[str, tuple[float, float]]:
     beats = json.loads((run / "beats_audio.json").read_text(encoding="utf-8"))
     return {b["beat"]: (b["start_s"], b["start_s"] + b["duration_s"]) for b in beats}
-
-
-def beat_narration(run: Path) -> dict[str, str]:
-    script = json.loads((run / "script.json").read_text(encoding="utf-8"))
-    return {b["beat"]: b["narration"] for b in script["beats"]}
 
 
 def extract_frames(video: Path, start: float, end: float, out_dir: Path, n: int) -> list[Path]:
@@ -78,6 +81,15 @@ def extract_frames(video: Path, start: float, end: float, out_dir: Path, n: int)
     return paths
 
 
+def control_frames(q: dict, out_dir: Path) -> list[Path]:
+    """The quiz's fixed foreign control: another task's hook frames from its reference render."""
+    c = q["control"]
+    t = task(c["task"])
+    run = ROOT / t["run"]
+    return extract_frames(run / t["references"][c["role"]], *beat_windows(run)[c["beat"]],
+                          out_dir, FRAMES_PER_BEAT)
+
+
 def plant_label(frames: list[Path], label: str, out_dir: Path) -> list[Path]:
     """Copies of `frames` with `label` drawn as an on-brand card in the middle of the diagram."""
     from PIL import Image, ImageDraw, ImageFont
@@ -93,8 +105,8 @@ def plant_label(frames: list[Path], label: str, out_dir: Path) -> list[Path]:
             font = ImageFont.truetype("arialbd.ttf", size)
         except OSError:
             font = ImageFont.load_default()
-        words, lines, line = label.split(), [], ""
-        for word in words:  # wrap to ~80% of the width
+        lines, line = [], ""
+        for word in label.split():  # wrap to ~80% of the width
             trial = f"{line} {word}".strip()
             if d.textlength(trial, font=font) > w * 0.8 and line:
                 lines.append(line)
@@ -116,19 +128,22 @@ def plant_label(frames: list[Path], label: str, out_dir: Path) -> list[Path]:
     return out
 
 
-def build_prompt(cond: str, q: dict, options: list[str], narration: str) -> str:
+def options_for(item: dict, rng: random.Random, with_not_shown: bool) -> list[str]:
+    opts = [item["answer"], *([item["planted"]] if "planted" in item else []), *item["distractors"]]
+    rng.shuffle(opts)
+    return opts + [NOT_SHOWN] if with_not_shown else opts
+
+
+def build_prompt(frames: bool, item: dict, options: list[str]) -> str:
     opts = "\n".join(f"{LETTERS[i]}) {o}" for i, o in enumerate(options))
-    if cond == "none":
-        lead = "Answer this question about an industrial chemistry topic."
-    elif cond == "visual":
-        lead = ("The images are frames, in order, from one segment of a MUTED explainer video "
-                "(no sound, no captions). Answer using what the visuals show; if they do not "
-                "show it, give your best guess.")
+    if frames:
+        lead = ("The images are frames, in order, from one segment of a MUTED explainer video. "
+                "Answer ONLY from what these frames show. If the frames do not show the answer, "
+                f"choose \"{NOT_SHOWN}\" -- even if you know the answer from elsewhere.")
     else:
-        lead = ("The images are frames, in order, from one segment of an explainer video, and "
-                f"this is what the narrator says during it:\n\"{narration}\"\n"
-                "Answer using the video.")
-    return f"{lead}\n\nQuestion: {q['q']}\n{opts}\n\nReply as JSON: {{\"answer\": \"A\"|\"B\"|\"C\"|\"D\"}}"
+        lead = "Answer this question about an industrial chemistry topic."
+    return (f"{lead}\n\nQuestion: {item['q']}\n{opts}\n\n"
+            f"Reply as JSON: {{\"answer\": one of {', '.join(LETTERS[:len(options)])}}}")
 
 
 def ask(model: str, prompt: str, images: list[Path], think: bool, num_ctx: int) -> tuple[str, float]:
@@ -151,73 +166,74 @@ def ask(model: str, prompt: str, images: list[Path], think: bool, num_ctx: int) 
     return "", time.time() - t
 
 
+def picked(ans: str, options: list[str]) -> str:
+    i = LETTERS.find(ans) if ans else -1
+    return options[i] if 0 <= i < len(options) else ""
+
+
+def score(answers: list[dict]) -> dict:
+    """conveyed / leakage / comprehension over all question repetitions, plus the canary."""
+    def rate(cond, pred):
+        rows = [a for a in answers if a["cond"] == cond]
+        return round(sum(pred(a) for a in rows) / len(rows), 3) if rows else None
+
+    conveyed = rate("matched", lambda a: a["picked"] == a["answer_text"])
+    leakage = rate("control", lambda a: a["picked"] != NOT_SHOWN)
+    out = {"conveyed": conveyed, "leakage": leakage,
+           "comprehension": round(conveyed - leakage, 3) if None not in (conveyed, leakage) else None,
+           "prior": rate("none", lambda a: a["picked"] == a["answer_text"])}
+    truth = rate("canary_none", lambda a: a["picked"] == a["answer_text"])
+    follows = rate("canary_planted", lambda a: a["picked"] == a["planted_text"])
+    if truth is not None:
+        out["canary"] = {"truth_without_video": truth, "follows_planted_frames": follows,
+                         "grounded": truth >= 0.5 and follows >= 0.5}
+    return out
+
+
 def run(task_id: str, video: Path, model: str, reps: int, think: bool, num_ctx: int,
-        conditions=CONDITIONS, seed: int = 7) -> dict:
+        seed: int = 7) -> dict:
     t = task(task_id)
     run_dir = ROOT / t["run"]
-    quiz = json.loads((QUIZZES / f"{task_id}.json").read_text(encoding="utf-8"))
-    windows, narr = beat_windows(run_dir), beat_narration(run_dir)
+    qz = quiz(task_id)
+    windows = beat_windows(run_dir)
     rng = random.Random(seed)
-    results = []
-    with tempfile.TemporaryDirectory() as tmp:
-        frames = {}
-        for b in {q["beat"] for q in quiz["questions"]}:
-            frames[b] = extract_frames(video, *windows[b], Path(tmp) / b, FRAMES_PER_BEAT)
-        for q in quiz["questions"]:
-            for rep in range(reps):
-                options = [q["answer"], *q["distractors"]]
-                rng.shuffle(options)
-                correct = LETTERS[options.index(q["answer"])]
-                for cond in conditions:
-                    imgs = [] if cond == "none" else frames[q["beat"]]
-                    ans, secs = ask(model, build_prompt(cond, q, options, narr[q["beat"]]),
-                                    imgs, think, num_ctx)
-                    results.append({"q": q["id"], "rep": rep, "cond": cond, "answer": ans,
-                                    "correct": ans == correct, "secs": round(secs, 1)})
-                    print(f"{q['id']} rep{rep} {cond:6s} {ans or '?'} "
-                          f"{'ok' if ans == correct else 'x '} {secs:.0f}s", flush=True)
-        canary = run_canary(quiz.get("canary"), frames, Path(tmp), model, reps, think,
-                            num_ctx, rng)
-    acc = {c: round(sum(r["correct"] for r in results if r["cond"] == c)
-                    / max(1, sum(r["cond"] == c for r in results)), 3) for c in conditions}
-    summary = {"task": task_id, "video": str(video), "model": model, "reps": reps,
-               "accuracy": acc}
-    if "visual" in acc and "none" in acc:
-        summary["visual_lift"] = round(acc["visual"] - acc["none"], 3)
-    if canary:
-        summary["canary"] = canary["summary"]
-        results += canary["answers"]
-    return {"summary": summary, "answers": results}
-
-
-def run_canary(c: dict | None, frames: dict, tmp: Path, model: str, reps: int, think: bool,
-               num_ctx: int, rng: random.Random) -> dict | None:
-    """Planted-false-fact check. Expected: truth with no video, the planted answer with it."""
-    if not c:
-        return None
-    doctored = plant_label(frames[c["beat"]], c["planted_label"], tmp / "canary")
-    expect = {"none": c["answer"], "visual": c["planted"], "both": c["planted"]}
     answers = []
-    for rep in range(reps):
-        options = [c["answer"], c["planted"], *c["distractors"]]
-        rng.shuffle(options)
-        for cond in CONDITIONS:
-            imgs = [] if cond == "none" else doctored
-            ans, secs = ask(model, build_prompt(cond, c, options, c["planted_narration"]),
-                            imgs, think, num_ctx)
-            ok = ans != "" and options[LETTERS.index(ans)] == expect[cond]
-            answers.append({"q": "canary", "rep": rep, "cond": f"canary_{cond}", "answer": ans,
-                            "correct": ok, "secs": round(secs, 1)})
-            print(f"canary rep{rep} {cond:6s} {ans or '?'} {'ok' if ok else 'x '} {secs:.0f}s",
-                  flush=True)
-    rate = {cond: round(sum(a["correct"] for a in answers if a["cond"] == f"canary_{cond}")
-                        / reps, 3) for cond in CONDITIONS}
-    return {"summary": {"truth_without_video": rate["none"],
-                        "follows_planted_visual": rate["visual"],
-                        "follows_planted_both": rate["both"],
-                        "grounded": rate["none"] >= 0.5 and rate["visual"] >= 0.5
-                        and rate["both"] >= 0.5},
-            "answers": answers}
+
+    def log(item, rep, cond, options, ans, secs):
+        row = {"q": item["id"], "rep": rep, "cond": cond, "answer": ans,
+               "picked": picked(ans, options), "answer_text": item["answer"],
+               "planted_text": item.get("planted", ""), "secs": round(secs, 1)}
+        answers.append(row)
+        print(f"{item['id']:7s} rep{rep} {cond:15s} {ans or '?'} -> {row['picked'][:40]!r} "
+              f"{secs:.0f}s", flush=True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        frames = {b: extract_frames(video, *windows[b], tmp / b, FRAMES_PER_BEAT)
+                  for b in {q["beat"] for q in qz["questions"]}}
+        control = control_frames(qz, tmp / "control")
+        c = qz["canary"]
+        hook = extract_frames(video, *windows[c["beat"]], tmp / "canary_src", FRAMES_PER_BEAT)
+        doctored = plant_label(hook, c["planted_label"], tmp / "canary")
+        for q in qz["questions"]:
+            for rep in range(reps):
+                opts = options_for(q, rng, with_not_shown=False)
+                log(q, rep, "none", opts, *ask(model, build_prompt(False, q, opts), [], think, num_ctx))
+                opts = options_for(q, rng, with_not_shown=True)
+                log(q, rep, "matched", opts,
+                    *ask(model, build_prompt(True, q, opts), frames[q["beat"]], think, num_ctx))
+                opts = options_for(q, rng, with_not_shown=True)
+                log(q, rep, "control", opts,
+                    *ask(model, build_prompt(True, q, opts), control, think, num_ctx))
+        for rep in range(reps):
+            opts = options_for(c, rng, with_not_shown=False)
+            log(c, rep, "canary_none", opts, *ask(model, build_prompt(False, c, opts), [], think, num_ctx))
+            opts = options_for(c, rng, with_not_shown=True)
+            log(c, rep, "canary_planted", opts,
+                *ask(model, build_prompt(True, c, opts), doctored, think, num_ctx))
+    summary = {"task": task_id, "video": str(video), "model": model, "reps": reps,
+               **score(answers)}
+    return {"summary": summary, "answers": answers}
 
 
 def main(argv: list[str] | None = None) -> int:

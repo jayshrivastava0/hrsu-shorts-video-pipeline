@@ -67,6 +67,61 @@
         "More expensive overall, but better dust control",
         "The same total cost; only the dust control differs"
       ]
+    },
+    {
+      "id": "q7",
+      "beat": "step_1",
+      "q": "Where does the moisture that keeps the road damp come from?",
+      "answer": "The surrounding air",
+      "distractors": [
+        "Groundwater pumped up from below",
+        "Water stored inside the salt crystals",
+        "Rain collected in road drains"
+      ]
+    },
+    {
+      "id": "q8",
+      "beat": "step_2",
+      "q": "Why are water trucks needed less often?",
+      "answer": "The road surface stays damp for longer",
+      "distractors": [
+        "The trucks carry more water per trip",
+        "Haul roads are shortened",
+        "Dust is swept off instead"
+      ]
+    },
+    {
+      "id": "q9",
+      "beat": "step_3",
+      "q": "Which salts is calcium nitrate compared against for corrosion?",
+      "answer": "Sodium or magnesium chlorides",
+      "distractors": [
+        "Potassium sulfates",
+        "Ammonium phosphates",
+        "Calcium carbonates"
+      ]
+    },
+    {
+      "id": "q10",
+      "beat": "step_3",
+      "q": "What visible damage do chloride salts cause on steel?",
+      "answer": "Pitting and scaling",
+      "distractors": [
+        "Bending and warping",
+        "Paint fading in the sun",
+        "Rubber cracking on tyres"
+      ]
+    },
+    {
+      "id": "q11",
+      "beat": "step_4",
+      "q": "What offsets calcium nitrate's higher purchase price?",
+      "answer": "Savings in fuel, labour and equipment replacement",
+      "distractors": [
+        "A government subsidy",
+        "Lower shipping cost per tonne",
+        "Resale of used salt"
+      ]
     }
   ],
   "canary": {
@@ -82,5 +137,11 @@
     "planted_label": "HOW IT WORKS: STORED WATER RELEASED AS IT MELTS",
     "planted_narration": "Calcium nitrate keeps the road damp because it releases water it has stored inside its crystals as it slowly melts in the heat."
   },
-  "_canary_doc": "Grounding check (user's idea, 2026-10-21): with no video the viewer must give the real answer; with the planted label drawn on the beat's frames (and planted narration) it must give the planted wrong answer. Passing proves it reads the media instead of answering from prior knowledge."
+  "_canary_doc": "Grounding check (user's idea, 2026-10-21): with no video the viewer must give the real answer; with the planted label drawn on the beat's frames (and planted narration) it must give the planted wrong answer. Passing proves it reads the media instead of answering from prior knowledge.",
+  "control": {
+    "task": "h2s-sewers",
+    "beat": "hook",
+    "role": "ceiling",
+    "_doc": "Fixed foreign control: the other task's hook frames contain none of these answers, so a grounded viewer must answer E (not shown). Any other answer = prior-knowledge leakage."
+  }
 }

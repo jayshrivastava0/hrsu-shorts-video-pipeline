@@ -67,6 +67,50 @@
         "In the air: it dilutes the sulfuric acid",
         "On the surface: it seals the pipe wall"
       ]
+    },
+    {
+      "id": "q7",
+      "beat": "step_1",
+      "q": "Besides sulfate, what do the H2S-producing bacteria consume?",
+      "answer": "Organic matter in the sewage",
+      "distractors": [
+        "The concrete of the pipe wall",
+        "Dissolved oxygen",
+        "Calcium ions"
+      ]
+    },
+    {
+      "id": "q8",
+      "beat": "step_1",
+      "q": "Under what condition does this H2S production happen?",
+      "answer": "Without free oxygen (anaerobic)",
+      "distractors": [
+        "In strong sunlight",
+        "Only above 60 degrees C",
+        "Only in fast-flowing water"
+      ]
+    },
+    {
+      "id": "q9",
+      "beat": "step_2",
+      "q": "What do the two groups of bacteria compete for?",
+      "answer": "The available organic carbon",
+      "distractors": [
+        "Space on the pipe wall",
+        "Dissolved oxygen",
+        "Calcium from the dosing"
+      ]
+    },
+    {
+      "id": "q10",
+      "beat": "step_3",
+      "q": "What forms when hydrogen sulfide meets moisture on the pipe?",
+      "answer": "Sulfuric acid",
+      "distractors": [
+        "Calcium nitrate",
+        "Methane",
+        "Ammonia"
+      ]
     }
   ],
   "canary": {
@@ -82,5 +126,11 @@
     "planted_label": "H2S PRODUCERS: METHANE-PRODUCING ARCHAEA",
     "planted_narration": "In an oxygen-free sewer, it is methane-producing archaea, not bacteria, that release hydrogen sulfide gas."
   },
-  "_canary_doc": "Grounding check (user's idea, 2026-10-21): with no video the viewer must give the real answer; with the planted label drawn on the beat's frames (and planted narration) it must give the planted wrong answer. Passing proves it reads the media instead of answering from prior knowledge."
+  "_canary_doc": "Grounding check (user's idea, 2026-10-21): with no video the viewer must give the real answer; with the planted label drawn on the beat's frames (and planted narration) it must give the planted wrong answer. Passing proves it reads the media instead of answering from prior knowledge.",
+  "control": {
+    "task": "mining-dust",
+    "beat": "hook",
+    "role": "ceiling",
+    "_doc": "Fixed foreign control: the other task's hook frames contain none of these answers, so a grounded viewer must answer E (not shown). Any other answer = prior-knowledge leakage."
+  }
 }
