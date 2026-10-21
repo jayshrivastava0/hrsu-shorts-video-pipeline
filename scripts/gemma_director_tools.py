@@ -24,6 +24,12 @@ MODEL = os.environ.get("GEMMA_DIRECTOR_MODEL", "gemma4:31b-cloud")
 # silently truncates the role packet) and a longer timeout. 0 = leave Ollama's default.
 NUM_CTX = int(os.environ.get("GEMMA_DIRECTOR_NUM_CTX", "0"))
 TIMEOUT = float(os.environ.get("GEMMA_DIRECTOR_TIMEOUT", "300"))
+# Thinking models (e.g. bonsai-2) can spend the whole num_predict on reasoning and return empty
+# content. "0" turns thinking off, "1" on; unset leaves the model's default.
+THINK = {"0": False, "1": True}.get(os.environ.get("GEMMA_DIRECTOR_THINK", ""))
+# Extra output tokens for the reasoning trace, added to every call's num_predict (Ollama counts
+# thinking tokens against num_predict, so without headroom the answer itself comes back empty).
+THINK_BUDGET = int(os.environ.get("GEMMA_DIRECTOR_THINK_BUDGET", "0"))
 
 log = logging.getLogger("gemma_director")
 
@@ -75,7 +81,7 @@ def llm(stage: str, system: str, user: str, images: list[Path] | None = None,
     Raises LLMError when every attempt stalls/fails."""
     import ollama
     client = ollama.Client(timeout=timeout or TIMEOUT)
-    options = {"num_predict": num_predict, "temperature": temperature}
+    options = {"num_predict": num_predict + THINK_BUDGET, "temperature": temperature}
     if NUM_CTX:
         options["num_ctx"] = NUM_CTX
     msgs = [{"role": "system", "content": system}] + (history or [])
@@ -87,8 +93,8 @@ def llm(stage: str, system: str, user: str, images: list[Path] | None = None,
     for a in range(1, attempts + 1):
         t = time.time()
         try:
-            r = client.chat(model=MODEL, messages=msgs,
-                            options=options)
+            r = client.chat(model=MODEL, messages=msgs, options=options,
+                            **({} if THINK is None else {"think": THINK}))
             txt = _THINK.sub("", r.message.content or "").strip()
             dt = time.time() - t
             if not txt:
