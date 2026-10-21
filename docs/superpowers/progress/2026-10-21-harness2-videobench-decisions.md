@@ -92,3 +92,34 @@ Risks to handle in the spec:
   hooks/scripts doing the HTML), and test a few local models first.
 - Proposer/composer (the editor) needs a stronger model than the solver; candidates: one cloud
   call per stage (few calls), or Claude for the editor role. Decide in spec.
+
+## v1 scope and build order (user said "start building", 2026-10-21)
+
+Discovered during build: the open-model visuals harness to improve already exists —
+`scripts/gemma_director.py` (+ `_prompts.py`, `_tools.py`), which drives the HyperFrames
+faceless-explainer workflow with an Ollama model (design → storyboard → frames → assemble).
+Its prompts (`gemma_director_prompts.py`) + the plugin's frame role packet are the Harness²
+editable surface. Model is set by `GEMMA_DIRECTOR_MODEL`; `GEMMA_DIRECTOR_NUM_CTX` /
+`GEMMA_DIRECTOR_TIMEOUT` added for local models (Ollama's VRAM default ctx is 4096).
+
+1. [done] `videobench/` tier-1 pixel scorer (coverage, empty thirds, cut pacing, repeats,
+   frozen holds) + `tasks.json`. `python -m videobench.score --references` checks ceiling >
+   floor: mining 0.884 vs 0.715, H2S 0.989 vs 0.844. Known gap: repeat detector not yet
+   validated on a real repeat (scores 0 on the old Gemma video that repeats a card).
+2. [running] base rollout: gemma_director with a LOCAL model on h2s-sewers
+   (`output/videobench/<task>/<label>/`), scored by videobench.
+3. Rollout runner (`videobench/rollout.py`): init project → hf_prepare_project → director with a
+   given model + harness dir → render → score → log.
+4. Harness² loop over the director's prompts: k base rollouts → INV/DOM proposals (citing
+   rollout moments) → validate → probe → aggregate → select → library/EXPERIENCE.md.
+5. Tier-2 judge (vision model on snapshots) + user 1-5 ratings; label log for later laya.
+6. Cloud validation run before adopting any harness.
+
+## Compute
+
+- Local: GTX 1660 Ti 6 GB — smoke tests with 4–9B models.
+- **Kaggle (user's account, free weekly GPU/TPU; CLI configured at ~/.kaggle)**: batch rollouts
+  with bigger open models (12–27B on 2×T4), and later laya fine-tuning. Run the whole batch
+  inside a Kaggle notebook and download results; avoid tunnelling Kaggle's Ollama to the PC.
+- Environment gotcha: Apply_Bot's Docker `ollama-server` (0.31.2, CPU-only) also binds 11434;
+  native Ollama was upgraded to 0.40.7 (2026-10-21) and now answers on 127.0.0.1:11434.

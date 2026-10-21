@@ -20,6 +20,10 @@ SKILLS = Path.home() / ".claude/plugins/cache/hyperframes/hyperframes/0.8.147/sk
 FE_SCRIPTS = SKILLS / "faceless-explainer/scripts"
 HF = "hyperframes@0.8.147"
 MODEL = os.environ.get("GEMMA_DIRECTOR_MODEL", "gemma4:31b-cloud")
+# Local models need an explicit context window (Ollama's VRAM-based default can be 4096, which
+# silently truncates the role packet) and a longer timeout. 0 = leave Ollama's default.
+NUM_CTX = int(os.environ.get("GEMMA_DIRECTOR_NUM_CTX", "0"))
+TIMEOUT = float(os.environ.get("GEMMA_DIRECTOR_TIMEOUT", "300"))
 
 log = logging.getLogger("gemma_director")
 
@@ -65,12 +69,15 @@ class LLMError(RuntimeError):
 
 
 def llm(stage: str, system: str, user: str, images: list[Path] | None = None,
-        *, timeout: float = 300, attempts: int = 3, num_predict: int = 16000,
+        *, timeout: float | None = None, attempts: int = 3, num_predict: int = 16000,
         temperature: float = 0.7, history: list[dict] | None = None) -> str:
     """One logical Gemma call (with transport retries). Returns text content.
     Raises LLMError when every attempt stalls/fails."""
     import ollama
-    client = ollama.Client(timeout=timeout)
+    client = ollama.Client(timeout=timeout or TIMEOUT)
+    options = {"num_predict": num_predict, "temperature": temperature}
+    if NUM_CTX:
+        options["num_ctx"] = NUM_CTX
     msgs = [{"role": "system", "content": system}] + (history or [])
     um: dict = {"role": "user", "content": user}
     if images:
@@ -81,7 +88,7 @@ def llm(stage: str, system: str, user: str, images: list[Path] | None = None,
         t = time.time()
         try:
             r = client.chat(model=MODEL, messages=msgs,
-                            options={"num_predict": num_predict, "temperature": temperature})
+                            options=options)
             txt = _THINK.sub("", r.message.content or "").strip()
             dt = time.time() - t
             if not txt:
