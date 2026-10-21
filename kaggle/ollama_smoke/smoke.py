@@ -37,7 +37,7 @@ for m in MODELS:
     t = time.time()
     sh(f"ollama pull {m}")
     pull_s = time.time() - t
-    body = {"model": m, "stream": False, "think": True,
+    body = {"model": m, "stream": False, **({"think": True} if m.startswith("qwen3") else {}),
             "messages": [{"role": "user", "content": PROMPT}],
             "options": {"num_ctx": NUM_CTX, "num_predict": 4000}}
     req = urllib.request.Request("http://127.0.0.1:11434/api/chat", data=json.dumps(body).encode(),
