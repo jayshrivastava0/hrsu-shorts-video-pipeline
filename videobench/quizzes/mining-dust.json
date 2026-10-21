@@ -1,0 +1,24 @@
+{
+  "task": "mining-dust",
+  "source": "output/shorts/run-b2a193ef/explanation_plan.json (verified claims); answers hand-written 2026-10-21",
+  "questions": [
+    {"id": "q1", "beat": "step_1", "q": "What lets calcium nitrate keep a haul road damp in dry air?",
+     "answer": "It absorbs moisture from the air (deliquescence)",
+     "distractors": ["It raises the road surface temperature", "It binds the dust into a concrete-like crust", "It reflects sunlight so the road stays cool"]},
+    {"id": "q2", "beat": "step_2", "q": "What does that longer-lasting moisture reduce most directly?",
+     "answer": "How often water trucks have to spray the road",
+     "distractors": ["How much ore the mine can haul", "How wide the haul road must be", "How much rainfall the site needs"]},
+    {"id": "q3", "beat": "step_2", "q": "Which savings follow from fewer water-truck cycles?",
+     "answer": "Less diesel, lower labour cost and less wear on hauling equipment",
+     "distractors": ["Cheaper explosives and blasting crews", "Lower electricity use at the crusher", "Lower royalties and taxes"]},
+    {"id": "q4", "beat": "step_3", "q": "How do chloride salts compare with calcium nitrate on mining equipment?",
+     "answer": "Chlorides corrode steel faster; calcium nitrate slows that corrosion",
+     "distractors": ["Chlorides protect steel; calcium nitrate corrodes it", "Both corrode steel at the same rate", "Neither touches steel because both stay on the road"]},
+    {"id": "q5", "beat": "step_3", "q": "What does slower corrosion save the mine?",
+     "answer": "Fewer chassis replacements and structural repairs",
+     "distractors": ["Faster truck speeds on the haul road", "A lower purchase price for the salt", "Less dust in the processing plant"]},
+    {"id": "q6", "beat": "step_4", "q": "What is the overall cost conclusion?",
+     "answer": "Higher upfront price, but a lower total life-cycle cost than chlorides",
+     "distractors": ["Cheaper upfront and cheaper over the life cycle", "More expensive overall, but better dust control", "The same total cost; only the dust control differs"]}
+  ]
+}
