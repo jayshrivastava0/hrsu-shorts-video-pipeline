@@ -32,6 +32,7 @@ import gemma_director_tools as T  # noqa: E402
 log = T.log
 SKILLS = T.SKILLS
 SUMMARY: dict = {"stages": {}, "frames": {}}
+RUN_DIR: Path | None = None  # shorts run holding explanation_plan.json; default <project>/../..
 
 
 # ------------------------------------------------------------------------ utils
@@ -142,7 +143,7 @@ def stage_design(project: Path, force: bool):
 # ------------------------------------------------------------------------ stage 2
 def sb_user_prompt(project: Path) -> str:
     vs, sc = voices(project), script_blocks(project)
-    plan = json.loads(read(project.parent.parent / "explanation_plan.json"))
+    plan = json.loads(read((RUN_DIR or project.parent.parent) / "explanation_plan.json"))
     parts = ["SOURCE: the locked narration, split into beats, with the real word timings of the recorded voice-over.\n"]
     for i, (v, s) in enumerate(zip(vs, sc), 1):
         parts.append(f"### BEAT {i}  (duration {v['duration_s']}s)\nNarration: {s}\nWord@seconds table (seconds from the start of this beat):\n{words_table(v)}\n")
@@ -448,8 +449,12 @@ def main():
     ap.add_argument("--concurrency", type=int, default=2)
     ap.add_argument("--only-frames", default="")
     ap.add_argument("--no-render", action="store_true")
+    ap.add_argument("--run", default="", help="shorts run dir (default: <project>/../..)")
     a = ap.parse_args()
     project = Path(a.project).resolve()
+    if a.run:
+        global RUN_DIR
+        RUN_DIR = Path(a.run).resolve()
     setup_logging(project)
     sj = work(project) / "summary.json"
     if sj.exists():
