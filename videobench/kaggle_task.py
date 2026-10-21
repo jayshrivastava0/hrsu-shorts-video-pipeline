@@ -37,11 +37,13 @@ from kaggle_benchmarks.content_types import images
 QUIZ = {quiz}
 NARRATION = {narration}
 GRIDS = {grids}
+CANARY = {canary}
+CANARY_GRID = "{canary_grid}"
 REPS = {reps}
 LETTERS = "ABCD"
 
 
-def prompt_for(cond, q, options):
+def prompt_for(cond, q, options, narration=None):
     opts = "\\n".join(f"{{LETTERS[i]}}) {{o}}" for i, o in enumerate(options))
     if cond == "none":
         lead = "Answer this question about an industrial chemistry topic."
@@ -51,7 +53,7 @@ def prompt_for(cond, q, options):
                 "if they do not show it, give your best guess.")
     else:
         lead = ("The image is a grid of frames (read left-to-right, top-to-bottom) from one segment "
-                "of an explainer video. The narrator says during it: \\"" + NARRATION[q["beat"]]
+                "of an explainer video. The narrator says during it: \\"" + (narration or NARRATION[q["beat"]])
                 + "\\" Answer using the video.")
     return (lead + "\\n\\nQuestion: " + q["q"] + "\\n" + opts
             + "\\n\\nEnd your reply with a line of the form ANSWER: <letter>.")
@@ -81,10 +83,29 @@ def comprehension(llm) -> dict:
                 total[cond] += 1
                 right[cond] += ans == correct
     acc = {{c: round(right[c] / total[c], 3) for c in right}}
-    kbench.assertions.assert_true(acc["visual"] >= acc["none"],
-                                  expectation=f"visuals add knowledge: {{acc}}")
+
+    # Canary (anti-cheating): a FALSE fact is drawn onto the hook frames (and said in the
+    # narration for "both"). Grounded = real answer without video, planted answer with it.
+    expect = {{"none": CANARY["answer"], "visual": CANARY["planted"], "both": CANARY["planted"]}}
+    hits = {{"none": 0, "visual": 0, "both": 0}}
+    for rep in range(REPS):
+        options = [CANARY["answer"], CANARY["planted"], *CANARY["distractors"]]
+        rng.shuffle(options)
+        for cond in ("none", "visual", "both"):
+            with kbench.chats.new(f"canary-{{rep}}-{{cond}}"):
+                kw = {{}} if cond == "none" else {{
+                    "image": images.from_base64(CANARY_GRID, format="jpeg")}}
+                ans = letter(llm.prompt(prompt_for(cond, CANARY, options,
+                                                   CANARY["planted_narration"]), **kw))
+            hits[cond] += ans != "" and options[LETTERS.index(ans)] == expect[cond]
+    canary = {{c: round(hits[c] / REPS, 3) for c in hits}}
+    grounded = all(v >= 0.5 for v in canary.values())
+    kbench.assertions.assert_true(grounded, expectation=f"viewer is grounded (canary): {{canary}}")
     return {{"acc_none": acc["none"], "acc_visual": acc["visual"], "acc_both": acc["both"],
-            "visual_lift": round(acc["visual"] - acc["none"], 3)}}
+            "visual_lift": round(acc["visual"] - acc["none"], 3),
+            "canary_truth_without_video": canary["none"],
+            "canary_follows_planted_visual": canary["visual"],
+            "canary_follows_planted_both": canary["both"], "grounded": grounded}}
 
 
 comprehension.run(kbench.llm)
@@ -115,7 +136,12 @@ def build(task_id: str, video: Path, label: str, reps: int = 2) -> str:
         for b in beats:
             grids[b] = grid_b64(C.extract_frames(video, *windows[b], Path(tmp) / b,
                                                  C.FRAMES_PER_BEAT))
+        c = quiz["canary"]
+        src = C.extract_frames(video, *windows[c["beat"]], Path(tmp) / "canary_src",
+                               C.FRAMES_PER_BEAT)
+        canary_grid = grid_b64(C.plant_label(src, c["planted_label"], Path(tmp) / "canary"))
     return TEMPLATE.format(task_id=task_id, label=label, reps=reps,
+                           canary=json.dumps(c, indent=1), canary_grid=canary_grid,
                            quiz=json.dumps({"questions": quiz["questions"]}, indent=1),
                            narration=json.dumps({b: narr[b] for b in beats}, indent=1),
                            grids=json.dumps(grids))

@@ -11,6 +11,12 @@ answers each question under these conditions:
 
   visual_lift = acc(visual) - acc(none)   the headline number: knowledge the visuals add
 
+Canary (anti-cheating check): each quiz plants one FALSE fact. The planted label is drawn onto
+that beat's frames (and, for "both", stated in the narration). A trustworthy viewer gives the
+real answer with no video, but the planted answer when shown the doctored video -- proving it
+reads the media instead of answering from what it already knows. `grounded` is false otherwise,
+and a viewer that is not grounded must not be used as a judge.
+
 Each question is asked `reps` times with the options in a different order (position bias),
 and the viewer keeps its reasoning ("thinking") on.
 
@@ -70,6 +76,44 @@ def extract_frames(video: Path, start: float, end: float, out_dir: Path, n: int)
                         "-frames:v", "1", "-vf", crop, "-q:v", "3", str(p)], check=True)
         paths.append(p)
     return paths
+
+
+def plant_label(frames: list[Path], label: str, out_dir: Path) -> list[Path]:
+    """Copies of `frames` with `label` drawn as an on-brand card in the middle of the diagram."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = []
+    for f in frames:
+        im = Image.open(f).convert("RGB")
+        w, h = im.size
+        d = ImageDraw.Draw(im)
+        size = max(14, w // 22)
+        try:
+            font = ImageFont.truetype("arialbd.ttf", size)
+        except OSError:
+            font = ImageFont.load_default()
+        words, lines, line = label.split(), [], ""
+        for word in words:  # wrap to ~80% of the width
+            trial = f"{line} {word}".strip()
+            if d.textlength(trial, font=font) > w * 0.8 and line:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        lines.append(line)
+        box_h = len(lines) * int(size * 1.35) + size
+        top = int(h * 0.45) - box_h // 2
+        d.rounded_rectangle([w * 0.06, top, w * 0.94, top + box_h], radius=size // 2,
+                            fill=(10, 25, 47), outline=(212, 175, 55), width=max(2, size // 8))
+        for i, ln in enumerate(lines):
+            tw = d.textlength(ln, font=font)
+            d.text(((w - tw) / 2, top + size // 2 + i * int(size * 1.35)), ln, font=font,
+                   fill=(212, 175, 55))
+        p = out_dir / f.name
+        im.save(p, quality=90)
+        out.append(p)
+    return out
 
 
 def build_prompt(cond: str, q: dict, options: list[str], narration: str) -> str:
@@ -132,13 +176,48 @@ def run(task_id: str, video: Path, model: str, reps: int, think: bool, num_ctx: 
                                     "correct": ans == correct, "secs": round(secs, 1)})
                     print(f"{q['id']} rep{rep} {cond:6s} {ans or '?'} "
                           f"{'ok' if ans == correct else 'x '} {secs:.0f}s", flush=True)
+        canary = run_canary(quiz.get("canary"), frames, Path(tmp), model, reps, think,
+                            num_ctx, rng)
     acc = {c: round(sum(r["correct"] for r in results if r["cond"] == c)
                     / max(1, sum(r["cond"] == c for r in results)), 3) for c in conditions}
     summary = {"task": task_id, "video": str(video), "model": model, "reps": reps,
                "accuracy": acc}
     if "visual" in acc and "none" in acc:
         summary["visual_lift"] = round(acc["visual"] - acc["none"], 3)
+    if canary:
+        summary["canary"] = canary["summary"]
+        results += canary["answers"]
     return {"summary": summary, "answers": results}
+
+
+def run_canary(c: dict | None, frames: dict, tmp: Path, model: str, reps: int, think: bool,
+               num_ctx: int, rng: random.Random) -> dict | None:
+    """Planted-false-fact check. Expected: truth with no video, the planted answer with it."""
+    if not c:
+        return None
+    doctored = plant_label(frames[c["beat"]], c["planted_label"], tmp / "canary")
+    expect = {"none": c["answer"], "visual": c["planted"], "both": c["planted"]}
+    answers = []
+    for rep in range(reps):
+        options = [c["answer"], c["planted"], *c["distractors"]]
+        rng.shuffle(options)
+        for cond in CONDITIONS:
+            imgs = [] if cond == "none" else doctored
+            ans, secs = ask(model, build_prompt(cond, c, options, c["planted_narration"]),
+                            imgs, think, num_ctx)
+            ok = ans != "" and options[LETTERS.index(ans)] == expect[cond]
+            answers.append({"q": "canary", "rep": rep, "cond": f"canary_{cond}", "answer": ans,
+                            "correct": ok, "secs": round(secs, 1)})
+            print(f"canary rep{rep} {cond:6s} {ans or '?'} {'ok' if ok else 'x '} {secs:.0f}s",
+                  flush=True)
+    rate = {cond: round(sum(a["correct"] for a in answers if a["cond"] == f"canary_{cond}")
+                        / reps, 3) for cond in CONDITIONS}
+    return {"summary": {"truth_without_video": rate["none"],
+                        "follows_planted_visual": rate["visual"],
+                        "follows_planted_both": rate["both"],
+                        "grounded": rate["none"] >= 0.5 and rate["visual"] >= 0.5
+                        and rate["both"] >= 0.5},
+            "answers": answers}
 
 
 def main(argv: list[str] | None = None) -> int:
