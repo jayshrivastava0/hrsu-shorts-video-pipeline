@@ -123,3 +123,35 @@ editable surface. Model is set by `GEMMA_DIRECTOR_MODEL`; `GEMMA_DIRECTOR_NUM_CT
   inside a Kaggle notebook and download results; avoid tunnelling Kaggle's Ollama to the PC.
 - Environment gotcha: Apply_Bot's Docker `ollama-server` (0.31.2, CPU-only) also binds 11434;
   native Ollama was upgraded to 0.40.7 (2026-10-21) and now answers on 127.0.0.1:11434.
+
+## Benchmark redesign + first validation (2026-10-21/22)
+
+User rejected pixel coverage as a quality measure ("a video is conveying information, making it
+catchy"). Pixel checks are now a pass/fail GATE only. Quality tiers: comprehension (does it
+convey the verified explanation), alignment, engagement (hook / first ~20 s — YouTube retention
+shows viewers leave by ~25 s), with YouTube retention (`scheduler/youtube_analytics.py`) as the
+long-run truth.
+
+Comprehension protocol (`videobench/comprehension.py`, Kaggle twin `videobench/kaggle_task.py`):
+- Frozen quiz per task, one MC item per verified claim (10-11 items), each tied to its beat.
+- Frontier viewers know the chemistry (100% with no video), so accuracy-lift is useless.
+  Viewer must answer ONLY from the frames, with "E) Not shown"; every item is also asked on a
+  fixed foreign control (other task's hook) where the answer is always "not shown".
+  comprehension = conveyed - leakage (abstaining scores 0).
+- Planted-false-fact canary (user's idea): false label drawn on the hook frames; grounded =
+  truth without video AND planted answer with doctored frames. Under the old "best guess"
+  wording Claude Sonnet 5.5 / Gemini 3.6 ignored the planted card; under "answer only from the
+  frames" all pass. Canary must sit on frames that do not contradict it (hook, not mechanism).
+
+Result on Kaggle Benchmarks (all viewers grounded, leakage 0.00):
+
+| task / video            | Claude Sonnet 5.5 | Gemini 3.6 Flash | Gemini 3.8 Flash |
+|-------------------------|------|------|------|
+| H2S, Claude-made        | 1.00 | 0.90 | 0.95 |
+| H2S, gemma_director     | 0.75 | 0.70 | 0.70 |
+| mining, Claude-made     | 1.00 | 0.95 | 0.95 |
+| mining, old Gemma shots | 0.27 | 0.18 | 0.27 |
+
+Ceiling > floor on both tasks for every viewer, and the viewers agree with each other.
+Kaggle Benchmarks facts: see memory `kaggle-benchmarks-judges` (media only grounded when run ON
+Kaggle; local proxy is text-only).
