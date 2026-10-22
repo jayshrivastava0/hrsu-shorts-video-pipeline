@@ -13,7 +13,7 @@ import time
 import urllib.request
 
 CONFIG = {
-    "model": "gemma4:31b",
+    "model": "gemma4:26b-a4b",   # inner loop (56 tok/s); gemma4:31b (11 tok/s) for validation
     "tasks": ["h2s-sewers", "mining-dust"],
     "k": 2,
     "num_ctx": 32768,
@@ -49,10 +49,20 @@ for t in CONFIG["tasks"]:
 
 # ---- toolchain: node + headless-chrome libs + HyperFrames, Ollama
 sh("curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y -qq nodejs", 900)
-sh("apt-get install -y -qq zstd libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 "
-   "libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 "
-   "libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji > /dev/null 2>&1", 900)
+sh("apt-get update -qq", 600)
+rc, _ = sh("apt-get install -y zstd libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 "
+           "libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 "
+           "libgbm1 libasound2t64 libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji "
+           "|| apt-get install -y libasound2", 900)
 sh(f"npx --yes {HF} --version", 900)
+
+# ---- fail fast: can HyperFrames render headless here? If not, rollouts run with --no-render.
+sh(f"npx --yes {HF} init {W}/probe --non-interactive --example=blank --resolution=portrait", 900, cwd=W)
+sh(f"npx --yes {HF} browser ensure", 900, cwd=f"{W}/probe")
+rc, _ = sh(f"npx --yes {HF} render --quality draft --output renders/probe.mp4", 900, cwd=f"{W}/probe")
+RENDER_OK = rc == 0 and os.path.exists(f"{W}/probe/renders/probe.mp4")
+print("RENDER_OK", RENDER_OK, flush=True)
+shutil.rmtree(f"{W}/probe", ignore_errors=True)
 sh("pip install -q ollama", 600)
 sh("curl -fsSL https://ollama.com/install.sh | sh", 900)
 env = ("OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_HOST=127.0.0.1:11434 "
@@ -79,19 +89,20 @@ for rep in range(CONFIG["k"]):
         label = f"base-{m.replace(':', '-')}-r{rep}"
         cmd = (f"{sys.executable} -m videobench.rollout run {t} {label} --model {m} "
                f"--think '{think}' --think-budget {CONFIG['think_budget']} "
-               f"--num-ctx {CONFIG['num_ctx']} --timeout 3600 --concurrency 1")
+               f"--num-ctx {CONFIG['num_ctx']} --timeout 3600 --concurrency 1"
+               + ("" if RENDER_OK else " --no-render"))
         t1 = time.time()
         p = subprocess.run(cmd, shell=True, cwd=REPO, timeout=6 * 3600,
                            env={**os.environ, "VIDEOBENCH_OUT": OUT, "PYTHONUTF8": "1",
                                 "GEMMA_DIRECTOR_SKILLS": f"{INP}/skills"})
         log.append({"task": t, "rep": rep, "label": label, "rc": p.returncode,
                     "secs": round(time.time() - t1)})
-        json.dump({"config": CONFIG, "think": think, "rollouts": log},
+        json.dump({"config": CONFIG, "think": think, "render_ok": RENDER_OK, "rollouts": log},
                   open(f"{W}/rollouts.json", "w"), indent=1)
         print(log[-1], flush=True)
 
 # keep outputs small: drop the input copies
 shutil.rmtree(f"{W}/inputs", ignore_errors=True)
 shutil.rmtree(REPO, ignore_errors=True)
-json.dump({"config": CONFIG, "think": think, "rollouts": log}, open(f"{W}/rollouts.json", "w"), indent=1)
+json.dump({"config": CONFIG, "think": think, "render_ok": RENDER_OK, "rollouts": log}, open(f"{W}/rollouts.json", "w"), indent=1)
 print("DONE")
