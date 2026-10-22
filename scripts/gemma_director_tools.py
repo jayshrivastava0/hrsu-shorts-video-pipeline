@@ -16,7 +16,9 @@ import threading
 import time
 from pathlib import Path
 
-SKILLS = Path.home() / ".claude/plugins/cache/hyperframes/hyperframes/0.8.147/skills"
+# GEMMA_DIRECTOR_SKILLS points at a copy of the plugin's skills dir (e.g. on Kaggle).
+SKILLS = Path(os.environ.get("GEMMA_DIRECTOR_SKILLS")
+              or Path.home() / ".claude/plugins/cache/hyperframes/hyperframes/0.8.147/skills")
 FE_SCRIPTS = SKILLS / "faceless-explainer/scripts"
 HF = "hyperframes@0.8.147"
 MODEL = os.environ.get("GEMMA_DIRECTOR_MODEL", "gemma4:31b-cloud")
