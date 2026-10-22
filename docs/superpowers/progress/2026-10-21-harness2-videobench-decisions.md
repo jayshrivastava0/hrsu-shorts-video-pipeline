@@ -145,13 +145,27 @@ Comprehension protocol (`videobench/comprehension.py`, Kaggle twin `videobench/k
 
 Result on Kaggle Benchmarks (all viewers grounded, leakage 0.00):
 
-| task / video            | Claude Sonnet 5.5 | Gemini 3.6 Flash | Gemini 3.8 Flash |
-|-------------------------|------|------|------|
-| H2S, Claude-made        | 1.00 | 0.90 | 0.95 |
-| H2S, gemma_director     | 0.75 | 0.70 | 0.70 |
-| mining, Claude-made     | 1.00 | 0.95 | 0.95 |
-| mining, old Gemma shots | 0.27 | 0.18 | 0.27 |
+| task / video            | Claude Sonnet 5.5 | Gemini 3.6 Flash | Gemini 3.8 Flash | Gemma 4 31B |
+|-------------------------|------|------|------|------|
+| H2S, Claude-made        | 1.00 | 0.90 | 0.95 | 0.95 |
+| H2S, gemma_director     | 0.75 | 0.70 | 0.70 | 0.70 |
+| mining, Claude-made     | 1.00 | 0.95 | 0.95 | 1.00 |
+| mining, old Gemma shots | 0.27 | 0.18 | 0.27 | 0.27 |
 
 Ceiling > floor on both tasks for every viewer, and the viewers agree with each other.
 Kaggle Benchmarks facts: see memory `kaggle-benchmarks-judges` (media only grounded when run ON
 Kaggle; local proxy is text-only).
+
+Gemma 4 31B (the production director's model family) is also grounded as a viewer and agrees
+with the frontier viewers, so it can judge too.
+
+## Move to Kaggle (2026-10-22, user: "run everything on kaggle")
+
+Ollama's library has the production model's open weights (`gemma4:31b`, ~20 GB q4), so the
+director rollouts can run the SAME model as production on Kaggle's free GPUs (2x T4) instead
+of 4-9B proxies on the 6 GB laptop GPU -- no cloud budget used. Supersedes "inner loop on local
+models". Caveats: local q4 != the cloud deployment, so adoption still wants one cloud check;
+`gemma4:26b-a4b` (MoE, ~4B active) is the fast same-family fallback for inner-loop iterations.
+Kaggle limits: ~12 h per GPU session, ~30 GPU-h per week -- budget k rollouts per week.
+Step 0: smoke kernel `kaggle/rollout_smoke/` checks 2x T4, gemma4:31b on GPU at 32k ctx,
+thinking support, and that HyperFrames renders headless on Kaggle.
