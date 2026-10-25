@@ -71,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--retry-url", help="reset a held/failed/failed_gate post and process it again")
     p.add_argument("--max-per-run", type=int, default=1)
     p.add_argument("--max-uploads-per-day", type=int, default=1)
-    p.add_argument("--director", choices=["claude", "gemma", "auto"], default="claude")
+    p.add_argument("--director", choices=["claude"], default="claude")
     p.add_argument("--dry-run", action="store_true",
                    help="discovery + text stages only; never calls Claude/Gemma or YouTube; state not saved")
     return p

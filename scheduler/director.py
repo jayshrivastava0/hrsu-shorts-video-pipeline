@@ -76,6 +76,9 @@ def _npx() -> str:
     return shutil.which("npx") or "npx"
 
 
+# Visuals are always authored by Claude Code on Opus 5.5 (set HRSU_DIRECTOR_MODEL to override).
+DIRECTOR_MODEL = "claude-opus-5-5"
+
 LANDSCAPE_MIN_SECONDS = 90.0   # videos of 1.5 min or more are landscape (1920x1080), shorter ones portrait
 WORDS_PER_SECOND = 2.5         # fallback estimate from the narration when no audio duration is available
 
@@ -161,7 +164,7 @@ def run_claude(project_dir: Path | str, run_dir: Path | str, *, timeout: float =
     (project / "DIRECTOR_DONE.json").unlink(missing_ok=True)
     cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits",
            "--allowedTools", CLAUDE_TOOLS, "--add-dir", str(run_dir), "--strict-mcp-config"]
-    model = model or os.environ.get("HRSU_DIRECTOR_MODEL", "sonnet")
+    model = model or os.environ.get("HRSU_DIRECTOR_MODEL", DIRECTOR_MODEL)
     if model:
         cmd += ["--model", model]
     r = run(cmd, cwd=project, timeout=timeout, input_text=build_prompt(project, run_dir),
