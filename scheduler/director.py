@@ -111,7 +111,7 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
     if project_dir.exists():
         shutil.rmtree(project_dir)
     project_dir.parent.mkdir(parents=True, exist_ok=True)
-    r = run([_npx(), "hyperframes", "init", str(project_dir), "--non-interactive", "--example=blank",
+    r = run([_npx(), "--yes", "hyperframes", "init", str(project_dir), "--non-interactive", "--example=blank",
              f"--resolution={orientation_for(run_dir)}"], cwd=project_dir.parent, timeout=900)
     if r.returncode != 0 or r.timed_out:
         raise RuntimeError(f"hyperframes init failed (rc={r.returncode}): {r.output[-300:]}")
@@ -199,7 +199,7 @@ def claude_usage_block(run: Runner = run_cmd, cwd: Path | str = REPO_ROOT) -> Op
     """`npx hyperframes usage --json` -> reason string if Claude allowance is too low, else None.
     Any failure to read usage returns None (proceed; the run itself detects real exhaustion)."""
     try:
-        r = run([_npx(), "hyperframes", "usage", "--json"], cwd=cwd, timeout=120)
+        r = run([_npx(), "--yes", "hyperframes", "usage", "--json"], cwd=cwd, timeout=120)
         data = json.loads(r.output[r.output.index("{"):])
         if data.get("status") != "known":
             return None

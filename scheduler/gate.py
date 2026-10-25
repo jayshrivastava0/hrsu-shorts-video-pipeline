@@ -58,7 +58,7 @@ def count_lint_errors(data) -> int:
 def run_lint(project_dir: Path) -> tuple[int, str]:
     """Returns (error_count, detail). A lint run that cannot execute counts as 1 error."""
     try:
-        proc = subprocess.run([_npx(), "hyperframes", "lint", "--json"], cwd=str(project_dir),
+        proc = subprocess.run([_npx(), "--yes", "hyperframes", "lint", "--json"], cwd=str(project_dir),
                               capture_output=True, text=True, encoding="utf-8", errors="replace",
                               timeout=300)
     except Exception as exc:
