@@ -17,3 +17,25 @@ banned_claims:
   - "certified"
   - "ISO 9001"
   - "FDA approved"
+
+# Fact tiers (owner-supplied 2026-10-29). Only in_place may be stated as true.
+# in_progress must never be stated as done. never_claimed must not be presented as true.
+in_place:
+  - "Delivery to the buyer's door when the buyer pays for transport; any agreed trade term is acceptable, so a door-delivery quotation is a real offer"
+  - "Anything printed on the current CoA or TDS (assay, specification limits, packaging, minimum order, shelf life, hazard class) may be shown on screen, quoted as printed"
+  - "A garden at the plant"
+  - "Steam reuse running in one boiler"
+  - "Reaction waste (the impurities) is disposed of with government-authority approval, and the authority collects it"
+  - "Ash from the wood fire is used in agriculture"
+  - "A scrubber on one reaction vessel"
+  - "Chimneys on three reaction boilers, all above the government's threshold height (say exactly that and no more)"
+  - "Solar power (size or share of plant power not stated, so no figure is shown)"
+  - "Rainwater harvesting"
+  - "Company-sponsored employee retreat to a religious site, chosen by employee vote, free of cost to employees"
+in_progress:
+  - "Steam reuse is being expanded to the other boilers"
+  - "The scrubber is being expanded to the other reaction vessels"
+  - "The chimneys on two of the three boilers are lower than the first one and are being raised to the same height as it"
+  - "The new expansion plans to stop burning wood and run on electricity; the electricity department has not yet approved it, so it may only be described as planned and pending approval"
+never_claimed:
+  - "Any CSR programme. CSR activity is very small; videos must not present HRSU as having a CSR programme"
