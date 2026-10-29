@@ -466,3 +466,14 @@ def test_retry_url_refuses_brief_entry(tmp_path):
     assert env.calls["director"] == 0 and env.calls["gate"] == 0
     e = env.state().get(BRIEF_ID)
     assert e["status"] == "failed" and e["attempts"] == 0
+
+
+def test_retry_url_refuses_awaiting_review(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    assert env.run() == 0
+    assert env.run("--retry-url", new) == 2
+    assert env.calls["director"] == 1 and env.calls["publish"] == 0
+    assert env.state().get(new)["status"] == "awaiting_review"

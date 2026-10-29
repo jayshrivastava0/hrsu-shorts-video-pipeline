@@ -285,6 +285,10 @@ def run(args, deps: Deps) -> int:
         if "type" in state.get(args.retry_url):
             logger.error("%s is a brief; use python -m scheduler.make_video --yes", args.retry_url)
             return 2
+        if state.get(args.retry_url)["status"] in ("awaiting_review", "rejected"):
+            logger.error("%s is %s; a pending review would be discarded: use python -m scheduler.review",
+                         args.retry_url, state.get(args.retry_url)["status"])
+            return 2
         state.update(args.retry_url, status="queued", attempts=0, run_dir=None, last_error=None)
 
     if not args.dry_run and state.count_awaiting_review() >= MAX_AWAITING_REVIEW:
