@@ -268,6 +268,21 @@ Each prompt file starts from the explainer prompt's recipe (BRIEF.md, frame.md, 
 
 ---
 
+### Task 13a: Director honours supplied assets and an orientation override
+
+**Files:** Modify `scheduler/director.py`; Test `tests/scheduler/test_sched_director.py`
+
+**Interfaces:**
+- Produces: `orientation_for(run_dir)` returns `"landscape"` or `"portrait"` from `run_dir / "orientation.txt"` when that file exists and holds one of those two words (stripped, case-insensitive), otherwise the existing duration rule. `prepare_project(run_dir, project_dir, run=...)` copies every file under `run_dir / "assets"` (if that folder exists; skip `voice` is not an issue because it lives in the project) into `project_dir / "assets"` after `hf_prepare_project` ran, so the director prompts' `assets/` folder holds the supplied documents and photos on every (re-)direct, because the project folder is recreated each time.
+
+- [ ] **Step 1: Write failing tests**: `test_orientation_file_overrides_duration_rule`, `test_orientation_file_garbage_is_ignored`, `test_prepare_project_copies_supplied_assets` (fake `run` that creates the project dir; assert files land in `project_dir/assets/`), `test_prepare_project_without_assets_folder_is_unchanged`.
+- [ ] **Step 2: Run** `pytest tests/scheduler/test_sched_director.py -v`. Expected: FAIL.
+- [ ] **Step 3: Implement both changes in `scheduler/director.py`.**
+- [ ] **Step 4: Run** `pytest tests/scheduler -q`. Expected: PASS.
+- [ ] **Step 5: Commit** `director: supplied assets and orientation override`.
+
+---
+
 ### Task 13: `make_video` command
 
 **Files:** Create `scheduler/make_video.py`; Test `tests/scheduler/test_make_video.py`
