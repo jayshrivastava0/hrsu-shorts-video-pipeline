@@ -22,6 +22,7 @@ from scheduler.state import State
 logger = logging.getLogger("scheduler")
 
 MAX_REJECTS = 3
+INTERRUPTED_HINT = " (re-direct interrupted: run reject again or approve)"
 
 
 def _safe(text: object) -> str:
@@ -29,9 +30,10 @@ def _safe(text: object) -> str:
     return str(text).encode("ascii", "replace").decode("ascii")
 
 
-def _entry_status(state: State, eid: str) -> Optional[dict]:
+def _reviewable(state: State, eid: str) -> Optional[dict]:
+    """Entry if it can be approved/rejected: `awaiting_review`, or `rejected` left by an interrupted re-direct."""
     e = state.get(eid)
-    if e is None or e.get("status") != "awaiting_review":
+    if e is None or e.get("status") not in ("awaiting_review", "rejected"):
         return None
     return e
 
@@ -41,18 +43,20 @@ def _project_dir(run_dir: Path, entry: dict) -> Path:
 
 
 def cmd_list(state: State) -> int:
-    rows = [(eid, e) for eid, e in state.entries.items() if e.get("status") == "awaiting_review"]
+    rows = [(eid, e) for eid, e in state.entries.items() if e.get("status") in ("awaiting_review", "rejected")]
     if not rows:
         print("nothing awaiting review")
         return 0
     for eid, e in rows:
         line = f"{eid} | {e.get('type') or 'blog'} | {e.get('title') or eid} | {e.get('video_path')}"
+        if e.get("status") == "rejected":
+            line += INTERRUPTED_HINT
         print(_safe(line))
     return 0
 
 
 def cmd_approve(state: State, eid: str, deps: Deps, alerts: Path) -> int:
-    entry = _entry_status(state, eid)
+    entry = _reviewable(state, eid)
     if entry is None:
         logger.error("%s is not awaiting review", eid)
         return 1
@@ -60,19 +64,20 @@ def cmd_approve(state: State, eid: str, deps: Deps, alerts: Path) -> int:
     if not video or not Path(video).exists():
         logger.error("video file missing for %s: %s (status unchanged)", eid, video)
         return 1
+    prev_status = entry["status"]
     prev_attempts = int(entry.get("attempts") or 0)
     outcome = publish_entry(eid, state, deps, alerts)
     if outcome == "failed":
-        # controller ruling: keep last_error, restore awaiting_review and attempts so the daily loop never retries it
-        state.update(eid, status="awaiting_review", attempts=prev_attempts)
-        logger.error("publish failed for %s; left awaiting review", eid)
+        # controller ruling: keep last_error, restore the previous status and attempts so the daily loop never retries it
+        state.update(eid, status=prev_status, attempts=prev_attempts)
+        logger.error("publish failed for %s; left %s", eid, prev_status)
         return 1
     logger.info("approved %s", eid)
     return 0
 
 
 def cmd_reject(state: State, eid: str, note: str, deps: Deps, type_gate: Callable, alerts: Path) -> int:
-    entry = _entry_status(state, eid)
+    entry = _reviewable(state, eid)
     if entry is None:
         logger.error("%s is not awaiting review", eid)
         return 1
@@ -80,7 +85,7 @@ def cmd_reject(state: State, eid: str, note: str, deps: Deps, type_gate: Callabl
     if not note:
         logger.error("reject needs a non-empty --note")
         return 1
-    rejects = int(entry.get("rejects") or 0)
+    rejects = int(entry.get("rejects") or 0)   # counts successful re-directs only; an interrupted one is not counted yet
     if rejects >= MAX_REJECTS:
         logger.error("%s already rejected %d times; refusing a further reject", eid, rejects)
         return 1
@@ -89,7 +94,9 @@ def cmd_reject(state: State, eid: str, note: str, deps: Deps, type_gate: Callabl
     project = _project_dir(run_dir, entry)
     is_brief = "type" in entry
     recipe = get_recipe(entry["type"]) if is_brief else None
-    state.update(eid, status="rejected", rejects=rejects + 1, review_note=note)
+    # `rejects` and `review_note` are written only after the director succeeds, so a failed or
+    # usage-exhausted re-direct never consumes one of the three rejects.
+    state.update(eid, status="rejected")
 
     kwargs = {"review_note": note}
     if recipe is not None:
@@ -97,13 +104,16 @@ def cmd_reject(state: State, eid: str, note: str, deps: Deps, type_gate: Callabl
     dres = deps.director(run_dir, project, "claude", **kwargs)
     if not dres.ok:
         if dres.usage_exhausted:
-            state.update(eid, status="awaiting_review",
-                         last_error=f"usage exhausted during review: {dres.reason}")
+            reason = f"usage exhausted during review: {dres.reason}"
             logger.error("Claude usage exhausted; %s returned to awaiting review", eid)
         else:
-            state.update(eid, status="failed", last_error=f"director: {dres.reason}"[:500])
-            logger.error("director failed for %s: %s", eid, dres.reason)
+            reason = f"director: {dres.reason}"
+            logger.error("director failed for %s; %s returned to awaiting review: %s", eid, eid, dres.reason)
+        # the previous video is still valid, so the entry goes back to review (never `failed`)
+        state.update(eid, status="awaiting_review", last_error=str(reason)[:500])
         return 1
+
+    state.update(eid, rejects=rejects + 1, review_note=note)
 
     if is_brief:
         brief = Brief(id=eid, text=entry.get("brief", ""), type=entry["type"], url=entry.get("url"),
@@ -152,14 +162,11 @@ def main(argv: Optional[list] = None, deps: Optional[Deps] = None,
     handler = setup_logging(args.runs_dir, deps.today())
     alerts = args.runs_dir.parent / "video_alerts.log"
     try:
-        if args.command == "approve":
-            if state.get(args.id) is None:
-                logger.error("unknown id %s", args.id)
-                return 1
-            return cmd_approve(state, args.id, deps, alerts)
         if state.get(args.id) is None:
             logger.error("unknown id %s", args.id)
             return 1
+        if args.command == "approve":
+            return cmd_approve(state, args.id, deps, alerts)
         return cmd_reject(state, args.id, args.note, deps, type_gate, alerts)
     finally:
         logging.getLogger("scheduler").removeHandler(handler)

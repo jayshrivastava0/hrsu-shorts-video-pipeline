@@ -157,13 +157,15 @@ def test_reject_gate_failure_marks_failed_gate(tmp_path):
     assert e["status"] == "failed_gate" and "video too short" in e["last_error"]
 
 
-def test_reject_director_failure_marks_failed(tmp_path):
-    state_path, runs = _env(tmp_path, {BLOG: _entry(tmp_path, "one")})
+def test_reject_director_failure_restores_awaiting_review(tmp_path):
+    state_path, runs = _env(tmp_path, {BLOG: _entry(tmp_path, "one", rejects=1, review_note="older")})
     deps, calls = _deps(director_result=DirectorResult(False, "claude", reason="timeout"))
     assert review.main(_argv(state_path, runs, "reject", BLOG, "--note", "fix"), deps=deps) == 1
     assert calls["gate"] == []
     e = State(state_path).get(BLOG)
-    assert e["status"] == "failed" and "timeout" in e["last_error"]
+    assert e["status"] == "awaiting_review"
+    assert e["rejects"] == 1 and e["review_note"] == "older"
+    assert "timeout" in e["last_error"]
 
 
 def test_reject_director_usage_exhausted_returns_to_awaiting(tmp_path):
@@ -174,7 +176,25 @@ def test_reject_director_usage_exhausted_returns_to_awaiting(tmp_path):
     assert calls["gate"] == []
     e = State(state_path).get(BLOG)
     assert e["status"] == "awaiting_review"
+    assert not e.get("rejects") and e.get("review_note") is None
     assert "usage" in e["last_error"].lower()
+
+
+def test_list_shows_interrupted_rejected_entry(tmp_path, capsys):
+    entries = {BLOG: _entry(tmp_path, "one", status="rejected", rejects=1)}
+    state_path, runs = _env(tmp_path, entries)
+    assert review.main(_argv(state_path, runs, "list"), deps=_deps()[0]) == 0
+    out = capsys.readouterr().out
+    assert BLOG in out
+    assert "(re-direct interrupted: run reject again or approve)" in out
+
+
+def test_approve_accepts_interrupted_rejected_entry(tmp_path):
+    state_path, runs = _env(tmp_path, {BLOG: _entry(tmp_path, "one", status="rejected")})
+    deps, calls = _deps()
+    assert review.main(_argv(state_path, runs, "approve", BLOG), deps=deps) == 0
+    assert calls["publish"] == [BLOG]
+    assert State(state_path).get(BLOG)["status"] == "published"
 
 
 def test_reject_brief_entry_uses_recipe_prompt_and_type_gate(tmp_path, monkeypatch):
