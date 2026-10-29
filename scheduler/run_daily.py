@@ -27,6 +27,7 @@ DATA_DIR = REPO_ROOT / "data"
 MAX_ATTEMPTS = 2
 MAX_NEW_BURST = 10
 MAX_DEFERRALS = 5
+MAX_AWAITING_REVIEW = 5
 RESUMABLE = ("queued", "text_done", "directed")
 
 
@@ -199,11 +200,24 @@ def process_post(url: str, state: State, deps: Deps, args, alerts: Path, workspa
         notify(alerts, f"GATE FAILED (not published): {url} -- {msg}")
         return "failed_gate"
 
-    # 5) publish
+    # 5) hold for human review; publish_entry() uploads once the video is approved
+    state.update(url, status="awaiting_review", video_path=str(gres.video_path),
+                 project_dir=str(project), last_error=None)
+    logger.info("AWAITING REVIEW %s (video %s)", url, gres.video_path)
+    return "awaiting_review"
+
+
+def publish_entry(url: str, state: State, deps: Deps, alerts: Path) -> str:
+    """Upload an `awaiting_review` entry to YouTube. Returns "published" or "failed"."""
+    entry = state.get(url)
+    attempts = int(entry.get("attempts") or 0)
     try:
-        pub = deps.publish(run_dir_p, gres.video_path, url)
+        pub = deps.publish(Path(entry["run_dir"]), Path(entry["video_path"]), entry.get("url") or url)
     except Exception as exc:
-        return fail(f"publish: {exc}")
+        msg = f"publish: {exc}"
+        state.update(url, status="failed", attempts=attempts + 1, last_error=msg[:500])
+        logger.error("FAILED %s (failed): %s", url, msg)
+        return "failed"
     state.update(url, status="published", video_id=pub.get("video_id"), video_url=pub.get("url"),
                  privacy_actual=pub.get("privacy_actual"), privacy_requested=pub.get("privacy_requested"),
                  published_at=pub.get("published_at") or datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -219,8 +233,11 @@ def pick_candidates(urls: list, state: State, args) -> list:
     """Resumable/retryable posts first (oldest first), then brand-new posts oldest first."""
     if args.only_url:
         e = state.get(args.only_url)
-        if e and e["status"] in ("published", "held", "failed_gate") and args.only_url != args.retry_url:
-            logger.info("%s is %s; use --retry-url to run it again", args.only_url, e["status"])
+        if e and e["status"] in ("published", "held", "failed_gate", "awaiting_review", "rejected") \
+                and args.only_url != args.retry_url:
+            hint = ("use `python -m scheduler.review` to approve or reject it" if e["status"] in ("awaiting_review", "rejected")
+                    else "use --retry-url to run it again")
+            logger.info("%s is %s; %s", args.only_url, e["status"], hint)
             return []
         return [args.only_url]
     cands = []
@@ -261,11 +278,16 @@ def run(args, deps: Deps) -> int:
             return 2
         state.update(args.retry_url, status="queued", attempts=0, run_dir=None, last_error=None)
 
+    if not args.dry_run and state.count_awaiting_review() >= MAX_AWAITING_REVIEW:
+        logger.info("%d video(s) awaiting review (limit %d); nothing new until they are reviewed: "
+                    "python -m scheduler.review list", state.count_awaiting_review(), MAX_AWAITING_REVIEW)
+        return 0
+
     if not args.dry_run and state.count_published_on(deps.today()) >= args.max_uploads_per_day:
         logger.info("daily upload cap (%d) reached; nothing to do", args.max_uploads_per_day)
         return 0
 
-    urls = [] if args.only_url else deps.discover()
+    urls =[] if args.only_url else deps.discover()
     if not args.only_url and not urls:
         logger.warning("discovery returned no posts (site down?); only resuming known work")
     unseen = [u for u in urls if u not in state]

@@ -101,14 +101,17 @@ def test_seed_marks_all_and_no_video(tmp_path):
     assert env.run() == 0 and env.calls["text"] == 0
 
 
-def test_new_post_published_end_to_end(tmp_path):
+def test_gate_pass_stops_for_review_without_publishing(tmp_path):
     env = Env(tmp_path)
     seed(env)
-    env.urls = ["https://hrsuindore.com/blog/brand-new/"] + U
+    new = "https://hrsuindore.com/blog/brand-new/"
+    env.urls = [new] + U
     assert env.run() == 0
-    e = env.state().get("https://hrsuindore.com/blog/brand-new/")
-    assert e["status"] == "published" and e["video_id"] == "V1" and e["privacy_actual"] == "public"
-    assert e["director"] == "claude"
+    e = env.state().get(new)
+    assert e["status"] == "awaiting_review"
+    assert e["video_path"] == str(tmp_path / "ws" / "run-brand-new" / "videos" / "explainer" / "renders" / "video.mp4")
+    assert e["director"] == "claude" and e["last_error"] is None
+    assert env.calls["publish"] == 0
     assert (tmp_path / "runs" / f"{env.today}.log").exists()
 
 
@@ -161,7 +164,8 @@ def test_usage_exhausted_defers_without_attempt(tmp_path):
     assert e["status"] == "text_done" and e["attempts"] == 0
     env.director_mode = "ok"
     assert env.run() == 0
-    assert env.state().get(new)["status"] == "published"
+    assert env.state().get(new)["status"] == "awaiting_review"
+    assert env.calls["publish"] == 0
 
 
 def test_auth_missing_fails_fast_before_director(tmp_path):
@@ -185,20 +189,22 @@ def test_max_per_run_and_oldest_first(tmp_path):
     env = Env(tmp_path, urls=[])
     env.urls = ["https://hrsuindore.com/blog/%s/" % s for s in ("c", "b", "a")]  # c newest
     assert env.run("--allow-backfill", "--max-per-run", "2", "--max-uploads-per-day", "5") == 0
-    assert env.published == ["https://hrsuindore.com/blog/a/", "https://hrsuindore.com/blog/b/"]
-    assert env.state().get("https://hrsuindore.com/blog/c/")["status"] == "queued"
+    st = env.state()
+    assert st.get("https://hrsuindore.com/blog/a/")["status"] == "awaiting_review"
+    assert st.get("https://hrsuindore.com/blog/b/")["status"] == "awaiting_review"
+    assert st.get("https://hrsuindore.com/blog/c/")["status"] == "queued"
+    assert env.calls["publish"] == 0
 
 
 def test_daily_upload_cap(tmp_path):
     env = Env(tmp_path, urls=[])
     env.urls = ["https://hrsuindore.com/blog/%s/" % s for s in ("c", "b", "a")]
-    env.run("--allow-backfill", "--max-per-run", "3")            # cap default 1
-    assert len(env.published) == 1
+    env.run("--allow-backfill", "--max-per-run", "3")            # all three stop for review
+    assert env.calls["publish"] == 0
+    assert env.state().count_awaiting_review() == 3
     env.run()
-    assert len(env.published) == 1                                 # same day
-    env.today = (datetime.now().date() + timedelta(days=1)).isoformat()
-    env.run()
-    assert len(env.published) == 2
+    assert env.calls["director"] == 3                              # nothing re-directed
+    assert env.calls["publish"] == 0
 
 
 def test_dry_run_never_directs_or_publishes_or_saves(tmp_path):
@@ -215,10 +221,11 @@ def test_only_url_without_state_and_force_published_skipped(tmp_path):
     env = Env(tmp_path)
     url = "https://hrsuindore.com/blog/solo/"
     assert env.run("--only-url", url) == 0
-    assert env.published == [url] and env.calls["discover"] == 0
+    assert env.calls["discover"] == 0 and env.calls["director"] == 1
+    assert env.state().get(url)["status"] == "awaiting_review"
     env.today = (datetime.now().date() + timedelta(days=2)).isoformat()
     env.run("--only-url", url)
-    assert env.published == [url]                                   # already published
+    assert env.calls["director"] == 1                               # refused: awaiting review
 
 
 def test_retry_url_resets_held(tmp_path):
@@ -229,7 +236,7 @@ def test_retry_url_resets_held(tmp_path):
     env.run()
     env.text_mode = "ready"
     assert env.run("--retry-url", new) == 0
-    assert env.state().get(new)["status"] == "published"
+    assert env.state().get(new)["status"] == "awaiting_review"
 
 
 def test_privacy_mismatch_alerts(tmp_path):
@@ -238,8 +245,13 @@ def test_privacy_mismatch_alerts(tmp_path):
     new = "https://hrsuindore.com/blog/n/"
     env.urls = [new] + U
     env.run()
-    assert env.state().get(new)["privacy_actual"] == "private"
-    assert "privacy" in (tmp_path / "video_alerts.log").read_text()
+    assert env.state().get(new)["status"] == "awaiting_review"
+    alerts = tmp_path / "video_alerts.log"
+    st = env.state()
+    outcome = run_daily.publish_entry(new, st, env.deps, alerts)
+    assert outcome == "published"
+    assert st.get(new)["privacy_actual"] == "private"
+    assert "privacy" in alerts.read_text()
 
 
 def test_discovery_empty_does_not_crash(tmp_path):
@@ -275,7 +287,10 @@ def test_oldest_first_across_days(tmp_path):
     env.urls = ["https://hrsuindore.com/blog/%s/" % s for s in ("c", "b", "a")]  # c newest
     env.run("--allow-backfill", "--max-uploads-per-day", "9")
     env.run("--max-uploads-per-day", "9")
-    assert env.published == ["https://hrsuindore.com/blog/a/", "https://hrsuindore.com/blog/b/"]
+    st = env.state()
+    assert st.get("https://hrsuindore.com/blog/a/")["status"] == "awaiting_review"
+    assert st.get("https://hrsuindore.com/blog/b/")["status"] == "awaiting_review"
+    assert env.calls["publish"] == 0
 
 
 def test_ollama_down_defers_without_attempt(tmp_path):
@@ -288,7 +303,7 @@ def test_ollama_down_defers_without_attempt(tmp_path):
     e = env.state().get(new)
     assert e["attempts"] == 0 and e["status"] == "queued" and env.calls["text"] == 0
     env.deps.ollama_ready = lambda: True
-    assert env.run() == 0 and env.state().get(new)["status"] == "published"
+    assert env.run() == 0 and env.state().get(new)["status"] == "awaiting_review"
 
 
 def test_repeated_usage_deferrals_eventually_fail(tmp_path):
@@ -299,3 +314,96 @@ def test_repeated_usage_deferrals_eventually_fail(tmp_path):
     for _ in range(run_daily.MAX_DEFERRALS):
         env.run()
     assert env.state().get(new)["status"] == "failed"
+
+
+def test_awaiting_review_not_picked_again(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    assert env.run() == 0
+    assert env.state().get(new)["status"] == "awaiting_review"
+    assert env.run() == 0
+    assert env.calls["director"] == 1 and env.calls["gate"] == 1 and env.calls["publish"] == 0
+
+
+def test_only_url_refuses_awaiting_review(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    env.run()
+    assert env.run("--only-url", new) == 0
+    assert env.calls["director"] == 1 and env.calls["publish"] == 0
+    assert env.state().get(new)["status"] == "awaiting_review"
+
+
+def test_retry_url_still_resets_failed(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    st = env.state()
+    st.update(new, status="failed", attempts=2, last_error="old")
+    assert env.run("--retry-url", new) == 0
+    e = env.state().get(new)
+    assert e["status"] == "awaiting_review" and e["last_error"] is None
+    assert env.calls["publish"] == 0
+
+
+def test_run_skips_when_review_pile_full(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    st = env.state()
+    for i in range(run_daily.MAX_AWAITING_REVIEW):
+        st.update("https://hrsuindore.com/blog/pile-%d/" % i, status="awaiting_review")
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    env.calls["discover"] = 0                                      # seed() also discovers
+    assert env.run() == 0
+    assert env.calls["discover"] == 0 and env.calls["text"] == 0 and env.calls["director"] == 0
+    assert env.state().get(new) is None
+
+
+def test_review_pile_cap_not_applied_in_dry_run(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    st = env.state()
+    for i in range(run_daily.MAX_AWAITING_REVIEW):
+        st.update("https://hrsuindore.com/blog/pile-%d/" % i, status="awaiting_review")
+    env.urls = ["https://hrsuindore.com/blog/n/"] + U
+    env.calls["discover"] = 0                                      # seed() also discovers
+    assert env.run("--dry-run") == 0
+    assert env.calls["discover"] == 1 and env.calls["text"] == 1
+
+
+def test_publish_entry_marks_published(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    env.run()
+    st = env.state()
+    outcome = run_daily.publish_entry(new, st, env.deps, tmp_path / "video_alerts.log")
+    assert outcome == "published"
+    e = env.state().get(new)
+    assert e["status"] == "published" and e["video_id"] == "V1" and e["privacy_actual"] == "public"
+    assert e["last_error"] is None and e["published_at"]
+    assert env.calls["publish"] == 1
+
+
+def test_publish_entry_failure_marks_failed(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    new = "https://hrsuindore.com/blog/n/"
+    env.urls = [new] + U
+    env.run()
+
+    def boom(run_dir, video, url):
+        raise RuntimeError("quota exceeded")
+    env.deps.publish = boom
+    st = env.state()
+    outcome = run_daily.publish_entry(new, st, env.deps, tmp_path / "video_alerts.log")
+    assert outcome == "failed"
+    e = env.state().get(new)
+    assert e["status"] == "failed" and "quota exceeded" in e["last_error"]
