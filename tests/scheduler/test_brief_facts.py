@@ -28,3 +28,11 @@ def test_no_solar_or_rainwater_is_dropped():
     facts = load_facts()
     assert any("solar" in s.lower() for s in facts.in_place)
     assert any("rainwater" in s.lower() for s in facts.in_place)
+
+
+def test_chimney_fact_forbids_fully_compliant():
+    facts = load_facts()
+    chimney = [s for s in facts.in_place if "Chimneys" in s]
+    assert len(chimney) == 1
+    assert "fully compliant" in chimney[0]
+    assert "no more" in chimney[0]
