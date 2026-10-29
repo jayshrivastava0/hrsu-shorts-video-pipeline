@@ -407,3 +407,23 @@ def test_publish_entry_failure_marks_failed(tmp_path):
     assert outcome == "failed"
     e = env.state().get(new)
     assert e["status"] == "failed" and "quota exceeded" in e["last_error"]
+
+
+def test_publish_entry_brief_without_url_passes_none(tmp_path):
+    seen = {}
+
+    def publish(run_dir, video, url):
+        seen["url"] = url
+        return {"video_id": "B1", "url": "https://youtube.com/watch?v=B1",
+                "privacy_requested": "public", "privacy_actual": "public"}
+
+    env = Env(tmp_path)
+    env.deps.publish = publish
+    bid = "brief-abc123"
+    st = State(tmp_path / "state.json")
+    st.entries[bid] = {"status": "awaiting_review", "type": "proof", "brief": "text", "url": None,
+                       "run_dir": str(tmp_path), "video_path": str(tmp_path / "v.mp4"), "attempts": 0}
+    st.save()
+    outcome = run_daily.publish_entry(bid, st, env.deps, tmp_path / "video_alerts.log")
+    assert outcome == "published"
+    assert seen["url"] is None

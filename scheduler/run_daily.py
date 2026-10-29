@@ -212,7 +212,9 @@ def publish_entry(url: str, state: State, deps: Deps, alerts: Path) -> str:
     entry = state.get(url)
     attempts = int(entry.get("attempts") or 0)
     try:
-        pub = deps.publish(Path(entry["run_dir"]), Path(entry["video_path"]), entry.get("url") or url)
+        # brief entries (have a `type`) may legitimately have no blog URL -> None; blog entries fall back to the key
+        blog_url = entry.get("url") if "type" in entry else (entry.get("url") or url)
+        pub = deps.publish(Path(entry["run_dir"]), Path(entry["video_path"]), blog_url)
     except Exception as exc:
         msg = f"publish: {exc}"
         state.update(url, status="failed", attempts=attempts + 1, last_error=msg[:500])
