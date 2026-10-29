@@ -21,7 +21,7 @@ banned_claims:
 # Fact tiers (owner-supplied 2026-10-29). Only in_place may be stated as true.
 # in_progress must never be stated as done. never_claimed must not be presented as true.
 in_place:
-  - "Delivery to the buyer's door when the buyer pays for transport; any agreed trade term is acceptable, so a door-delivery quotation is a real offer"
+  - "HRSU delivers to the buyer's door: the quotation covers delivery to the buyer's site (a delivered-to-place basis), and the buyer pays the transport cost as part of the price. A door-delivery quotation is a real offer. Do not talk about 'agreeing any trade term'; say only that HRSU delivers to your door and quotes it that way. Which Incoterm (DAP or DDP) and who clears import customs are NOT confirmed, so never claim that customs, duties or paperwork are handled for the buyer"
   - "Anything printed on the current CoA or TDS (assay, specification limits, packaging, minimum order, shelf life, hazard class) may be shown on screen, quoted as printed"
   - "A garden at the plant"
   - "Steam reuse running in one boiler"

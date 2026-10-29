@@ -22,10 +22,12 @@ Build the project directly. Load `hyperframes:hyperframes-core`, `hyperframes:hy
 `hyperframes:hyperframes-cli` with the Skill tool and follow their instructions. Work autonomously: never stop
 for approval.
 1. **BRIEF.md**: {{ORIENTATION}} {{CANVAS}} (the project is already initialised at this size; do not change it),
-   `voice_mode: verbatim`, audience = procurement officers and executives at industrial buyers. Brand: dark navy
-   canvas `#0a192f`, gold accent `#d4af37`, text tint `#ccd6f6`, muted `#8892b0`, small letter-spaced "HRSU INDORE"
-   wordmark at the top (about y={{WORDMARK_Y}}). Font: Arial only.
-2. **frame.md** (design spec) with those tokens; dark canvas only; no purple gradients, no stock icons.
+   `voice_mode: verbatim`, audience = procurement officers and executives at industrial buyers. Choose the visual
+   THEME from the brief and the narration (see "Theme and look"): the HRSU brand look (dark navy `#0a192f`, gold
+   `#d4af37`, text tint `#ccd6f6`, small letter-spaced "HRSU INDORE" wordmark at about y={{WORDMARK_Y}}, Arial) is used
+   ONLY on the final outro card that shows the call to action. Every earlier frame uses the theme, with no wordmark.
+2. **frame.md** (design spec): the chosen theme's palette, fonts and signature effects for the story frames, plus a
+   separate "outro" section with the brand tokens above. No stock icons.
 3. **STORYBOARD.md**: time-coded, paced to the REAL word timings in `audio_meta.json` (each element enters exactly
    on the spoken word that names it). ONE continuous animated scene per beat in one consistent visual world: a
    character or a simple set of characters, a story that moves from problem to outcome, or a metaphor drawn step
@@ -85,9 +87,50 @@ feel like motion graphics from the first frame to the last.
 - If the canvas is landscape, use its width: the scene across the frame, side-by-side character and result, long
   horizontal story flows rather than a narrow centred stack.
 
+## Theme and look (marketing only: the story frames are NOT in the HRSU brand colours)
+The brief decides the look. Read it and the narration, name the occasion or subject, and design for it:
+- **Christmas / winter**: deep red and pine green with warm gold and snow white; a night-sky or cosy gradient
+  background; **snowfall in every story frame**; string lights along the top edge; trees, a gift, a window glow.
+- **Halloween**: near-black with pumpkin orange and a violet-green glow; floating fog, bats, flickering candle light.
+- **Diwali / festive lights**: saturated saffron, magenta and gold, rows of diyas and sparkles.
+- **Technology / semiconductor / engineering**: deep blue-black with cyan and amber, circuit-trace lines, a grid,
+  glowing nodes and data pulses.
+- **Anything else**: choose a bold two- or three-colour palette that fits the subject and a signature ambient effect
+  (particles, rays, waves, confetti, sparks) that suits it. Never fall back to plain navy for a story frame.
+Fonts: use at most two families that Windows ships (Arial, Georgia, Impact, Trebuchet MS, Verdana). Copy the needed
+`.ttf` files from `C:/Windows/Fonts/` into `assets/fonts/` and declare them with `@font-face`, or the renderer
+substitutes another face.
+**Ambient particle recipe (snow shown; adapt the shape and colour for other themes).** Build it per frame with a
+SEEDED random generator so every render is identical (never `Math.random`):
+```js
+function rng(seed){ return function(){ seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+  let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function snow(layer, tl, frameDuration, W, H, seed){
+  const r = rng(seed);
+  for (let i = 0; i < 48; i++){
+    const f = document.createElement("div"), s = 4 + r() * 12, fall = 5 + r() * 6;
+    f.style.cssText = `position:absolute;left:${r()*W}px;top:-30px;width:${s}px;height:${s}px;border-radius:50%;` +
+      `background:#fff;opacity:${0.45 + r()*0.5}`;
+    layer.appendChild(f);
+    tl.to(f, {y: H + 60, x: `+=${(r() - 0.5) * 120}`, duration: fall, ease: "none",
+      repeat: Math.max(0, Math.ceil(frameDuration / fall) - 1)}, r() * fall * -1 + fall);
+  }
+}
+```
+Put the particle layer behind the subject and over the background. Add one more signature effect (string lights
+that pulse in alternating colours, twinkling stars, drifting fog) so the scene is never just a few flat shapes.
+**The outro card is the only HRSU-branded frame**: dark navy `#0a192f`, gold `#d4af37`, text tint `#ccd6f6`, the
+small letter-spaced "HRSU INDORE" wordmark, Arial, and the exact call-to-action line. Move into it with one clear
+transition (for example the snow settles and a navy panel wipes across), so the brand look arrives as a deliberate
+closing beat.
+
 ## Visual quality bar
 - Fill the canvas: content spans y {{CONTENT_Y}} and the full width; no more than ~15% empty area; no clipped or
   overlapping text; labels >= 30 px, key objects >= 130 px, titles 64-96 px.
+- Every story frame has at least five layers: a themed background, a mid-ground (scenery or props), a foreground
+  subject or action, an ambient particle/light layer, and an accent that pulses on the spoken word. Characters get
+  simple faces and limbs (not blank silhouettes) and react to the story; props relate to the narration.
 - Contrast must pass the HyperFrames check; one paused GSAP timeline per frame; motion is seek-safe.
 
 ## Verification (all required, in this order)

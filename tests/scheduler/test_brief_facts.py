@@ -36,3 +36,11 @@ def test_chimney_fact_forbids_fully_compliant():
     assert len(chimney) == 1
     assert "fully compliant" in chimney[0]
     assert "no more" in chimney[0]
+
+
+def test_delivery_fact_is_door_delivery_without_trade_term_or_customs_claims():
+    facts = load_facts()
+    delivery = next(s for s in facts.in_place if "deliver" in s.lower())
+    assert "buyer's door" in delivery and "buyer pays the transport" in delivery
+    assert "any agreed trade term is acceptable" not in delivery
+    assert "never claim that customs, duties or paperwork are handled" in delivery

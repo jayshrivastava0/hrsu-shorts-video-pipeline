@@ -88,3 +88,20 @@ def test_type_prompts_carry_the_idle_motion_recipe_without_infinite_repeats(type
     text = _prompt(type_name, tmp_path)
     assert "Required recipe for the 90% motion check" in text
     assert "Never `repeat: -1`" in text
+
+
+def test_marketing_prompt_themes_from_the_brief_and_brands_only_the_outro(tmp_path):
+    text = _prompt("marketing", tmp_path)
+    assert "Theme and look" in text and "ONLY on the final outro card" in text
+    assert "snowfall in every story frame" in text and "Halloween" in text and "semiconductor" in text
+    assert "SEEDED random generator" in text and "never `Math.random`" in text
+    assert "Never fall back to plain navy for a story frame" in text
+    assert "five layers" in text
+    assert "{{" not in text
+
+
+@pytest.mark.parametrize("type_name", ["proof", "esg", "market"])
+def test_serious_types_keep_the_brand_look_on_every_frame(type_name, tmp_path):
+    text = _prompt(type_name, tmp_path)
+    assert "Theme and look" not in text
+    assert "#0a192f" in text
