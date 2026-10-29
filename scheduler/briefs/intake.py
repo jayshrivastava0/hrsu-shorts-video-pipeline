@@ -56,7 +56,10 @@ def classify(text: str, llm: Callable[[str], dict]) -> tuple[str, float]:
     )
     result = llm(prompt)
     video_type = str(result.get("type", "")).strip().lower()
-    confidence = float(result.get("confidence", 0.0))
+    try:
+        confidence = float(result.get("confidence", 0.0))
+    except (TypeError, ValueError):   # malformed model output counts as no confidence
+        return video_type, 0.0
     if video_type not in VIDEO_TYPES:
         return video_type, 0.0
     return video_type, confidence

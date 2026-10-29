@@ -149,3 +149,11 @@ def test_extract_asset_text_image_is_empty(tmp_path):
     png = tmp_path / "photo.png"
     png.write_bytes(PNG_BYTES)
     assert extract_asset_text(png) == ""
+
+
+def test_classify_malformed_confidence_is_low_confidence():
+    from scheduler.briefs.intake import classify
+
+    for bad in ("high", None, [0.9], {"x": 1}):
+        video_type, confidence = classify("some brief", lambda p, bad=bad: {"type": "proof", "confidence": bad})
+        assert video_type == "proof" and confidence == 0.0
