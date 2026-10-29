@@ -63,13 +63,34 @@ def numbers_in(text: str) -> set[str]:
     return found
 
 
-def _narration_text(run_dir: Path) -> str:
-    """Narration of every beat in run_dir/script.json; empty when the file is missing."""
+def _script_beats(run_dir: Path) -> list[dict]:
+    """Beat dicts from run_dir/script.json; empty when the file is missing."""
     path = Path(run_dir) / "script.json"
     if not path.is_file():
-        return ""
+        return []
     beats = json.loads(path.read_text(encoding="utf-8")).get("beats", [])
-    return "\n".join(str(b.get("narration") or "") for b in beats if isinstance(b, dict))
+    return [b for b in beats if isinstance(b, dict)]
+
+
+def _narration_text(run_dir: Path) -> str:
+    """Narration of every beat in run_dir/script.json; empty when the file is missing."""
+    return "\n".join(str(b.get("narration") or "") for b in _script_beats(run_dir))
+
+
+def _beat_texts(run_dir: Path) -> list[str]:
+    """Narration, card text and b-roll wish of every beat, one entry per non-empty text."""
+    out: list[str] = []
+    for b in _script_beats(run_dir):
+        for key in ("narration", "card_text", "broll_wish"):
+            value = str(b.get(key) or "").strip()
+            if value:
+                out.append(value)
+    return out
+
+
+def _add(reasons: list[str], message: str) -> None:
+    if message not in reasons:
+        reasons.append(message)
 
 
 def run_type_gate(brief: Brief, recipe: Recipe, facts: Facts, run_dir: Path, project_dir: Path, *,
@@ -115,6 +136,23 @@ def run_type_gate(brief: Brief, recipe: Recipe, facts: Facts, run_dir: Path, pro
         for keyword in IN_PROGRESS_KEYWORDS:
             if keyword in low and "planned" not in low and "pending" not in low:
                 reasons.append(f"in-progress claim without 'planned' or 'pending': {keyword!r}")
+                break
+
+    # (d) the spoken script (narration, card text, b-roll wishes) gets the same banned, never-claimed and
+    # in-progress checks as the screen; each beat text counts as one line for the planned/pending exemption
+    for text in _beat_texts(run_dir):
+        low = text.lower()
+        for phrase in facts.banned_claims:
+            needle = phrase.strip().lower()
+            if needle and needle in low:
+                _add(reasons, f"banned claim in script: {phrase!r}")
+        for term in NEVER_CLAIMED_KEYWORDS:
+            hit = bool(_CSR_WORD.search(text)) if term == "csr" else term in low
+            if hit:
+                _add(reasons, f"never-claimed term in script: {term!r}")
+        for keyword in IN_PROGRESS_KEYWORDS:
+            if keyword in low and "planned" not in low and "pending" not in low:
+                _add(reasons, f"in-progress claim in script without 'planned' or 'pending': {keyword!r}")
                 break
 
     return GateResult(ok=not reasons, reasons=reasons, video_path=base.video_path,

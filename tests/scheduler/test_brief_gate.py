@@ -144,3 +144,26 @@ def test_explainer_narration_numbers_still_allowed(tmp_path):
     _narration_script(run, ["The product reaches 99.9% purity."])
     r = _gate(run, proj, "explainer", _facts(), allowed_text="The product reaches 99.9% purity.")
     assert r.ok, r.reasons
+
+
+def test_banned_phrase_in_narration_fails_gate(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Calcium nitrate</p>")})
+    _narration_script(run, ["Our calcium nitrate is certified."])
+    r = _gate(run, proj, "explainer", _facts(banned=["certified"]))
+    assert not r.ok
+    assert any("certified" in x for x in r.reasons)
+
+
+def test_in_progress_phrase_in_narration_fails_gate(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Calcium nitrate</p>")})
+    _narration_script(run, ["Steam reuse now runs in all boilers."])
+    r = _gate(run, proj, "explainer", _facts(), allowed_text="")
+    assert not r.ok
+    assert any("all boilers" in x for x in r.reasons)
+
+
+def test_in_progress_narration_with_planned_passes(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Calcium nitrate</p>")})
+    _narration_script(run, ["Steam reuse in all boilers is planned."])
+    r = _gate(run, proj, "explainer", _facts(), allowed_text="")
+    assert r.ok, r.reasons

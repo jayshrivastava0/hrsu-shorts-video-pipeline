@@ -19,6 +19,14 @@ IN_PROGRESS_KEYWORDS = (
     "other vessels",
     "raised chimney",
     "taller chimney",
+    "every boiler",
+    "all three boilers",
+    "every reaction vessel",
+    "all reaction vessels",
+    "across the plant",
+    "no wood",
+    "wood-free",
+    "stopped burning wood",
 )
 
 NEVER_CLAIMED_KEYWORDS = ("csr", "corporate social responsibility")

@@ -216,3 +216,13 @@ def test_support_files_written(tmp_path):
 
     plan = json.loads((run / "explanation_plan.json").read_text(encoding="utf-8"))
     assert plan == {"question": "How does calcium nitrate cut H2S in sewers?", "post_kind": "explainer"}
+
+
+@pytest.mark.parametrize("phrase", ["every boiler", "no wood", "stopped burning wood"])
+def test_widened_in_progress_keyword_triggers_rewrite(phrase):
+    dirty = _good_beats()
+    dirty[3] = _beat(f"The plant has {phrase} now.")
+    llm = FakeLlm([{"beats": dirty}, {"beats": _good_beats()}])
+    out = write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    assert out["attempts"] == 2
+    assert phrase in llm.calls[1][1]
