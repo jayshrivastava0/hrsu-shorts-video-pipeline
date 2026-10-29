@@ -12,10 +12,13 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from scheduler.lock import LockBusy, RunLock
 from scheduler.state import State
+
+if TYPE_CHECKING:
+    from scheduler.director import DirectorResult
 
 logger = logging.getLogger("scheduler")
 
@@ -31,7 +34,7 @@ RESUMABLE = ("queued", "text_done", "directed")
 class Deps:
     discover: Callable[[], list]
     text: Callable            # (url, workspace_root, log_path) -> TextResult
-    director: Callable        # (run_dir, project_dir, mode) -> DirectorResult
+    director: Callable[..., DirectorResult]   # (run_dir, project_dir, mode, **kw) -> DirectorResult
     gate: Callable            # (run_dir, project_dir) -> GateResult
     publish: Callable         # (run_dir, video_path, url) -> dict
     preflight: Callable[[], None]
@@ -49,7 +52,7 @@ def default_deps() -> Deps:
         discover_all=discover.fetch_all_post_urls,
         ollama_ready=None if backend_is_claude() else textstage.wait_for_ollama,
         text=lambda url, root, log_path=None: textstage.run_text_stages(url, root, log_path=log_path),
-        director=lambda run_dir, proj, mode: d.direct(run_dir, proj, mode),
+        director=lambda run_dir, proj, mode, **kw: d.direct(run_dir, proj, mode, **kw),
         gate=lambda run_dir, proj: gate.run_gate(run_dir, proj),
         publish=lambda run_dir, video, url: publish.publish_video(run_dir, video, url),
         preflight=publish.preflight_auth,

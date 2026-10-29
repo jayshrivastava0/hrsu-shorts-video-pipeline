@@ -121,7 +121,8 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
         raise RuntimeError(f"hf_prepare_project failed (rc={r.returncode}): {r.output[-300:]}")
 
 
-def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH) -> str:
+def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH,
+                 review_note: str | None = None) -> str:
     text = template.read_text(encoding="utf-8")
     land = orientation_for(run_dir) == "landscape"
     fill = {"{{PROJECT_DIR}}": str(project_dir), "{{RUN_DIR}}": str(run_dir),
@@ -132,6 +133,8 @@ def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH)
             "{{WORDMARK_Y}}": "50" if land else "70"}
     for k, v in fill.items():
         text = text.replace(k, v)
+    if review_note:
+        text = text.rstrip() + "\n\n## Owner review note (fix this)\n\n" + review_note.strip() + "\n"
     return text
 
 
@@ -159,7 +162,8 @@ def _result_from_done(project: Path, r: CmdResult, who: str) -> DirectorResult:
 
 def run_claude(project_dir: Path | str, run_dir: Path | str, *, timeout: float = DIRECTOR_TIMEOUT_S,
                run: Runner = run_cmd, log_path: Optional[Path] = None,
-               model: Optional[str] = None) -> DirectorResult:
+               model: Optional[str] = None, prompt_path: Path | None = None,
+               review_note: str | None = None) -> DirectorResult:
     project, run_dir = Path(project_dir), Path(run_dir)
     (project / "DIRECTOR_DONE.json").unlink(missing_ok=True)
     cmd = [shutil.which("claude") or "claude", "-p", "--permission-mode", "acceptEdits",
@@ -167,7 +171,8 @@ def run_claude(project_dir: Path | str, run_dir: Path | str, *, timeout: float =
     model = model or os.environ.get("HRSU_DIRECTOR_MODEL", DIRECTOR_MODEL)
     if model:
         cmd += ["--model", model]
-    r = run(cmd, cwd=project, timeout=timeout, input_text=build_prompt(project, run_dir),
+    prompt = build_prompt(project, run_dir, template=prompt_path or PROMPT_PATH, review_note=review_note)
+    r = run(cmd, cwd=project, timeout=timeout, input_text=prompt,
             log_path=log_path or run_dir / "director_claude.log")
     return _result_from_done(project, r, "claude")
 
@@ -215,6 +220,7 @@ def claude_usage_block(run: Runner = run_cmd, cwd: Path | str = REPO_ROOT) -> Op
 
 
 def direct(run_dir: Path | str, project_dir: Path | str, mode: str = "claude", *,
+           prompt_path: Path | None = None, review_note: str | None = None,
            run: Runner = run_cmd, timeout: float = DIRECTOR_TIMEOUT_S, prepare: bool = True) -> DirectorResult:
     """mode: claude | gemma | auto (claude, falling back to gemma only when Claude usage is exhausted)."""
     if mode not in ("claude", "gemma", "auto"):
@@ -231,7 +237,8 @@ def direct(run_dir: Path | str, project_dir: Path | str, mode: str = "claude", *
         logger.warning("%s", block)
         res = DirectorResult(False, "claude", reason=block, usage_exhausted=True)
     else:
-        res = run_claude(project_dir, run_dir, timeout=timeout, run=run)
+        res = run_claude(project_dir, run_dir, timeout=timeout, run=run,
+                         prompt_path=prompt_path, review_note=review_note)
     if mode == "auto" and res.usage_exhausted:
         logger.warning("Claude usage exhausted; falling back to the Gemma director")
         return run_gemma(project_dir, run_dir, run=run)
