@@ -89,8 +89,7 @@ def test_marketing_story_beats_allowed():
     kinds = {b["kind"] for b in out["beats"]}
     assert {"story", "opinion"} <= kinds
     assert out["thesis"] is None
-    assert out["beats"][-1]["narration"].endswith(MKT_CTA) or out["beats"][-1]["narration"].endswith(
-        "hrsuindore.com")
+    assert out["beats"][-1]["narration"].endswith(MKT_CTA)
 
 
 def test_marketing_beat_with_banned_claim_rejected_and_rewritten():
@@ -147,6 +146,53 @@ def test_prompt_carries_in_place_facts_and_sources_only():
     assert "epa.gov" in prompt
     assert CTA in prompt
     assert schema["type"] == "object"
+
+
+def test_non_dict_beat_triggers_rewrite_not_crash():
+    dirty = _good_beats()
+    dirty[2] = "just a string"
+    dirty[3] = None
+    llm = FakeLlm([{"beats": dirty}, {"beats": _good_beats()}])
+    out = write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    assert out["attempts"] == 2
+    assert out["beats"][0]["purpose"] == "hook"
+
+
+def test_non_dict_beats_every_attempt_raises_writerfailed():
+    dirty = _good_beats()
+    dirty[1] = None
+    llm = FakeLlm([{"beats": dirty}] * 3)
+    with pytest.raises(WriterFailed) as exc:
+        write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    assert len(llm.calls) == 3
+    assert any("malformed" in p for p in exc.value.phrases)
+
+
+def test_banned_phrase_in_broll_wish_triggers_rewrite():
+    dirty = _good_beats()
+    dirty[2] = dict(dirty[2], broll_wish="Certified lab shot of the Indore plant")
+    llm = FakeLlm([{"beats": dirty}, {"beats": _good_beats()}])
+    out = write_script(_brief("marketing"), get_recipe("marketing"), _facts(banned=["certified"]),
+                       _sources(), llm)
+    assert out["attempts"] == 2
+    assert "certified" in llm.calls[1][1]
+
+
+def test_csr_claim_triggers_rewrite():
+    dirty = _good_beats()
+    dirty[2] = _beat("HRSU runs a CSR programme at the Indore plant.")
+    llm = FakeLlm([{"beats": dirty}, {"beats": _good_beats()}])
+    out = write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    assert out["attempts"] == 2
+    assert "csr" in llm.calls[1][1].lower()
+
+
+def test_csr_inside_other_word_does_not_trigger():
+    clean = _good_beats()
+    clean[2] = _beat("The dosing xcsrx log is kept on site at Indore.")
+    llm = FakeLlm([{"beats": clean}])
+    out = write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    assert out["attempts"] == 1
 
 
 def test_support_files_written(tmp_path):

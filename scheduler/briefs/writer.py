@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -20,9 +21,12 @@ IN_PROGRESS_KEYWORDS = (
     "taller chimney",
 )
 
+NEVER_CLAIMED_KEYWORDS = ("csr", "corporate social responsibility")
+_CSR_WORD = re.compile(r"\bcsr\b", re.IGNORECASE)
+
 MAX_ATTEMPTS = 3
 _KINDS = ("fact", "opinion", "story")
-_BEAT_KEYS = ("beat", "purpose", "fact_ids", "narration", "card_text", "broll_wish", "kind")
+_MALFORMED = "malformed beat (not an object)"
 
 Llm = Callable[[str, str, dict], dict]
 
@@ -102,9 +106,14 @@ def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Sourc
     return "\n".join(lines)
 
 
-def _normalise_beats(raw: list | None, recipe: Recipe) -> list[dict]:
+def _normalise_beats(raw: list | None, recipe: Recipe) -> tuple[list[dict], bool]:
+    """Return (beats, malformed). Non-dict items are dropped and flagged, never trusted."""
     beats: list[dict] = []
+    malformed = False
     for i, b in enumerate(raw or [], 1):
+        if not isinstance(b, dict):
+            malformed = True
+            continue
         kind = str(b.get("kind") or "fact")
         beats.append({
             "beat": str(b.get("beat") or f"beat_{i:02d}"),
@@ -115,24 +124,26 @@ def _normalise_beats(raw: list | None, recipe: Recipe) -> list[dict]:
             "broll_wish": str(b.get("broll_wish") or ""),
             "kind": kind if kind in _KINDS else "fact",
         })
-    if not beats:
-        return beats
+    if not beats or malformed:
+        return beats, malformed
     beats[0]["purpose"] = "hook"
     last = beats[-1]
     if len(beats) > 1:
         last["purpose"] = "cta"
     if not last["narration"].endswith(recipe.cta_line):
         last["narration"] = (last["narration"] + " " + recipe.cta_line).strip()
-    return beats
+    return beats, False
 
 
 def _offending(beats: list[dict], banned: list[str]) -> list[str]:
-    needles = [n for n in [*banned, *IN_PROGRESS_KEYWORDS] if n and n.strip()]
+    """Phrases that must not appear in any beat's narration, card_text or broll_wish."""
+    needles = [n for n in [*banned, *IN_PROGRESS_KEYWORDS, *NEVER_CLAIMED_KEYWORDS] if n and n.strip()]
     found: list[str] = []
     for b in beats:
-        text = f"{b.get('narration', '')} {b.get('card_text', '')}".lower()
+        text = " ".join(b.get(k, "") for k in ("narration", "card_text", "broll_wish")).lower()
         for n in needles:
-            if n.lower() in text and n not in found:
+            hit = bool(_CSR_WORD.search(text)) if n == "csr" else n.lower() in text
+            if hit and n not in found:
                 found.append(n)
     return found
 
@@ -160,9 +171,16 @@ def write_script(
     feedback = ""
     offending: list[str] = []
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        result = llm(system, _user_prompt(brief, recipe, facts, sources, feedback), _SCRIPT_SCHEMA) or {}
-        beats = _normalise_beats(result.get("beats"), recipe)
-        if not beats:
+        result = llm(system, _user_prompt(brief, recipe, facts, sources, feedback), _SCRIPT_SCHEMA)
+        if not isinstance(result, dict):
+            result = {}
+        raw_beats = result.get("beats")
+        if not isinstance(raw_beats, list):
+            raw_beats = []
+        beats, malformed = _normalise_beats(raw_beats, recipe)
+        if malformed:
+            offending = [_MALFORMED]
+        elif not beats:
             offending = ["no beats returned"]
         else:
             offending = _offending(beats, facts.banned_claims)
