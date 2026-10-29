@@ -1,27 +1,128 @@
-# Blog post -> explainer video -> YouTube (scheduled)
+# Blog post or brief -> explainer video -> review -> YouTube
 
-A daily job that watches https://hrsuindore.com/blog/ and, for each NEW post, produces one verified
-explainer video and uploads it to YouTube as **public**, with no approval step.
+Two entry points produce videos, and every finished video waits for the owner:
+
+- **Daily job** (`scheduler.run_daily`): watches https://hrsuindore.com/blog/ and, for each NEW post, produces one
+  verified explainer video. This is the `explainer` type.
+- **Brief command** (`scheduler.make_video`): one free-text brief (optionally with a blog URL and supplied assets)
+  becomes one video of a chosen type. See "Briefs and video types".
+
+No video is published on creation. Every video stops at `awaiting_review`, and the YouTube upload happens only when the
+owner runs `python -m scheduler.review approve <id>`. See "Reviewing videos".
 
 ## How it works
 
 ```
-discover (blog index + sitemap)
+discover (blog index + sitemap)  -- daily job only
   -> new post? (not in data/video_state.json)
   -> text stages   python -m shorts_engine <url> --until audio   (free: Ollama + DuckDuckGo + TTS)
        status hold_for_review  => state "held", NO video, alert written, never retried automatically
   -> director      headless `claude -p` in a HyperFrames project (scheduler/director_prompt.md)
   -> quality gate  scheduler/gate.py (video, ffprobe duration, hyperframes lint, DIRECTOR_DONE, no hold)
        any failure => state "failed_gate", NOT published
-  -> YouTube       video_agent/publishers/youtube_publisher.py, privacy from HRSU_YOUTUBE_PRIVACY
-       then videos.list read-back -> state.privacy_actual (+ loud warning if it is not public)
+  -> awaiting_review   video kept on disk; the daily run stops producing new videos at 5 waiting (see below)
+  -> approve       video_agent/publishers/youtube_publisher.py, privacy from HRSU_YOUTUBE_PRIVACY,
+                   then videos.list read-back -> state.privacy_actual (+ loud warning if it is not what was asked)
 ```
 
-Per-post states in `data/video_state.json`: `seeded, queued, text_done, held, directed, failed_gate, failed, published`
-(plus `run_dir`, `video_id`, `privacy_actual`, `attempts`, `last_error`, timestamps, `director`).
-A `failed` post is retried on later runs up to 2 attempts; `held` and `failed_gate` are never retried
-automatically. Re-runs resume from files on disk (text stages and a finished director are not redone).
-Defaults: 1 post per run (`--max-per-run`), 1 public upload per day (`--max-uploads-per-day`).
+Brief-driven videos use the same director, gate and review steps. Their text stage and type gate differ
+(see "Briefs and video types").
+
+Per-post states in `data/video_state.json`:
+`seeded, queued, text_done, held, directed, failed_gate, failed, awaiting_review, rejected, published`
+(plus `run_dir`, `video_path`, `video_id`, `privacy_actual`, `attempts`, `last_error`, timestamps, `director`).
+
+- `awaiting_review`: the video is ready and waits for the owner. Approve publishes it; reject re-directs it.
+- `rejected`: a re-direct after a reject was interrupted. The previous video is still valid; run `reject` again or `approve`.
+- `published`: uploaded to YouTube (`video_id`, `privacy_actual`).
+- A `failed` post is retried on later daily runs up to 2 attempts; `held` and `failed_gate` are never retried
+  automatically. Re-runs resume from files on disk (text stages and a finished director are not redone).
+- **Review cap:** when 5 videos are in `awaiting_review` (`MAX_AWAITING_REVIEW` in `scheduler/run_daily.py`), the daily
+  run produces nothing new and exits 0 until some are reviewed.
+
+Defaults: 1 post per run (`--max-per-run`), 1 publish per day (`--max-uploads-per-day`), counted at approval time.
+
+## Briefs and video types
+
+```
+python -m scheduler.make_video --brief "..." [--type auto|explainer|proof|esg|market|marketing]
+    [--url URL] [--assets DIR] [--orientation landscape|portrait] [--yes]
+```
+
+- `--brief` is required; its first line (up to 80 characters) becomes the title.
+- `--type auto` (default) asks the text model to classify the brief and reports its guess. A low-confidence guess
+  stops before any Claude spend (exit 2): rerun with an explicit `--type`.
+- `--url` links the blog post from the YouTube description and uses the blog CTA line.
+- `--assets DIR` is a folder of supporting files: PDF, PNG or JPEG only, checked by file signature, not just extension.
+  **Proof briefs require `--assets`**; without it the brief is refused (exit 2), because proof videos never use invented imagery.
+- `--orientation` overrides the default: narration of 90 s or more is landscape 1920x1080, otherwise portrait.
+- `--yes` runs a brief whose ID already exists again (otherwise exit 3).
+- A brief run takes the scheduler lock, so it cannot overlap the daily job.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Video produced and `awaiting_review`. Prints the approve and reject commands. |
+| 1 | Pipeline failure (text stage held or failed, director failed, gate failed, YouTube auth problem, unexpected error), or another run holds the lock. Claude usage exhausted leaves the entry at `text_done`; rerun with `--yes` later. |
+| 2 | Needs `--type` (classifier not confident; nothing spent), or the brief or assets were refused (e.g. proof without assets). |
+| 3 | The brief ID already exists; rerun with `--yes`. |
+
+The five types (from `scheduler/briefs/types.py` and the design spec):
+
+| Type | May state on screen | Creative latitude | Facts source | Extra checks |
+|---|---|---|---|---|
+| `explainer` | Only what the verified narration and plan state | Schematic visuals, marked "illustration" | narration | Existing gate; numbers on screen must appear in the narration |
+| `proof` | Only supplied documents (CoA, TDS, `brand_facts.yaml`) and supplied photos | Motion and layout only | supplied documents | Every number on screen must appear in a supplied document |
+| `esg` | `brand_facts.yaml` plus sourced external facts, only practices HRSU actually has | Motion and layout | facts and sources | Every claim sourced; no greenwashing phrasing |
+| `market` | Factual claims about named companies, countries or events, each verified with a source; analysis labelled as HRSU's view | Layout and metaphor | sources | Source shown for each verified claim, dated; numbers must appear in the sources |
+| `marketing` | Product and service claims only from `brand_facts.yaml`; exact CTA | Story, characters and metaphor allowed, with no false factual statements | `brand_facts.yaml` only | No product claim outside `brand_facts.yaml`; CTA "Ask for a door quotation at hrsuindore.com" |
+
+Every type also gets the automatic checks on every run: banned claims and never-claimed terms must not appear on
+screen, and in-progress wording must say "planned" or "pending" on the same line. The "every claim sourced" and
+"no product claim outside brand facts" rules rely on the text stage and the owner's review; the gate does not prove them alone.
+
+## Reviewing videos
+
+```
+python -m scheduler.review list
+python -m scheduler.review approve <id>
+python -m scheduler.review reject <id> --note "what to change"
+```
+
+- `list` prints `id | type | title | video path` for each `awaiting_review` or `rejected` entry, or
+  `nothing awaiting review`. Interrupted re-directs are marked with a hint.
+- `approve <id>` publishes the video to YouTube. Privacy comes from `HRSU_YOUTUBE_PRIVACY` (default `public`;
+  `unlisted` or `private` also work). If the upload fails, the entry returns to its previous status with the error
+  kept, and the daily job does not retry it.
+- `reject <id> --note "..."` re-runs only the director with the note added to its prompt, then re-runs the gate. The
+  text (script and voice) is kept. The video returns to `awaiting_review`. At most **3 rejects per brief**; a fourth is
+  refused. A re-direct that fails (or runs out of Claude allowance) returns the entry to `awaiting_review` without
+  using up one of the three. If the note needs different wording, edit the brief and run `make_video --yes` instead.
+- `--state` and `--runs-dir` go before the subcommand, for example
+  `python -m scheduler.review --state PATH list` (after the subcommand argparse rejects them). Without them the default
+  `data/video_state.json` is used.
+
+## Facts the videos may state
+
+`brand_facts.yaml` (repo root) holds the facts every video is checked against. `scheduler/briefs/facts.py` reads it on
+each run.
+
+| Tier | Meaning for a video |
+|---|---|
+| `in_place` | True today. The only tier that may be stated as true. |
+| `in_progress` | Under way; never stated as done. Only as "planned" or "pending approval" on the same line; the gate rejects it otherwise. |
+| `never_claimed` | Must not be presented as true. CSR: no video may present HRSU as having a CSR programme. |
+| `banned_claims` | Phrases that must not appear on screen (e.g. "certified", "ISO 9001", "REACH registered", "FDA approved"). The gate rejects them. |
+
+The file also has `cta_lines`. To change a fact, edit its list item in the matching tier and keep the YAML quoting and
+indentation. Move an item between tiers only when the owner says its status changed. After editing, check the file loads:
+`python -c "from scheduler.briefs.facts import load_facts; print(load_facts())"`.
+
+## Design and plan
+
+- Design spec: `docs/superpowers/specs/2026-10-29-brief-driven-video-types-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-10-29-brief-driven-video-types.md`
 
 ## First-time setup
 
@@ -33,6 +134,7 @@ Defaults: 1 post per run (`--max-per-run`), 1 public upload per day (`--max-uplo
    `python -m scheduler.youtube_auth` -- opens a browser once and writes `youtube_token.json`.
    The scheduled job never opens a browser: with no token it stops with
    "run `python -m scheduler.youtube_auth` interactively once", before spending any Claude allowance.
+   Approval checks the same token before uploading.
 3. **Install the task** (does not run anything by itself):
    `powershell -ExecutionPolicy Bypass -File scheduler/install_task.ps1 [-At 11:00]`
    Task "HRSU-Blog-To-Video": daily, current user logged on only, no elevation, StartWhenAvailable,
@@ -47,15 +149,18 @@ ffmpeg, Node/npx (HyperFrames) and faster-whisper available. A missed 11:00 run 
 
 | Goal | Command |
 |---|---|
-| Normal run | `python -m scheduler.run_daily` |
+| Daily run | `python -m scheduler.run_daily` |
 | Free rehearsal (text stages only, no Claude, no YouTube, state not saved) | `python -m scheduler.run_daily --dry-run --only-url <url>` |
 | Force one post | `--only-url <url>` |
 | Retry a held / failed / failed_gate post | `--retry-url <url>` |
 | Use Gemma instead of Claude | `--director gemma` (`auto` = Claude, Gemma only if Claude usage is exhausted) |
+| Brief-driven video | `python -m scheduler.make_video --brief "..." [--type ...]` (see above) |
+| Review queue | `python -m scheduler.review list` / `approve <id>` / `reject <id> --note "..."` |
 | Disable | `scheduler/uninstall_task.ps1` (or Disable in Task Scheduler) |
 
-Exit codes: 0 = ok / nothing to do / held / deferred, 1 = a post failed (`failed`, `failed_gate`, auth problem),
-2 = refused (no seed).
+Exit codes for `run_daily`: 0 = ok / nothing to do / held / deferred / awaiting_review / review cap reached,
+1 = a post failed (`failed`, `failed_gate`, auth problem), 2 = refused (no seed).
+Exit codes for `make_video`: see the table above. `review` exits 0 on success and 1 on error.
 
 ## Where things live
 
@@ -67,19 +172,20 @@ Exit codes: 0 = ok / nothing to do / held / deferred, 1 = a post failed (`failed
 
 ## Caveats
 
+- **Nothing publishes without approval.** Approval is the only route to YouTube. Check the queue with
+  `python -m scheduler.review list`; the daily run pauses at 5 waiting videos.
 - **Public uploads and the YouTube API audit.** YouTube Data API projects that have not passed the API compliance
   audit have uploads from unverified projects locked to **private**, whatever privacy is requested. The job reads the
   privacy back after upload, stores `privacy_actual` and logs `PRIVACY MISMATCH` + an alert. If you see it, apply for the
-  audit (or publish the private videos from YouTube Studio). `HRSU_YOUTUBE_PRIVACY` (`public` default for this job,
-  `unlisted`, `private`) changes only the scheduler; other callers keep `unlisted`.
-- **Claude allowance.** One video costs roughly 4% of the weekly Claude allowance (measured earlier). At 1 video/day
-  that is a large share of it; lower the cadence by changing the trigger in Task Scheduler or `--max-uploads-per-day`.
-  If Claude reports a usage/rate limit, the post is deferred (state stays `text_done`, no attempt consumed, alert
-  written) and retried on the next run. `--director auto` falls back to Gemma instead, but Gemma's visuals were judged
-  too weak (sparse, clipped labels) to publish unreviewed -- prefer deferral.
-- **Fully automatic and public.** The gate checks the file, duration, lint, and the director's own self-check, but not
-  design quality or factual content beyond the text-stage verification. Review the channel occasionally; set
-  `HRSU_YOUTUBE_PRIVACY=unlisted` to add a manual step.
+  audit (or publish the private videos from YouTube Studio). `HRSU_YOUTUBE_PRIVACY` (`public` default, `unlisted`,
+  `private`) changes only the scheduler; other callers keep `unlisted`.
+- **Claude allowance.** One video costs roughly 4% of the weekly Claude allowance (measured earlier). Each reject
+  re-runs the director and costs about the same again. If Claude reports a usage/rate limit, the post is deferred
+  (state stays `text_done`, no attempt consumed, alert written) and retried on the next run. `--director auto` falls
+  back to Gemma instead, but Gemma's visuals were judged too weak (sparse, clipped labels) to publish, so prefer deferral.
+- **The gate is not a quality review.** It checks the file, duration, lint, the director's self-check, banned and
+  never-claimed terms, in-progress wording and (for explainer, proof and market) numbers against the source text. Design
+  quality and factual accuracy beyond that are the owner's review at `awaiting_review`.
 - The headless director runs with `--permission-mode acceptEdits` plus an explicit tool allowlist
   (Bash, Edit, Write, Read, Glob, Grep, Skill, Agent, TodoWrite, WebFetch) in the HyperFrames project directory and
   has a hard 90-minute timeout.
