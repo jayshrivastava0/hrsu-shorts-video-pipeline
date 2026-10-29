@@ -81,7 +81,8 @@ def _read_json(path: Path):
 
 def run_gate(run_dir: Path | str, project_dir: Path | str, *,
              ffprobe: Callable[[Path], float] = probe_duration,
-             lint: Callable[[Path], tuple[int, str]] = run_lint) -> GateResult:
+             lint: Callable[[Path], tuple[int, str]] = run_lint,
+             min_duration_s: float = MIN_DURATION_S) -> GateResult:
     run, proj = Path(run_dir), Path(project_dir)
     reasons: list[str] = []
     res = GateResult(ok=False)
@@ -119,8 +120,8 @@ def run_gate(run_dir: Path | str, project_dir: Path | str, *,
         except Exception as exc:
             reasons.append(f"ffprobe failed: {exc}")
         if res.duration_s is not None:
-            if res.duration_s < MIN_DURATION_S:
-                reasons.append(f"video too short: {res.duration_s:.1f}s < {MIN_DURATION_S:.0f}s")
+            if res.duration_s < min_duration_s:
+                reasons.append(f"video too short: {res.duration_s:.1f}s < {min_duration_s:.0f}s")
             try:
                 meta = _read_json(proj / "audio_meta.json")
                 res.voice_s = sum(float(v["duration_s"]) for v in meta["voices"])

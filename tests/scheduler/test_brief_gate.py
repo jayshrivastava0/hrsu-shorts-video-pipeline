@@ -172,3 +172,21 @@ def test_in_progress_narration_with_planned_passes(tmp_path):
 def test_counter_start_value_zero_percent_is_not_a_claim():
     from scheduler.briefs.gate import numbers_in
     assert numbers_in("up 0% 0 0.0 and 40% in 2026") == {"40", "2026"}
+
+
+def test_marketing_video_may_be_shorter_than_thirty_seconds(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Ask for a quote</p>")}, voice=(9.0, 11.0))
+    r = _gate(run, proj, "marketing", _facts(), dur=20.0)
+    assert r.ok, r.reasons
+
+
+def test_marketing_video_under_fifteen_seconds_still_fails(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Ask for a quote</p>")}, voice=(5.0, 6.0))
+    r = _gate(run, proj, "marketing", _facts(), dur=11.0)
+    assert any("too short" in x and "15s" in x for x in r.reasons)
+
+
+def test_explainer_still_needs_thirty_seconds(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Ask for a quote</p>")}, voice=(9.0, 11.0))
+    r = _gate(run, proj, "explainer", _facts(), dur=20.0)
+    assert any("too short" in x and "30s" in x for x in r.reasons)

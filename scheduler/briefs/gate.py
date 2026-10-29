@@ -10,7 +10,10 @@ from scheduler.briefs.facts import Facts
 from scheduler.briefs.model import Brief
 from scheduler.briefs.types import Recipe
 from scheduler.briefs.writer import IN_PROGRESS_KEYWORDS, NEVER_CLAIMED_KEYWORDS
-from scheduler.gate import GateResult, probe_duration, run_gate, run_lint
+from scheduler.gate import MIN_DURATION_S, GateResult, probe_duration, run_gate, run_lint
+
+# Explainers need at least 30 s (the base gate); a festive marketing ad is deliberately shorter.
+MIN_DURATION_BY_TYPE = {"marketing": 15.0}
 
 _NUMBER_RE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?%?")
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
@@ -100,7 +103,8 @@ def run_type_gate(brief: Brief, recipe: Recipe, facts: Facts, run_dir: Path, pro
                   allowed_text: str,
                   ffprobe=probe_duration,
                   lint=run_lint) -> GateResult:
-    base = run_gate(run_dir, project_dir, ffprobe=ffprobe, lint=lint)
+    base = run_gate(run_dir, project_dir, ffprobe=ffprobe, lint=lint,
+                    min_duration_s=MIN_DURATION_BY_TYPE.get(recipe.name, MIN_DURATION_S))
     reasons: list[str] = list(base.reasons)
 
     lines = on_screen_text(project_dir).splitlines()
