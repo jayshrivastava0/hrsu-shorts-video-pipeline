@@ -24,7 +24,7 @@ from scheduler.state import State
 logger = logging.getLogger("scheduler")
 
 MAX_REJECTS = 3
-INTERRUPTED_HINT = " (re-direct interrupted: run reject again or approve)"
+INTERRUPTED_HINT = " (re-direct interrupted: run reject again)"
 
 
 def _safe(text: object) -> str:
@@ -58,8 +58,14 @@ def cmd_list(state: State) -> int:
 
 
 def cmd_approve(state: State, eid: str, deps: Deps, alerts: Path) -> int:
-    entry = _reviewable(state, eid)
-    if entry is None:
+    entry = state.get(eid)
+    if entry is not None and entry.get("status") == "rejected":
+        # the re-direct never finished, so this render never passed the gate: do not publish it
+        print(f"{_safe(eid)}: re-direct was interrupted: run `python -m scheduler.review reject {_safe(eid)} "
+              "--note ...` again")
+        logger.error("%s is rejected (re-direct interrupted); not approved", eid)
+        return 1
+    if entry is None or entry.get("status") != "awaiting_review":
         logger.error("%s is not awaiting review", eid)
         return 1
     video = entry.get("video_path")

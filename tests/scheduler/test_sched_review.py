@@ -186,15 +186,17 @@ def test_list_shows_interrupted_rejected_entry(tmp_path, capsys):
     assert review.main(_argv(state_path, runs, "list"), deps=_deps()[0]) == 0
     out = capsys.readouterr().out
     assert BLOG in out
-    assert "(re-direct interrupted: run reject again or approve)" in out
+    assert "(re-direct interrupted: run reject again)" in out
 
 
-def test_approve_accepts_interrupted_rejected_entry(tmp_path):
+def test_approve_refuses_interrupted_rejected_entry(tmp_path, capsys):
     state_path, runs = _env(tmp_path, {BLOG: _entry(tmp_path, "one", status="rejected")})
     deps, calls = _deps()
-    assert review.main(_argv(state_path, runs, "approve", BLOG), deps=deps) == 0
-    assert calls["publish"] == [BLOG]
-    assert State(state_path).get(BLOG)["status"] == "published"
+    assert review.main(_argv(state_path, runs, "approve", BLOG), deps=deps) == 1
+    assert calls["publish"] == []
+    assert State(state_path).get(BLOG)["status"] == "rejected"
+    out = capsys.readouterr().out
+    assert "re-direct was interrupted" in out and "scheduler.review reject" in out and "again" in out
 
 
 def test_reject_brief_entry_uses_recipe_prompt_and_type_gate(tmp_path, monkeypatch):

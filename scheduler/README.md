@@ -33,7 +33,7 @@ Per-post states in `data/video_state.json`:
 (plus `run_dir`, `video_path`, `video_id`, `privacy_actual`, `attempts`, `last_error`, timestamps, `director`).
 
 - `awaiting_review`: the video is ready and waits for the owner. Approve publishes it; reject re-directs it.
-- `rejected`: a re-direct after a reject was interrupted. The previous video is still valid; run `reject` again or `approve`.
+- `rejected`: a re-direct after a reject was interrupted. The previous video is still valid but was never re-gated, so `approve` refuses it; run `reject` again.
 - `published`: uploaded to YouTube (`video_id`, `privacy_actual`).
 - A `failed` post is retried on later daily runs up to 2 attempts; `held` and `failed_gate` are never retried
   automatically. Re-runs resume from files on disk (text stages and a finished director are not redone).
