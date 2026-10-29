@@ -248,13 +248,20 @@ def test_gate_failure_marks_failed_gate(tmp_path):
     assert "banned claim" in entry["last_error"]
 
 
-def test_yes_rerun_clears_stale_run_fields(tmp_path):
+def _seed_awaiting(tmp_path: Path) -> dict:
+    """An awaiting_review brief with a rendered video from an earlier run."""
     state = State(tmp_path / "state.json")
     state.ensure(brief_id(TEXT), "queued")
-    state.entries[brief_id(TEXT)].update(
-        status="awaiting_review", run_dir=str(tmp_path / "old-run"), video_path=str(tmp_path / "old.mp4"),
-        project_dir=str(tmp_path / "old-proj"), director="claude", video_id="OLD", rejects=2)
+    fields = dict(status="awaiting_review", run_dir=str(tmp_path / "old-run"),
+                  video_path=str(tmp_path / "old.mp4"), project_dir=str(tmp_path / "old-proj"),
+                  director="claude", video_id="OLD", rejects=2)
+    state.entries[brief_id(TEXT)].update(fields)
     state.save()
+    return fields
+
+
+def test_yes_rerun_preflight_failure_preserves_existing_entry(tmp_path):
+    seeded = _seed_awaiting(tmp_path)
 
     def preflight():
         raise RuntimeError("no youtube credentials")
@@ -264,11 +271,26 @@ def test_yes_rerun_clears_stale_run_fields(tmp_path):
 
     assert rc == 1
     entry = _entry(tmp_path)
-    assert entry["status"] == "queued"
-    for field in ("run_dir", "video_path", "project_dir", "director", "video_id"):
-        assert entry.get(field) is None, field
-    assert entry["rejects"] == 0
+    for field, value in seeded.items():
+        assert entry[field] == value, field
+    assert "no youtube credentials" in entry["last_error"]
     assert bt.calls == []
+
+
+def test_yes_rerun_success_clears_stale_run_fields(tmp_path):
+    _seed_awaiting(tmp_path)
+
+    rc = make_video.main(_argv(tmp_path, "--yes"), _deps(), type_gate=_gate(),
+                         brief_text=_brief_text(tmp_path / "ws"))
+
+    assert rc == 0
+    entry = _entry(tmp_path)
+    assert entry["status"] == "awaiting_review"
+    assert entry["video_id"] is None
+    assert entry["rejects"] == 0
+    assert entry["video_path"] != str(tmp_path / "old.mp4")
+    assert Path(entry["video_path"]).name == "video.mp4"
+    assert Path(entry["run_dir"]).name == "run-abc123"
 
 
 def test_malformed_script_json_marks_failed_and_exits_1(tmp_path):

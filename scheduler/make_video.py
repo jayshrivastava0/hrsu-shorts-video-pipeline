@@ -177,12 +177,13 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         return 3
 
     # fail fast on YouTube credentials before any text-stage or Claude spend.
-    # The entry is written only after this succeeds; a failed --yes rerun replaces the old entry with a clean queued one.
+    # A failed preflight touches an existing entry only to record the error, so an awaiting_review
+    # video keeps its pointers; the fresh entry is written only once preflight has succeeded.
     try:
         deps.preflight()
     except Exception as exc:
         if existing is not None:
-            _write_entry(state, brief, existing, last_error=f"youtube auth: {exc}"[:500])
+            state.update(brief.id, last_error=f"youtube auth: {exc}"[:500])
         notify(alerts, f"YouTube auth problem, brief {brief.id} not started: {exc}")
         print(f"YouTube auth problem, nothing was run: {_safe(exc)}")
         return 1
