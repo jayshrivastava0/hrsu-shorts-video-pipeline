@@ -218,3 +218,35 @@ def test_director_model_and_effort_can_be_overridden_by_env(tmp_path, monkeypatc
     cmd = _claude_cmd(tmp_path, monkeypatch, HRSU_DIRECTOR_MODEL="claude-opus-5-5", HRSU_DIRECTOR_EFFORT="high")
     assert cmd[cmd.index("--model") + 1] == "claude-opus-5-5"
     assert cmd[cmd.index("--effort") + 1] == "high"
+
+
+def test_rmtree_retry_succeeds_after_transient_windows_lock(tmp_path, monkeypatch):
+    target = tmp_path / "proj"
+    target.mkdir()
+    calls = []
+    real = director.shutil.rmtree
+
+    def flaky(path):
+        calls.append(path)
+        if len(calls) < 3:
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        real(path)
+
+    monkeypatch.setattr(director.shutil, "rmtree", flaky)
+    sleeps = []
+    director._rmtree_retry(target, attempts=5, delay_s=0.01, sleep=sleeps.append)
+    assert len(calls) == 3 and sleeps == [0.01, 0.01] and not target.exists()
+
+
+def test_rmtree_retry_gives_up_and_raises_after_the_last_attempt(tmp_path, monkeypatch):
+    target = tmp_path / "proj"
+    target.mkdir()
+    monkeypatch.setattr(director.shutil, "rmtree", lambda p: (_ for _ in ()).throw(PermissionError(32, "locked")))
+    sleeps = []
+    try:
+        director._rmtree_retry(target, attempts=3, delay_s=0.01, sleep=sleeps.append)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("expected PermissionError")
+    assert len(sleeps) == 2

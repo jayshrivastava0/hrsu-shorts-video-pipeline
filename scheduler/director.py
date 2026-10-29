@@ -115,12 +115,28 @@ def orientation_for(run_dir: Path | str) -> str:
     return "landscape" if narration_seconds(run_dir) >= LANDSCAPE_MIN_SECONDS else "portrait"
 
 
+def _rmtree_retry(path: Path, attempts: int = 6, delay_s: float = 5.0, sleep: Callable[[float], None] | None = None) -> None:
+    """shutil.rmtree that retries: on Windows a just-finished render (headless Chrome, hyperframes warm-check)
+    can hold the folder for a few seconds (WinError 32)."""
+    import time
+    sleep = sleep or time.sleep
+    for attempt in range(1, attempts + 1):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            if attempt == attempts:
+                raise
+            logger.warning("could not remove %s (%s); retrying in %.0fs (%d/%d)", path, exc, delay_s, attempt, attempts)
+            sleep(delay_s)
+
+
 def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = run_cmd) -> None:
     """npx hyperframes init + scripts/hf_prepare_project.py, then merges run_dir/assets into project/assets.
     Recreates the project dir from scratch."""
     run_dir, project_dir = Path(run_dir), Path(project_dir)
     if project_dir.exists():
-        shutil.rmtree(project_dir)
+        _rmtree_retry(project_dir)
     project_dir.parent.mkdir(parents=True, exist_ok=True)
     r = run([_npx(), "--yes", "hyperframes", "init", str(project_dir), "--non-interactive", "--example=blank",
              f"--resolution={orientation_for(run_dir)}"], cwd=project_dir.parent, timeout=900)
