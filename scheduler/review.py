@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
 from pathlib import Path
 from typing import Callable, Optional
@@ -16,6 +17,7 @@ from scheduler.briefs.facts import load_facts
 from scheduler.briefs.gate import run_type_gate
 from scheduler.briefs.model import Brief
 from scheduler.briefs.types import get_recipe
+from scheduler.director import DirectorResult
 from scheduler.run_daily import DATA_DIR, Deps, default_deps, notify, publish_entry, setup_logging
 from scheduler.state import State
 
@@ -94,15 +96,26 @@ def cmd_reject(state: State, eid: str, note: str, deps: Deps, type_gate: Callabl
     project = _project_dir(run_dir, entry)
     is_brief = "type" in entry
     recipe = get_recipe(entry["type"]) if is_brief else None
+    # the director recreates the project dir, which holds the finished render: keep a copy first
+    prev_video = Path(entry["video_path"]) if entry.get("video_path") else None
+    prev_copy = run_dir / "prev_review.mp4"
+    if prev_video is not None and prev_video.exists():
+        shutil.copyfile(prev_video, prev_copy)
     # `rejects` and `review_note` are written only after the director succeeds, so a failed or
     # usage-exhausted re-direct never consumes one of the three rejects.
-    state.update(eid, status="rejected")
+    state.update(eid, status="rejected", prev_video_path=str(prev_copy) if prev_copy.exists() else None)
 
     kwargs = {"review_note": note}
     if recipe is not None:
         kwargs["prompt_path"] = recipe.prompt_path
-    dres = deps.director(run_dir, project, "claude", **kwargs)
+    try:
+        dres = deps.director(run_dir, project, "claude", **kwargs)
+    except Exception as exc:  # any director failure leaves the entry reviewable
+        dres = DirectorResult(False, "claude", reason=f"exception: {exc}")
     if not dres.ok:
+        if prev_copy.exists() and prev_video is not None:
+            prev_video.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(prev_copy, prev_video)
         if dres.usage_exhausted:
             reason = f"usage exhausted during review: {dres.reason}"
             logger.error("Claude usage exhausted; %s returned to awaiting review", eid)

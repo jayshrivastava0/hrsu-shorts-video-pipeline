@@ -58,7 +58,7 @@ def _video(tmp_path, eid):
 def _entry(tmp_path, eid, **over):
     proj = _video(tmp_path, eid)
     base = {"status": "awaiting_review", "video_path": str(proj / "renders" / "video.mp4"),
-            "project_dir": str(proj)}
+            "project_dir": str(proj), "run_dir": str(tmp_path / "ws" / eid)}
     base.update(over)
     return base
 
@@ -232,3 +232,42 @@ def test_approve_brief_without_url_passes_none(tmp_path):
     assert review.main(_argv(state_path, runs, "approve", BRIEF), deps=deps) == 0
     assert calls["publish"] == [None]
     assert State(state_path).get(BRIEF)["status"] == "published"
+
+
+def test_reject_keeps_previous_video_when_director_deletes_project_and_fails(tmp_path):
+    import shutil
+    entry = _entry(tmp_path, "one")
+    video = Path(entry["video_path"])
+    video.write_bytes(b"OLD")
+    state_path, runs = _env(tmp_path, {BLOG: entry})
+
+    def director(run_dir, proj, mode, **kw):
+        shutil.rmtree(proj)                       # what prepare_project does before it re-renders
+        return DirectorResult(False, "claude", reason="timeout")
+
+    deps, calls = _deps()
+    deps.director = director
+    assert review.main(_argv(state_path, runs, "reject", BLOG, "--note", "fix"), deps=deps) == 1
+    e = State(state_path).get(BLOG)
+    assert e["status"] == "awaiting_review"
+    assert Path(e["video_path"]).read_bytes() == b"OLD"
+    assert video.read_bytes() == b"OLD"
+
+
+def test_reject_success_points_video_path_at_new_render(tmp_path):
+    entry = _entry(tmp_path, "one")
+    video = Path(entry["video_path"])
+    video.write_bytes(b"OLD")
+    state_path, runs = _env(tmp_path, {BLOG: entry})
+
+    def director(run_dir, proj, mode, **kw):
+        (proj / "renders" / "video.mp4").write_bytes(b"NEW")
+        return DirectorResult(True, "claude", video="renders/video.mp4")
+
+    deps, _ = _deps()
+    deps.director = director
+    assert review.main(_argv(state_path, runs, "reject", BLOG, "--note", "fix"), deps=deps) == 0
+    e = State(state_path).get(BLOG)
+    assert e["status"] == "awaiting_review"
+    assert Path(e["video_path"]).read_bytes() == b"NEW"
+    assert Path(e["prev_video_path"]).read_bytes() == b"OLD"
