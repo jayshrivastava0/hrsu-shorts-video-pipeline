@@ -17,11 +17,16 @@ banned_claims:
   - "certified"
   - "ISO 9001"
   - "FDA approved"
+  - "door delivery"
+  - "deliver to your door"
+  - "delivers to your door"
+  - "delivered to your door"
+  - "delivery to your door"
+  - "Incoterm"
 
 # Fact tiers (owner-supplied 2026-10-29). Only in_place may be stated as true.
 # in_progress must never be stated as done. never_claimed must not be presented as true.
 in_place:
-  - "HRSU quotes delivery on the trade term (Incoterms) agreed with each buyer. There are five or six possible terms, from the buyer collecting at HRSU's own gate to delivery to the buyer's door when the buyer pays the transport. The term varies by customer and order, so never promise door delivery, or any single term, as the standard. Door delivery is possible on request; for a Christmas-style campaign it may be used only as a light comparison, never as a blanket offer. Which terms HRSU will formally list, and who clears import customs, are NOT settled, so never claim that customs, duties or paperwork are handled for the buyer"
   - "Anything printed on the current CoA or TDS (assay, specification limits, packaging, minimum order, shelf life, hazard class) may be shown on screen, quoted as printed"
   - "A garden at the plant"
   - "Steam reuse running in one boiler"
@@ -38,4 +43,5 @@ in_progress:
   - "The chimneys on two of the three boilers are lower than the first one and are being raised to the same height as it"
   - "The new expansion plans to stop burning wood and run on electricity; the electricity department has not yet approved it, so it may only be described as planned and pending approval"
 never_claimed:
+  - "Delivery terms of any kind: no Incoterm, trade term, door delivery or 'we deliver to you' offer. Delivery terms are agreed privately with each client. A Christmas / Santa 'delivery to the door' image is only a story metaphor about someone else, never an offer or promise by HRSU"
   - "Any CSR programme. CSR activity is very small; videos must not present HRSU as having a CSR programme"

@@ -32,7 +32,7 @@ for approval.
    on the spoken word that names it). ONE continuous animated scene per beat in one consistent visual world: a
    character or a simple set of characters, a story that moves from problem to outcome, or a metaphor drawn step
    by step. Each frame's build finishes about 1.5-2 s before its voice ends, then holds with life. The final frame
-   carries one CTA end card shown exactly once: the line "Ask for a door quotation at hrsuindore.com".
+   carries one CTA end card shown exactly once: the line "Ask for a quotation at hrsuindore.com".
 4. Build each `compositions/frames/NN-*.html` (one per frame; parallel work is fine), then the captions,
    assemble-index and transitions steps of the HyperFrames project.
 
@@ -51,7 +51,7 @@ for approval.
   or "offer ends" messaging appears anywhere in the video, in any frame, unless the narration literally states the
   exact figure and it is in `in_place`. The default is no price at all.
 - **Exact CTA.** The final frame's call to action is exactly this line, word for word, shown once:
-  "Ask for a door quotation at hrsuindore.com"
+  "Ask for a quotation at hrsuindore.com"
   Do not reword, shorten, add to or repeat it elsewhere in the video.
 - NEVER invent facts, numbers, percentages, units, stamps, badges, certifications or labels. No "QC passed",
   "certified", "REACH registered", "ISO", "FDA" or similar unless the narration literally says it and it is in `in_place`.
@@ -142,7 +142,7 @@ closing beat.
 1. `npx hyperframes lint` must report 0 errors.
 2. `npx hyperframes check` must report 0 errors (caption-word layout notices may be ignored).
 3. Snapshot-review EVERY frame (`npx hyperframes snapshot`, then look at the images). Check that no price appears,
-   that every product claim is in `in_place`, and that the final CTA reads exactly "Ask for a door quotation at
+   that every product claim is in `in_place`, and that the final CTA reads exactly "Ask for a quotation at
    hrsuindore.com". Fix any empty areas, clipped/overlapping text, invented labels, then re-run lint and check.
 4. Render: `npx hyperframes render --quality high --output renders/video.mp4`. The rendered duration must be within
    3 seconds of the total voice duration in `audio_meta.json`.

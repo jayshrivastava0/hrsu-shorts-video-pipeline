@@ -18,7 +18,9 @@ right kind.
 
 Examples the owner gave:
 - **Marketing:** "Christmas is coming. A child doesn't need to worry about REACH or customs. Ask for a
-  door quotation and HRSU delivers calcium nitrate to your door."
+  door quotation and HRSU delivers calcium nitrate to your door." (Superseded: the owner later said delivery
+  terms are private between HRSU and each client, so videos state no delivery terms; the Santa door image is
+  a metaphor only and the call to action is "Ask for a quotation at hrsuindore.com".)
 - **Proof of excellence:** a video showing excellence in the product or process.
 - **ESG:** a video about ESG practice.
 - **Market commentary:** how the ESG model is shifting and supply chains are looking to India instead
@@ -157,8 +159,6 @@ The builder expands `brand_facts.yaml` with two tiers. Only the first tier may b
 any video. The second tier must never be stated as done.
 
 **In place (usable):**
-- Delivery: HRSU will deliver to a buyer's door when the buyer pays for transport. Any trade term the
-  buyer agrees to is acceptable, so a door-delivery quotation is a real offer.
 - Anything printed on the current CoA or TDS (assay, specification limits, packaging, minimum order,
   shelf life, hazard class, and so on) may be shown on screen, quoted as printed.
 - A garden at the plant.

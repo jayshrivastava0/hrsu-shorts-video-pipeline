@@ -10,7 +10,7 @@ from scheduler.briefs.types import get_recipe
 from scheduler.briefs.writer import WriterFailed, write_script, write_support_files
 
 CTA = "Sourcing calcium nitrate? Visit hrsuindore.com"
-MKT_CTA = "Ask for a door quotation at hrsuindore.com"
+MKT_CTA = "Ask for a quotation at hrsuindore.com"
 
 
 def _facts(banned=None):
@@ -81,7 +81,7 @@ def test_marketing_story_beats_allowed():
         _beat("We run the plant on calcium nitrate for water treatment.", "fact"),
         _beat("Customers tell us the quoting is quick.", "story"),
         _beat("Our operators keep the dosing lines clean.", "opinion"),
-        _beat(f"Tell us your volumes. Ask for a door quotation at hrsuindore.com", "opinion", "cta"),
+        _beat(f"Tell us your volumes. Ask for a quotation at hrsuindore.com", "opinion", "cta"),
     ]
     llm = FakeLlm([{"thesis": "We run the plant on calcium nitrate for water treatment.", "beats": beats}])
     out = write_script(_brief("marketing"), get_recipe("marketing"), _facts(), _sources(), llm)
@@ -278,7 +278,7 @@ def test_market_prompt_keeps_hrsu_facts_out_of_fact_beats_and_thesis():
 def _marketing_script_call():
     llm = FakeLlm([{"thesis": None, "beats": [
         _beat("A child at Christmas never worries about shipping.", kind="story", purpose="hook"),
-        _beat("Ask HRSU for a door-delivery quotation.", kind="fact", purpose="offer"),
+        _beat("Ask HRSU for a quotation.", kind="fact", purpose="offer"),
         _beat("Sourcing calcium nitrate? Visit hrsuindore.com", kind="opinion", purpose="cta"),
     ]}])
     write_script(_brief("marketing"), get_recipe("marketing"), _facts(), _sources(), llm)

@@ -44,3 +44,7 @@ def test_marketing_recipe_facts_only():
 def test_every_prompt_file_exists():
     for name in VIDEO_TYPES:
         assert get_recipe(name).prompt_path.exists(), name
+
+
+def test_marketing_cta_is_a_generic_quotation_line():
+    assert get_recipe("marketing").cta_line == "Ask for a quotation at hrsuindore.com"

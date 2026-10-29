@@ -82,7 +82,7 @@ The five types (from `scheduler/briefs/types.py` and the design spec):
 | `proof` | Only supplied documents (CoA, TDS, `brand_facts.yaml`) and supplied photos | Motion and layout only | supplied documents | Every number on screen must appear in a supplied document |
 | `esg` | `brand_facts.yaml` plus sourced external facts, only practices HRSU actually has | Motion and layout | facts and sources | Every claim sourced; no greenwashing phrasing |
 | `market` | Factual claims about named companies, countries or events, each verified with a source; analysis labelled as HRSU's view | Layout and metaphor | sources | Source shown for each verified claim, dated; numbers must appear in the sources |
-| `marketing` | Product and service claims only from `brand_facts.yaml`; exact CTA | Story, characters and metaphor allowed, with no false factual statements | `brand_facts.yaml` only | No product claim outside `brand_facts.yaml`; CTA "Ask for a door quotation at hrsuindore.com" |
+| `marketing` | Product and service claims only from `brand_facts.yaml`; exact CTA | Story, characters and metaphor allowed, with no false factual statements | `brand_facts.yaml` only | No product claim outside `brand_facts.yaml`; CTA "Ask for a quotation at hrsuindore.com"; no delivery terms are ever stated (they are private to each client) |
 
 Every type also gets the automatic checks on every run: banned claims and never-claimed terms must not appear on
 screen, and in-progress wording must say "planned" or "pending" on the same line. The "every claim sourced" and

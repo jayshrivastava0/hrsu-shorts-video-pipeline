@@ -1,9 +1,8 @@
 from scheduler.briefs.facts import load_facts
 
 
-def test_in_place_includes_door_delivery_and_garden():
+def test_in_place_includes_the_garden():
     facts = load_facts()
-    assert any("deliver" in s.lower() for s in facts.in_place)
     assert any("garden" in s.lower() for s in facts.in_place)
 
 
@@ -38,10 +37,14 @@ def test_chimney_fact_forbids_fully_compliant():
     assert "no more" in chimney[0]
 
 
-def test_delivery_fact_says_terms_vary_and_never_promises_door_delivery_as_standard():
+def test_no_delivery_term_is_a_statable_fact_and_delivery_is_never_claimed():
     facts = load_facts()
-    delivery = next(s for s in facts.in_place if "deliver" in s.lower())
-    assert "agreed with each buyer" in delivery and "five or six possible terms" in delivery
-    assert "never promise door delivery, or any single term, as the standard" in delivery
-    assert "never claim that customs, duties or paperwork are handled" in delivery
-    assert "is a real offer" not in delivery
+    assert not any("deliver" in s.lower() or "incoterm" in s.lower() for s in facts.in_place)
+    never = next(s for s in facts.never_claimed if "Delivery terms" in s)
+    assert "agreed privately with each client" in never and "only a story metaphor" in never
+
+
+def test_door_delivery_phrases_are_banned_claims():
+    banned = [b.lower() for b in load_facts().banned_claims]
+    for phrase in ("door delivery", "deliver to your door", "delivers to your door", "incoterm"):
+        assert phrase in banned

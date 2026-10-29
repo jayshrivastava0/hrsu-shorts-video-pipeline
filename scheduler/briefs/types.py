@@ -69,7 +69,7 @@ _RECIPES: dict[str, Recipe] = {
         needs_research=False,
         facts_source="facts_only",
         prompt_path=_PROMPTS_DIR / "marketing.md",
-        cta_line="Ask for a door quotation at hrsuindore.com",
+        cta_line="Ask for a quotation at hrsuindore.com",
         tags=["calcium nitrate", "HRSU", "marketing"],
     ),
 }
