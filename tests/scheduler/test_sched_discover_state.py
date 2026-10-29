@@ -102,3 +102,19 @@ def test_fetch_all_unions_sitemap():
         raise OSError("404")
     urls = discover.fetch_all_post_urls(fetch=fetch)
     assert urls[-1] == "https://hrsuindore.com/blog/map-post/" and len(urls) == 4
+
+
+def test_awaiting_review_and_rejected_are_valid_statuses(tmp_path):
+    s = State(tmp_path / "state.json")
+    s.update("u1", status="awaiting_review")
+    s.update("u2", status="rejected")
+    assert s.get("u1")["status"] == "awaiting_review"
+    assert s.get("u2")["status"] == "rejected"
+
+
+def test_count_awaiting_review(tmp_path):
+    s = State(tmp_path / "state.json")
+    s.update("u1", status="awaiting_review")
+    s.update("u2", status="awaiting_review")
+    s.update("u3", status="published")
+    assert s.count_awaiting_review() == 2

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-STATUSES = ("seeded", "queued", "text_done", "held", "directed", "failed_gate", "failed", "published")
+STATUSES = ("seeded", "queued", "text_done", "held", "directed", "failed_gate", "failed", "published", "awaiting_review", "rejected")
 DEFAULT_STATE_PATH = Path("data") / "video_state.json"
 
 
@@ -60,6 +60,10 @@ class State:
                 added += 1
         self.save()
         return added
+
+    def count_awaiting_review(self) -> int:
+        """Entries currently in the `awaiting_review` status."""
+        return sum(1 for e in self.entries.values() if e.get("status") == "awaiting_review")
 
     def count_published_on(self, day: str) -> int:
         """Entries published on `day` (YYYY-MM-DD, local)."""
