@@ -203,6 +203,13 @@ def _run_scripted(brief: Brief, recipe: Recipe, root: Path, sources: list[Source
     write_support_files(run_dir, brief, script, sources)
     _rewrite_references(run_dir, recipe, sources, verdicts)
 
+    # The engine's run-stage audio only runs from "shotlisted"; we authored script.json ourselves.
+    checkpoint = run(_stage_cli("checkpoint", "--workspace", str(run_dir), "--status", "shotlisted"),
+                     cwd=REPO_ROOT, timeout=timeout, env=_env(), log_path=log_path)
+    if checkpoint.timed_out or checkpoint.returncode != 0:
+        return TextResult("failed", run_dir,
+                          f"stage_cli checkpoint failed (rc={checkpoint.returncode}): {checkpoint.output[-300:]}")
+
     audio = run(_stage_cli("run-stage", "audio", "--workspace", str(run_dir)),
                 cwd=REPO_ROOT, timeout=timeout, env=_env(), log_path=log_path)
     return _finish(run_dir, audio, timeout)

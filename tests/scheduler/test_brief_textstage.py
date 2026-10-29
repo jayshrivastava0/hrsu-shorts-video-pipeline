@@ -31,9 +31,10 @@ def _set_manifest(run: Path, key: str, status: str):
 class FakeRun:
     """Recording fake for run_cmd. Simulates init, run-stage audio and the explainer engine."""
 
-    def __init__(self, drop=None):
+    def __init__(self, drop=None, checkpoint_rc=0):
         self.calls = []
         self.drop = drop
+        self.checkpoint_rc = checkpoint_rc
         self.html = None
 
     def __call__(self, cmd, **kw):
@@ -43,6 +44,14 @@ class FakeRun:
             key = cmd[cmd.index("init") + 1]
             _set_manifest(root / RUN_ID, key, "init")
             return CmdResult(0, json.dumps({"workspace": str(root / RUN_ID), "run_id": RUN_ID}))
+        if "shorts_engine.stage_cli" in cmd and "checkpoint" in cmd:
+            run = Path(cmd[cmd.index("--workspace") + 1])
+            if self.checkpoint_rc:
+                return CmdResult(self.checkpoint_rc, '{"status": "error"}')
+            data = json.loads((run / "run_manifest.json").read_text())
+            data["status"] = data["last_ok_status"] = cmd[cmd.index("--status") + 1]
+            (run / "run_manifest.json").write_text(json.dumps(data))
+            return CmdResult(0, '{"status": "ok"}')
         if "shorts_engine.stage_cli" in cmd and "run-stage" in cmd:
             run = Path(cmd[cmd.index("--workspace") + 1])
             key = json.loads((run / "run_manifest.json").read_text())["blog_url"]
@@ -91,16 +100,46 @@ def _search(*hits):
     return lambda query: list(rows)
 
 
-def test_marketing_brief_runs_init_then_audio_only(tmp_path):
+def test_marketing_brief_runs_init_checkpoint_then_audio(tmp_path):
     brief = _brief("marketing")
     run = FakeRun()
     res = run_brief_text(brief, tmp_path, run=run, llm=_script_llm(thesis=None))
     assert res.status == "ready"
-    calls = run.stage_calls()
-    assert len(calls) == 2 and len(run.calls) == 2
-    assert "init" in calls[0] and calls[0][calls[0].index("init") + 1] == _key(brief)
-    assert "run-stage" in calls[1] and "audio" in calls[1]
-    assert "--html-override" not in " ".join(run.calls[0])
+    subcommands = [c[c.index("shorts_engine.stage_cli") + 1] for c in run.stage_calls()]
+    assert subcommands == ["init", "checkpoint", "run-stage"]
+    ckpt = run.stage_calls()[1]
+    assert ckpt[ckpt.index("--status") + 1] == "shotlisted"
+
+
+def test_failed_checkpoint_returns_failed_without_calling_audio(tmp_path):
+    brief = _brief("marketing")
+    run = FakeRun(checkpoint_rc=1)
+    res = run_brief_text(brief, tmp_path, run=run, llm=_script_llm(thesis=None))
+    assert res.status == "failed" and "checkpoint" in res.error
+    assert not any("run-stage" in c for c in run.calls)
+
+
+def test_default_writer_adapter_passes_prompt_system_schema_in_order(monkeypatch):
+    import functools
+    from scheduler.briefs import textstage
+    from shorts_engine.llm import text_llm
+
+    seen = {}
+
+    class FakeClient:
+        def generate_json(self, prompt, system="", retries=1):
+            seen["prompt"], seen["system"] = prompt, system
+            return {"beats": []}
+
+    real = text_llm.generate_schema_json
+    monkeypatch.setattr(text_llm, "generate_schema_json",
+                        functools.partial(real, client_factory=lambda: FakeClient()))
+    schema = {"type": "object"}
+    out = textstage._default_writer_llm("SYSTEM TEXT", "USER TEXT", schema)
+    assert out == {"beats": []}
+    assert seen["prompt"] == "USER TEXT"
+    assert seen["system"].startswith("SYSTEM TEXT")
+    assert json.dumps(schema) in seen["system"]
 
 
 def test_market_brief_unsourced_thesis_fails_without_calling_audio(tmp_path):

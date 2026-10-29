@@ -144,6 +144,32 @@ def cmd_run_stage(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    """Advance the manifest to STATUS without running a stage (used by the brief text stage
+    after it has authored script.json itself). Never moves a run backwards."""
+    workspace = Path(args.workspace)
+    try:
+        manifest = RunManifest.load(workspace)
+    except FileNotFoundError as exc:
+        print(json.dumps({"status": "error", "message": str(exc)}), file=sys.stderr)
+        return 1
+    target = args.status
+    if target not in STATUS_ORDER:
+        print(json.dumps({"status": "error", "message": f"unknown status {target!r}; valid: {STATUS_ORDER}"}),
+              file=sys.stderr)
+        return 1
+    current = manifest.last_ok_status
+    current_idx = STATUS_ORDER.index(current) if current in STATUS_ORDER else -1
+    if STATUS_ORDER.index(target) <= current_idx:
+        print(json.dumps({"status": "error",
+                          "message": f"refusing to checkpoint {target!r}: manifest is already at {current!r}"}),
+              file=sys.stderr)
+        return 1
+    manifest.checkpoint(status=target)
+    print(json.dumps({"status": "ok", "status_after": target}))
+    return 0
+
+
 def cmd_visuals_prepare(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace)
     try:
@@ -482,6 +508,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_broll.add_argument("--wish", required=True)
     p_broll.add_argument("--narration-span", required=True)
     p_broll.set_defaults(func=cmd_broll_request)
+
+    p_checkpoint = subparsers.add_parser("checkpoint")
+    p_checkpoint.add_argument("--workspace", required=True)
+    p_checkpoint.add_argument("--status", required=True)
+    p_checkpoint.set_defaults(func=cmd_checkpoint)
 
     p_figure = subparsers.add_parser("figure-request")
     p_figure.add_argument("--workspace", required=True)
