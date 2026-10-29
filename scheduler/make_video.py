@@ -172,6 +172,14 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
     except BriefRefused as exc:
         print(_safe(exc.message))
         return 2
+    except ValueError as exc:   # e.g. an unknown --type or a classifier that cannot run: refused, nothing spent
+        print(f"Brief refused: {_safe(exc)}")
+        return 2
+    except Exception as exc:
+        logger.exception("unexpected error while building the brief")
+        notify(alerts, f"UNEXPECTED brief intake error: {exc}")
+        print(f"Unexpected error while reading the brief: {_safe(exc)}")
+        return 1
 
     existing = state.get(brief.id)
     if existing is not None and existing.get("status") in FINAL_STATUSES:
@@ -197,7 +205,15 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         return 1
     _write_entry(state, brief, existing)
 
-    res = brief_text(brief, args.workspace_root, log_path=args.runs_dir / f"{deps.today()}_{brief.id}_text.log")
+    try:
+        res = brief_text(brief, args.workspace_root, log_path=args.runs_dir / f"{deps.today()}_{brief.id}_text.log")
+    except Exception as exc:  # an unexpected text-stage crash is a failed entry, never a silent text_done
+        logger.exception("unexpected error in the text stage for %s", brief.id)
+        msg = f"unexpected: {exc}"[:500]
+        state.update(brief.id, status="failed", last_error=msg)
+        notify(alerts, f"UNEXPECTED FAILURE brief {brief.id}: {exc}")
+        print(f"Text stage crashed for {brief.id}: {_safe(exc)}")
+        return 1
     if res.status != "ready":
         status = "held" if res.status == "held" else "failed"
         fields = {"run_dir": str(res.run_dir)} if res.run_dir else {}

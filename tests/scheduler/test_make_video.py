@@ -392,3 +392,31 @@ def test_yes_refuses_published_entry(tmp_path, capsys):
     for field, value in seeded.items():
         assert _entry(tmp_path)[field] == value, field
     assert "already published" in capsys.readouterr().out
+
+
+def test_brief_text_exception_marks_failed_exit_1(tmp_path, capsys):
+    def boom(brief, workspace_root, **kw):
+        raise RuntimeError("text stage exploded")
+
+    rc = make_video.main(_argv(tmp_path), _deps(), type_gate=_gate(), brief_text=boom)
+
+    assert rc == 1
+    entry = _entry(tmp_path)
+    assert entry["status"] == "failed"
+    assert entry["last_error"].startswith("unexpected:") and "text stage exploded" in entry["last_error"]
+    assert "text stage exploded" in capsys.readouterr().out
+
+
+def test_build_brief_value_error_exits_2(tmp_path, monkeypatch, capsys):
+    def bad(*a, **kw):
+        raise ValueError("unknown video type 'x'")
+
+    monkeypatch.setattr(make_video, "build_brief", bad)
+    director = _director()
+    rc = make_video.main(_argv(tmp_path), _deps(director=director), type_gate=_gate(),
+                         brief_text=_brief_text(tmp_path / "ws"))
+
+    assert rc == 2
+    assert director.calls == []
+    assert _entry(tmp_path) is None
+    assert "unknown video type" in capsys.readouterr().out
