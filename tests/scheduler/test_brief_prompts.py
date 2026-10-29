@@ -81,3 +81,10 @@ def test_facts_file_path_uses_run_dir(type_name, tmp_path):
     assert f"{run}/brand_facts.yaml" in text
     assert " brand_facts.yaml" not in text
     assert "`brand_facts.yaml`" not in text
+
+
+@pytest.mark.parametrize("type_name", TYPES)
+def test_type_prompts_carry_the_idle_motion_recipe_without_infinite_repeats(type_name, tmp_path):
+    text = _prompt(type_name, tmp_path)
+    assert "Required recipe for the 90% motion check" in text
+    assert "Never `repeat: -1`" in text

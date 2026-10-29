@@ -66,6 +66,13 @@ feel like motion graphics from the first frame to the last.
 - **Entrances**: ease out strongly (`expo.out` / `power4.out` / `cubic-bezier(0.16,1,0.3,1)`), characters and cards pop
   with `back.out(1.4)`; **exits** run at half the entrance duration; **stagger** words and list items about 0.09 s
   apart. Paths and arrows draw on from source to target (stroke-dashoffset); lines never just appear.
+- **Required recipe for the 90% motion check (do this in every frame's timeline BEFORE polishing).** The check
+  compares frames 0.7 s apart, and any held stretch longer than 0.7 s must visibly change. Give the background
+  layer and every visible element a finite idle tween that spans the frame's whole duration, with a different
+  period per element (1.1-1.9 s) so no two moments look identical, for example
+  `tl.to(el, {y: "-=6", scale: 1.02, duration: 1.4, ease: "sine.inOut", yoyo: true,
+  repeat: Math.max(0, Math.ceil(frameDuration / 1.4) - 1)}, 0)`. Never `repeat: -1` (renders must be seek-safe).
+  Add a slow glow/gradient drift on the background and a pulse on the element being spoken about.
 - **Never a dead frame.** Every held element keeps subtle life while on screen: slow background drift, a pulse or
   glow on the element being spoken about, 2-4% scale "breathing", parallax between layers. Dim everything except
   the active element (focus pull) when the narration moves on.

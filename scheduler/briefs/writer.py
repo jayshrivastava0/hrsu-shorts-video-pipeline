@@ -61,6 +61,22 @@ _BEAT_SCHEMA = {
     "required": ["beat", "purpose", "narration", "card_text", "broll_wish", "kind"],
 }
 
+# Marketing is short and festive: fewer beats, and only the facts the brief itself needs (no fact lists for their own sake).
+_LENGTH_RULES = {
+    "marketing": "Write 3-5 beats, about 30 seconds in total (under 90 words of narration). Use ONLY the facts the "
+                 "brief itself needs; do not list other facts about the company.",
+}
+_BEAT_RANGE = {"marketing": (3, 5)}
+
+
+def _script_schema(recipe: Recipe) -> dict:
+    """The script JSON schema with the beat count range of this video type (default 5-8)."""
+    low, high = _BEAT_RANGE.get(recipe.name, (5, 8))
+    schema = json.loads(json.dumps(_SCRIPT_SCHEMA))
+    schema["properties"]["beats"].update(minItems=low, maxItems=high)
+    return schema
+
+
 _SCRIPT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -119,7 +135,7 @@ def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Sourc
         lines.append(f"[{s.id}] {s.title} ({s.publisher}): {s.snippet}")
     lines += [
         "",
-        "Write 5-8 beats. The first beat is a hook with purpose \"hook\".",
+        _LENGTH_RULES.get(recipe.name, "Write 5-8 beats.") + " The first beat is a hook with purpose \"hook\".",
         f"The last beat must end with this exact line: {recipe.cta_line}",
         "Each beat has kind \"fact\", \"opinion\" or \"story\".",
         "thesis is the single core claim, equal to the narration of one fact beat; null for marketing.",
@@ -197,7 +213,7 @@ def write_script(
     feedback = ""
     offending: list[str] = []
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        result = llm(system, _user_prompt(brief, recipe, facts, sources, feedback), _SCRIPT_SCHEMA)
+        result = llm(system, _user_prompt(brief, recipe, facts, sources, feedback), _script_schema(recipe))
         if not isinstance(result, dict):
             result = {}
         raw_beats = result.get("beats")

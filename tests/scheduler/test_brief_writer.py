@@ -273,3 +273,29 @@ def test_market_prompt_keeps_hrsu_facts_out_of_fact_beats_and_thesis():
     assert "never a statement about HRSU" in p
     q = _user_prompt(_brief(), get_recipe("explainer"), _facts(), _sources(), "")
     assert "Facts you may state:" in q and "never a statement about HRSU" not in q
+
+
+def _marketing_script_call():
+    llm = FakeLlm([{"thesis": None, "beats": [
+        _beat("A child at Christmas never worries about shipping.", kind="story", purpose="hook"),
+        _beat("Ask HRSU for a door-delivery quotation.", kind="fact", purpose="offer"),
+        _beat("Sourcing calcium nitrate? Visit hrsuindore.com", kind="opinion", purpose="cta"),
+    ]}])
+    write_script(_brief("marketing"), get_recipe("marketing"), _facts(), _sources(), llm)
+    return llm.calls[0]
+
+
+def test_marketing_script_is_short_and_uses_only_needed_facts():
+    system, prompt, schema = _marketing_script_call()
+    assert (schema["properties"]["beats"]["minItems"], schema["properties"]["beats"]["maxItems"]) == (3, 5)
+    assert "Write 3-5 beats" in prompt and "under 90 words" in prompt
+    assert "do not list other facts" in prompt
+
+
+def test_other_types_keep_five_to_eight_beats():
+    llm = FakeLlm([{"thesis": "Calcium nitrate suppresses sulfide production in the sewer biofilm.",
+                    "beats": _good_beats()}])
+    write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    _, prompt, schema = llm.calls[0]
+    assert (schema["properties"]["beats"]["minItems"], schema["properties"]["beats"]["maxItems"]) == (5, 8)
+    assert "Write 5-8 beats" in prompt
