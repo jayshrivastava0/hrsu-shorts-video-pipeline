@@ -58,6 +58,11 @@ python -m scheduler.make_video --brief "..." [--type auto|explainer|proof|esg|ma
 - `--orientation` overrides the default: narration of 90 s or more is landscape 1920x1080, otherwise portrait.
 - `--yes` reruns a brief whose entry is `queued`, `text_done`, `directed`, `failed`, `failed_gate` or `held`. An entry
   that is `awaiting_review`, `rejected` or `published` is never reset: the command exits 3 and leaves it untouched.
+- `--resume` continues an unfinished brief (status `text_done`, `directed`, `failed` or `failed_gate`) from its saved
+  text stage: research, script and voice are not redone, only the director and the gate run again. Use the same
+  `--brief` text (and `--type`), plus the same `--state`, `--runs-dir`, `--lock` and `--workspace-root` flags if you
+  used them. If the run folder or its text files are gone it exits 1 and tells you to use `--yes`. A killed run
+  can leave `--lock` behind; delete that file (it is only a marker) before resuming.
 - A brief run takes the scheduler lock, so it cannot overlap the daily job.
 
 Exit codes:

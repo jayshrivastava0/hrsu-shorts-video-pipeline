@@ -1,10 +1,10 @@
 """Brief-driven video entry point: one brief -> text stage -> director -> gate -> awaiting review.
 
     python -m scheduler.make_video --brief "..." [--type auto|explainer|proof|esg|market|marketing]
-        [--url URL] [--assets DIR] [--orientation landscape|portrait] [--yes]
+        [--url URL] [--assets DIR] [--orientation landscape|portrait] [--yes | --resume]
 
 Exit codes: 0 awaiting review; 1 pipeline failure or busy lock; 2 needs --type or refused brief;
-3 duplicate brief id without --yes.
+3 duplicate brief id without --yes or --resume. --resume continues an unfinished brief from its saved text stage.
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from scheduler.briefs.types import get_recipe
 from scheduler.lock import LockBusy, RunLock
 from scheduler.run_daily import DATA_DIR, Deps, default_deps, notify, setup_logging
 from scheduler.state import State, now_iso
+from scheduler.textstage import TextResult
 
 logger = logging.getLogger("scheduler")
 
@@ -111,11 +112,26 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--assets", type=Path, default=None, help="folder of PDF/PNG/JPEG supporting assets")
     p.add_argument("--orientation", choices=["landscape", "portrait"], default=None)
     p.add_argument("--yes", action="store_true", help="run again even if this brief id already exists")
+    p.add_argument("--resume", action="store_true",
+                   help="continue an unfinished brief from its saved text stage (skips research, script and "
+                        "voice; runs the director and the gate again)")
     p.add_argument("--state", type=Path, default=DATA_DIR / "video_state.json")
     p.add_argument("--runs-dir", type=Path, default=DATA_DIR / "video_runs")
     p.add_argument("--lock", type=Path, default=DATA_DIR / "video_scheduler.lock")
     p.add_argument("--workspace-root", type=Path, default=None, help="default: output/shorts")
     return p
+
+
+_TEXT_ARTEFACTS = ("script.json", "references.json", "video_description.txt", "beats_audio.json")
+_RESUMABLE_STATUSES = ("text_done", "directed", "failed", "failed_gate")
+
+
+def _resumable_run_dir(existing: Optional[dict]) -> Optional[Path]:
+    """The saved run folder of an unfinished brief whose text stage completed, else None."""
+    if not existing or existing.get("status") not in _RESUMABLE_STATUSES or not existing.get("run_dir"):
+        return None
+    run_dir = Path(existing["run_dir"])
+    return run_dir if all((run_dir / name).is_file() for name in _TEXT_ARTEFACTS) else None
 
 
 def _after_text(state: State, brief: Brief, run_dir: Path, deps: Deps, alerts: Path,
@@ -187,9 +203,17 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         print(f"Brief {brief.id} is already {_safe(existing.get('status'))}; review it with "
               "python -m scheduler.review, or use a different brief text")
         return 3
-    if existing is not None and not args.yes:
+    resume_dir: Optional[Path] = None
+    if args.resume:
+        resume_dir = _resumable_run_dir(existing)
+        if resume_dir is None:
+            print(f"Nothing to resume for brief {brief.id}: it needs an earlier run that finished the text stage "
+                  "(status text_done, directed, failed or failed_gate, with its run folder still on disk). "
+                  "Use --yes to start it again from scratch.")
+            return 1
+    elif existing is not None and not args.yes:
         print(f"Brief {brief.id} already exists (status {existing.get('status')}). "
-              "Rerun with --yes to run it again.")
+              "Rerun with --yes to run it again, or --resume to continue from its saved text stage.")
         return 3
 
     # fail fast on YouTube credentials before any text-stage or Claude spend.
@@ -203,10 +227,13 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         notify(alerts, f"YouTube auth problem, brief {brief.id} not started: {exc}")
         print(f"YouTube auth problem, nothing was run: {_safe(exc)}")
         return 1
-    _write_entry(state, brief, existing)
+    if resume_dir is None:
+        _write_entry(state, brief, existing)
 
     try:
-        res = brief_text(brief, args.workspace_root, log_path=args.runs_dir / f"{deps.today()}_{brief.id}_text.log")
+        res = (TextResult("ready", resume_dir) if resume_dir is not None
+               else brief_text(brief, args.workspace_root,
+                               log_path=args.runs_dir / f"{deps.today()}_{brief.id}_text.log"))
     except Exception as exc:  # an unexpected text-stage crash is a failed entry, never a silent text_done
         logger.exception("unexpected error in the text stage for %s", brief.id)
         msg = f"unexpected: {exc}"[:500]

@@ -420,3 +420,66 @@ def test_build_brief_value_error_exits_2(tmp_path, monkeypatch, capsys):
     assert director.calls == []
     assert _entry(tmp_path) is None
     assert "unknown video type" in capsys.readouterr().out
+
+
+def _seed_text_done(tmp_path: Path, status: str = "text_done", with_text: bool = True) -> Path:
+    run = _make_run(tmp_path / "saved") if with_text else tmp_path / "saved" / "run-abc123"
+    state = State(tmp_path / "state.json")
+    state.ensure(brief_id(TEXT), "queued")
+    state.entries[brief_id(TEXT)].update(status=status, run_dir=str(run), type="marketing", brief=TEXT,
+                                         rejects=0, url=None, assets=[])
+    state.save()
+    return run
+
+
+def test_resume_skips_text_stage_and_runs_director_and_gate(tmp_path):
+    run = _seed_text_done(tmp_path)
+    bt = _brief_text(tmp_path / "ws")
+    director, gate = _director(), _gate()
+
+    rc = make_video.main(_argv(tmp_path, "--resume"), _deps(director=director), type_gate=gate, brief_text=bt)
+
+    assert rc == 0
+    assert bt.calls == []                                   # research / script / voice were not redone
+    assert Path(director.calls[0]["run_dir"]) == run
+    entry = _entry(tmp_path)
+    assert entry["status"] == "awaiting_review" and entry["run_dir"] == str(run)
+    assert len(gate.calls) == 1
+
+
+def test_resume_after_a_failed_director_run_continues_from_saved_text(tmp_path):
+    _seed_text_done(tmp_path, status="failed")
+    bt = _brief_text(tmp_path / "ws")
+    rc = make_video.main(_argv(tmp_path, "--resume"), _deps(), type_gate=_gate(), brief_text=bt)
+    assert rc == 0 and bt.calls == []
+
+
+def test_resume_without_saved_text_exits_1_and_changes_nothing(tmp_path, capsys):
+    _seed_text_done(tmp_path, with_text=False)
+    director = _director()
+    rc = make_video.main(_argv(tmp_path, "--resume"), _deps(director=director), type_gate=_gate(),
+                         brief_text=_brief_text(tmp_path / "ws"))
+    assert rc == 1 and director.calls == []
+    assert "Nothing to resume" in capsys.readouterr().out
+    assert _entry(tmp_path)["status"] == "text_done"
+
+
+def test_resume_with_no_earlier_run_exits_1(tmp_path):
+    rc = make_video.main(_argv(tmp_path, "--resume"), _deps(), type_gate=_gate(),
+                         brief_text=_brief_text(tmp_path / "ws"))
+    assert rc == 1 and _entry(tmp_path) is None
+
+
+def test_resume_refuses_a_video_already_awaiting_review(tmp_path, capsys):
+    _seed_text_done(tmp_path, status="awaiting_review")
+    director = _director()
+    rc = make_video.main(_argv(tmp_path, "--resume"), _deps(director=director), type_gate=_gate(),
+                         brief_text=_brief_text(tmp_path / "ws"))
+    assert rc == 3 and director.calls == []
+    assert "already awaiting_review" in capsys.readouterr().out
+
+
+def test_plain_rerun_hint_mentions_resume(tmp_path, capsys):
+    _seed_text_done(tmp_path)
+    rc = make_video.main(_argv(tmp_path), _deps(), type_gate=_gate(), brief_text=_brief_text(tmp_path / "ws"))
+    assert rc == 3 and "--resume" in capsys.readouterr().out
