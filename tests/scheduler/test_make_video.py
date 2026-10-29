@@ -146,6 +146,7 @@ def test_duplicate_brief_runs_with_yes(tmp_path):
     deps = _deps()
     bt = _brief_text(tmp_path / "ws")
     assert make_video.main(_argv(tmp_path), deps, type_gate=_gate(), brief_text=bt) == 0
+    State(tmp_path / "state.json").update(brief_id(TEXT), status="failed")   # --yes only reruns non-final entries
 
     rc = make_video.main(_argv(tmp_path, "--yes"), deps, type_gate=_gate(), brief_text=bt)
 
@@ -248,11 +249,11 @@ def test_gate_failure_marks_failed_gate(tmp_path):
     assert "banned claim" in entry["last_error"]
 
 
-def _seed_awaiting(tmp_path: Path) -> dict:
-    """An awaiting_review brief with a rendered video from an earlier run."""
+def _seed_awaiting(tmp_path: Path, status: str = "failed") -> dict:
+    """A brief entry with a rendered video from an earlier run (a non-final status unless asked)."""
     state = State(tmp_path / "state.json")
     state.ensure(brief_id(TEXT), "queued")
-    fields = dict(status="awaiting_review", run_dir=str(tmp_path / "old-run"),
+    fields = dict(status=status, run_dir=str(tmp_path / "old-run"),
                   video_path=str(tmp_path / "old.mp4"), project_dir=str(tmp_path / "old-proj"),
                   director="claude", video_id="OLD", rejects=2)
     state.entries[brief_id(TEXT)].update(fields)
@@ -364,3 +365,30 @@ def test_explainer_allowed_text_keeps_narration(tmp_path):
     run = _make_run(tmp_path / "ws", narration=("Narration says 77 tonnes.",))
     allowed = make_video._allowed_text(run, get_recipe("explainer"))
     assert "Narration says 77 tonnes." in allowed
+
+
+def test_yes_refuses_awaiting_review_entry(tmp_path, capsys):
+    seeded = _seed_awaiting(tmp_path, status="awaiting_review")
+    director = _director()
+    bt = _brief_text(tmp_path / "ws")
+    rc = make_video.main(_argv(tmp_path, "--yes"), _deps(director=director), type_gate=_gate(), brief_text=bt)
+
+    assert rc == 3
+    assert director.calls == [] and bt.calls == []
+    for field, value in seeded.items():
+        assert _entry(tmp_path)[field] == value, field
+    out = capsys.readouterr().out
+    assert "already awaiting_review" in out and "python -m scheduler.review" in out
+
+
+def test_yes_refuses_published_entry(tmp_path, capsys):
+    seeded = _seed_awaiting(tmp_path, status="published")
+    director = _director()
+    bt = _brief_text(tmp_path / "ws")
+    rc = make_video.main(_argv(tmp_path, "--yes"), _deps(director=director), type_gate=_gate(), brief_text=bt)
+
+    assert rc == 3
+    assert director.calls == [] and bt.calls == []
+    for field, value in seeded.items():
+        assert _entry(tmp_path)[field] == value, field
+    assert "already published" in capsys.readouterr().out

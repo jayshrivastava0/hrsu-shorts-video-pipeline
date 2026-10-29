@@ -28,6 +28,7 @@ from scheduler.state import State, now_iso
 logger = logging.getLogger("scheduler")
 
 TITLE_MAX = 80
+FINAL_STATUSES = ("awaiting_review", "rejected", "published")   # --yes never resets these
 _CLASSIFY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -173,6 +174,11 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         return 2
 
     existing = state.get(brief.id)
+    if existing is not None and existing.get("status") in FINAL_STATUSES:
+        # a finished (or waiting) video must not be silently replaced by --yes
+        print(f"Brief {brief.id} is already {_safe(existing.get('status'))}; review it with "
+              "python -m scheduler.review, or use a different brief text")
+        return 3
     if existing is not None and not args.yes:
         print(f"Brief {brief.id} already exists (status {existing.get('status')}). "
               "Rerun with --yes to run it again.")
