@@ -194,3 +194,27 @@ def test_build_prompt_reflects_orientation_override(tmp_path):
     template.write_text("{{ORIENTATION}} {{CANVAS}} {{CONTENT_Y}}", encoding="utf-8")
     text = director.build_prompt(tmp_path / "p", run, template=template)
     assert text == "landscape 1920x1080 110-895"
+
+
+def _claude_cmd(tmp_path, monkeypatch, **env):
+    for k in ("HRSU_DIRECTOR_MODEL", "HRSU_DIRECTOR_EFFORT"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    proj, run = tmp_path / "p", tmp_path / "r"
+    proj.mkdir(); run.mkdir()
+    fr = FakeRunner()
+    director.run_claude(proj, run, run=fr)
+    return fr.calls[0][0]
+
+
+def test_director_defaults_to_haiku_low_effort(tmp_path, monkeypatch):
+    cmd = _claude_cmd(tmp_path, monkeypatch)
+    assert cmd[cmd.index("--model") + 1] == "claude-haiku-5-5"
+    assert cmd[cmd.index("--effort") + 1] == "low"
+
+
+def test_director_model_and_effort_can_be_overridden_by_env(tmp_path, monkeypatch):
+    cmd = _claude_cmd(tmp_path, monkeypatch, HRSU_DIRECTOR_MODEL="claude-opus-5-5", HRSU_DIRECTOR_EFFORT="high")
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5-5"
+    assert cmd[cmd.index("--effort") + 1] == "high"

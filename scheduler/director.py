@@ -76,8 +76,10 @@ def _npx() -> str:
     return shutil.which("npx") or "npx"
 
 
-# Visuals are always authored by Claude Code on Opus 5.5 (set HRSU_DIRECTOR_MODEL to override).
-DIRECTOR_MODEL = "claude-opus-5-5"
+# Visuals are authored by Claude Code on Haiku 5.5 at low effort (owner decision 2026-10-29).
+# Override per run with HRSU_DIRECTOR_MODEL / HRSU_DIRECTOR_EFFORT (e.g. claude-opus-5-5 / high).
+DIRECTOR_MODEL = "claude-haiku-5-5"
+DIRECTOR_EFFORT = "low"
 
 LANDSCAPE_MIN_SECONDS = 90.0   # videos of 1.5 min or more are landscape (1920x1080), shorter ones portrait
 WORDS_PER_SECOND = 2.5         # fallback estimate from the narration when no audio duration is available
@@ -183,6 +185,9 @@ def run_claude(project_dir: Path | str, run_dir: Path | str, *, timeout: float =
     model = model or os.environ.get("HRSU_DIRECTOR_MODEL", DIRECTOR_MODEL)
     if model:
         cmd += ["--model", model]
+    effort = os.environ.get("HRSU_DIRECTOR_EFFORT", DIRECTOR_EFFORT)
+    if effort:
+        cmd += ["--effort", effort]
     prompt = build_prompt(project, run_dir, template=prompt_path or PROMPT_PATH, review_note=review_note)
     r = run(cmd, cwd=project, timeout=timeout, input_text=prompt,
             log_path=log_path or run_dir / "director_claude.log")
