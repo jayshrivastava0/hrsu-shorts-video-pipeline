@@ -78,6 +78,15 @@ _FACTS_RULES = {
     "facts_only": "State only the facts listed below. Do not add claims beyond them.",
 }
 
+# one line closing video_description.txt, per type ("" = omit)
+_DESCRIPTION_LINES = {
+    "explainer": "This video explains the topic step by step.",
+    "proof": "This video shows HRSU's product documentation.",
+    "esg": "This video describes HRSU's environmental practices.",
+    "market": "This video gives HRSU's view of the market; sources are named on screen.",
+    "marketing": "",
+}
+
 _TYPE_RULES = {
     "marketing": "This is marketing: beats may be story or opinion, thesis must be null.",
 }
@@ -254,7 +263,11 @@ def write_support_files(run_dir: Path, brief: Brief, script: dict, sources: list
     cta = beats[-1]["narration"] if beats else ""
     lines = [hook, "", "Sources"]
     lines += [f"{i}. {s.publisher} - {s.url}" for i, s in enumerate(sources, 1)]
-    lines += ["", "This video presents HRSU's analysis.", "", cta]
+    desc_line = _DESCRIPTION_LINES.get(brief.type, "This video presents HRSU's analysis.")
+    lines += [""]
+    if desc_line:
+        lines += [desc_line, ""]
+    lines += [cta]
     (run_dir / "video_description.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     title = next((ln.strip() for ln in brief.text.splitlines() if ln.strip()), brief.id)

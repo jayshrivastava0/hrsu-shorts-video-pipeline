@@ -226,3 +226,26 @@ def test_widened_in_progress_keyword_triggers_rewrite(phrase):
     out = write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
     assert out["attempts"] == 2
     assert phrase in llm.calls[1][1]
+
+
+@pytest.mark.parametrize("type_name, expected", [
+    ("explainer", "This video explains the topic step by step."),
+    ("proof", "This video shows HRSU's product documentation."),
+    ("esg", "This video describes HRSU's environmental practices."),
+    ("market", "This video gives HRSU's view of the market; sources are named on screen."),
+    ("marketing", None),
+])
+def test_description_line_is_per_type(tmp_path, type_name, expected):
+    brief = _brief(type_name)
+    llm = FakeLlm([{"beats": _good_beats()}])
+    script = write_script(brief, get_recipe(type_name), _facts(), _sources(), llm)
+    run = tmp_path / "run"
+    write_support_files(run, brief, script, _sources())
+
+    desc = (run / "video_description.txt").read_text(encoding="utf-8")
+    if expected is None:
+        assert "This video" not in desc
+    else:
+        assert expected in desc
+        assert "This video presents HRSU's analysis." not in desc
+    assert desc.rstrip().endswith(script["beats"][-1]["narration"])
