@@ -273,3 +273,13 @@ def write_support_files(run_dir: Path, brief: Brief, script: dict, sources: list
     title = next((ln.strip() for ln in brief.text.splitlines() if ln.strip()), brief.id)
     plan = {"question": title, "post_kind": brief.type}
     (run_dir / "explanation_plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+    # Files the engine's ingest stage would have written; later engine stages (audio) read post.json.
+    post = {"url": f"https://hrsuindore.com/brief/{brief.id}/", "title": title, "region": None,
+            "category": brief.type, "citations": [], "images": []}
+    (run_dir / "post.json").write_text(json.dumps(post, indent=2), encoding="utf-8")
+    (run_dir / "canonical.txt").write_text(
+        "
+
+".join(b.get("narration", "") for b in beats) + "
+", encoding="utf-8")

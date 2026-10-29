@@ -218,6 +218,21 @@ def test_support_files_written(tmp_path):
     assert plan == {"question": "How does calcium nitrate cut H2S in sewers?", "post_kind": "explainer"}
 
 
+def test_support_files_include_post_json_and_canonical_for_engine_audio_stage(tmp_path):
+    """The engine's audio stage reads post.json (region lookup); the scripted path has no ingest stage."""
+    llm = FakeLlm([{"beats": _good_beats()}])
+    script = write_script(_brief(), get_recipe("explainer"), _facts(), _sources(), llm)
+    run = tmp_path / "run"
+    write_support_files(run, _brief(), script, _sources())
+
+    post = json.loads((run / "post.json").read_text(encoding="utf-8"))
+    assert post["title"] == "How does calcium nitrate cut H2S in sewers?"
+    assert post["region"] is None and post["citations"] == [] and post["images"] == []
+    assert post["url"].startswith("https://hrsuindore.com/brief/")
+    canonical = (run / "canonical.txt").read_text(encoding="utf-8")
+    assert script["beats"][0]["narration"] in canonical
+
+
 @pytest.mark.parametrize("phrase", ["every boiler", "no wood", "stopped burning wood"])
 def test_widened_in_progress_keyword_triggers_rewrite(phrase):
     dirty = _good_beats()
