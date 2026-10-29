@@ -51,7 +51,34 @@ def _default_classifier(prompt: str) -> dict:
 
 
 def _title(text: str) -> str:
-    return text.splitlines()[0].strip()[:TITLE_MAX]
+    return (text.strip().splitlines() or [""])[0].strip()[:TITLE_MAX]
+
+
+def _write_entry(state: State, brief: Brief, existing: Optional[dict], **extra) -> dict:
+    """Replace the whole entry for this brief (no run-scoped field from an earlier run survives).
+
+    `created_at` is kept from an existing entry; everything else starts fresh.
+    """
+    ts = now_iso()
+    state.entries[brief.id] = {
+        "status": "queued",
+        "run_dir": None,
+        "video_id": None,
+        "privacy_actual": None,
+        "attempts": 0,
+        "last_error": None,
+        "created_at": (existing or {}).get("created_at") or ts,
+        "updated_at": ts,
+        "type": brief.type,
+        "brief": brief.text,
+        "title": _title(brief.text),
+        "assets": [str(a) for a in brief.assets],
+        "url": brief.url,
+        "rejects": 0,
+        **extra,
+    }
+    state.save()
+    return state.entries[brief.id]
 
 
 def _allowed_text(run_dir: Path) -> str:
@@ -87,55 +114,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callable,
-         llm: Optional[Callable]) -> int:
-    state = State(args.state)
-    if args.type == "auto" and llm is None:
-        llm = _default_classifier
-    try:
-        brief = build_brief(args.brief, args.type, url=args.url, assets_dir=args.assets,
-                            orientation=args.orientation, llm=llm)
-    except NeedsType as exc:
-        print(f"Could not classify this brief confidently: guess {_safe(exc.guess)} "
-              f"(confidence {exc.confidence:.2f}).")
-        print(f"Rerun with --type X, where X is one of: {', '.join(VIDEO_TYPES)}.")
-        return 2
-    except BriefRefused as exc:
-        print(_safe(exc.message))
-        return 2
-
-    existing = state.get(brief.id)
-    if existing is not None and not args.yes:
-        print(f"Brief {brief.id} already exists (status {existing.get('status')}). "
-              "Rerun with --yes to run it again.")
-        return 3
-    # State.update takes the key as `url`, which clashes with the blog-url field, so write the entry directly
-    entry = state.ensure(brief.id, "queued")
-    entry.update(status="queued", type=brief.type, brief=brief.text, title=_title(brief.text),
-                 assets=[str(a) for a in brief.assets], url=brief.url, rejects=0, attempts=0,
-                 last_error=None, updated_at=now_iso())
-    state.save()
-
-    # fail fast on YouTube credentials before any text-stage or Claude spend
-    try:
-        deps.preflight()
-    except Exception as exc:
-        state.update(brief.id, last_error=f"youtube auth: {exc}"[:500])
-        notify(alerts, f"YouTube auth problem, brief {brief.id} not started: {exc}")
-        print(f"YouTube auth problem, nothing was run: {_safe(exc)}")
-        return 1
-
-    res = brief_text(brief, args.workspace_root, log_path=args.runs_dir / f"{deps.today()}_{brief.id}_text.log")
-    if res.status != "ready":
-        status = "held" if res.status == "held" else "failed"
-        fields = {"run_dir": str(res.run_dir)} if res.run_dir else {}
-        state.update(brief.id, status=status, last_error=(res.error or "")[:500], **fields)
-        notify(alerts, f"{status.upper()} brief {brief.id}: {res.error}")
-        print(f"Text stage {status} for {brief.id}: {_safe(res.error)}")
-        return 1
-
-    run_dir = Path(res.run_dir)
-    state.update(brief.id, status="text_done", run_dir=str(run_dir), last_error=None)
+def _after_text(state: State, brief: Brief, run_dir: Path, deps: Deps, alerts: Path,
+                type_gate: Callable) -> int:
+    """Director and gate, once the text stage is ready."""
     if brief.orientation:
         (run_dir / "orientation.txt").write_text(brief.orientation, encoding="utf-8")
     (run_dir / "allowed_text.txt").write_text(_allowed_text(run_dir), encoding="utf-8")
@@ -170,6 +151,62 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
     print(f"Approve:  python -m scheduler.review approve {brief.id}")
     print(f'Reject:   python -m scheduler.review reject {brief.id} --note "what to change"')
     return 0
+
+
+def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callable,
+         llm: Optional[Callable]) -> int:
+    state = State(args.state)
+    if args.type == "auto" and llm is None:
+        llm = _default_classifier
+    try:
+        brief = build_brief(args.brief, args.type, url=args.url, assets_dir=args.assets,
+                            orientation=args.orientation, llm=llm)
+    except NeedsType as exc:
+        print(f"Could not classify this brief confidently: guess {_safe(exc.guess)} "
+              f"(confidence {exc.confidence:.2f}).")
+        print(f"Rerun with --type X, where X is one of: {', '.join(VIDEO_TYPES)}.")
+        return 2
+    except BriefRefused as exc:
+        print(_safe(exc.message))
+        return 2
+
+    existing = state.get(brief.id)
+    if existing is not None and not args.yes:
+        print(f"Brief {brief.id} already exists (status {existing.get('status')}). "
+              "Rerun with --yes to run it again.")
+        return 3
+
+    # fail fast on YouTube credentials before any text-stage or Claude spend.
+    # The entry is written only after this succeeds; a failed --yes rerun replaces the old entry with a clean queued one.
+    try:
+        deps.preflight()
+    except Exception as exc:
+        if existing is not None:
+            _write_entry(state, brief, existing, last_error=f"youtube auth: {exc}"[:500])
+        notify(alerts, f"YouTube auth problem, brief {brief.id} not started: {exc}")
+        print(f"YouTube auth problem, nothing was run: {_safe(exc)}")
+        return 1
+    _write_entry(state, brief, existing)
+
+    res = brief_text(brief, args.workspace_root, log_path=args.runs_dir / f"{deps.today()}_{brief.id}_text.log")
+    if res.status != "ready":
+        status = "held" if res.status == "held" else "failed"
+        fields = {"run_dir": str(res.run_dir)} if res.run_dir else {}
+        state.update(brief.id, status=status, last_error=(res.error or "")[:500], **fields)
+        notify(alerts, f"{status.upper()} brief {brief.id}: {res.error}")
+        print(f"Text stage {status} for {brief.id}: {_safe(res.error)}")
+        return 1
+
+    run_dir = Path(res.run_dir)
+    state.update(brief.id, status="text_done", run_dir=str(run_dir), last_error=None)
+    try:
+        return _after_text(state, brief, run_dir, deps, alerts, type_gate)
+    except Exception as exc:  # unexpected failure after the text stage: record it, never leave text_done silently
+        logger.exception("unexpected error after text stage for %s", brief.id)
+        state.update(brief.id, status="failed", last_error=f"unexpected: {exc}"[:500])
+        notify(alerts, f"UNEXPECTED FAILURE brief {brief.id}: {exc}")
+        print(f"Unexpected failure for {brief.id}: {_safe(exc)}")
+        return 1
 
 
 def main(argv: Optional[list] = None, deps: Optional[Deps] = None, *, type_gate: Callable = run_type_gate,

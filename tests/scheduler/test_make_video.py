@@ -223,7 +223,7 @@ def test_preflight_failure_exits_1_without_text_stage(tmp_path):
 
     assert rc == 1
     assert bt.calls == []
-    assert _entry(tmp_path)["status"] == "queued"
+    assert _entry(tmp_path) is None  # no entry for a new brief until preflight succeeds
 
 
 def test_director_usage_exhausted_exits_1_and_keeps_text_done(tmp_path):
@@ -246,6 +246,75 @@ def test_gate_failure_marks_failed_gate(tmp_path):
     entry = _entry(tmp_path)
     assert entry["status"] == "failed_gate"
     assert "banned claim" in entry["last_error"]
+
+
+def test_yes_rerun_clears_stale_run_fields(tmp_path):
+    state = State(tmp_path / "state.json")
+    state.ensure(brief_id(TEXT), "queued")
+    state.entries[brief_id(TEXT)].update(
+        status="awaiting_review", run_dir=str(tmp_path / "old-run"), video_path=str(tmp_path / "old.mp4"),
+        project_dir=str(tmp_path / "old-proj"), director="claude", video_id="OLD", rejects=2)
+    state.save()
+
+    def preflight():
+        raise RuntimeError("no youtube credentials")
+
+    bt = _brief_text(tmp_path / "ws")
+    rc = make_video.main(_argv(tmp_path, "--yes"), _deps(preflight=preflight), type_gate=_gate(), brief_text=bt)
+
+    assert rc == 1
+    entry = _entry(tmp_path)
+    assert entry["status"] == "queued"
+    for field in ("run_dir", "video_path", "project_dir", "director", "video_id"):
+        assert entry.get(field) is None, field
+    assert entry["rejects"] == 0
+    assert bt.calls == []
+
+
+def test_malformed_script_json_marks_failed_and_exits_1(tmp_path):
+    def bt(brief, workspace_root, **kw):
+        run = _make_run(tmp_path / "ws")
+        (run / "script.json").write_text("{not json", encoding="utf-8")
+        return TextResult("ready", run)
+
+    director = _director()
+    rc = make_video.main(_argv(tmp_path), _deps(director=director), type_gate=_gate(), brief_text=bt)
+
+    assert rc == 1
+    assert director.calls == []
+    entry = _entry(tmp_path)
+    assert entry["status"] == "failed"
+    assert entry["last_error"].startswith("unexpected:")
+
+
+def test_director_exception_marks_failed_and_exits_1(tmp_path):
+    def director(run_dir, proj, mode, **kw):
+        raise RuntimeError("director blew up")
+
+    rc = make_video.main(_argv(tmp_path), _deps(director=director), type_gate=_gate(),
+                         brief_text=_brief_text(tmp_path / "ws"))
+
+    assert rc == 1
+    entry = _entry(tmp_path)
+    assert entry["status"] == "failed"
+    assert "director blew up" in entry["last_error"]
+
+
+def test_type_gate_exception_marks_failed_and_exits_1(tmp_path):
+    def gate(brief, recipe, facts, run_dir, project_dir, *, allowed_text):
+        raise RuntimeError("gate blew up")
+
+    rc = make_video.main(_argv(tmp_path), _deps(), type_gate=gate, brief_text=_brief_text(tmp_path / "ws"))
+
+    assert rc == 1
+    entry = _entry(tmp_path)
+    assert entry["status"] == "failed"
+    assert "gate blew up" in entry["last_error"]
+
+
+def test_title_handles_whitespace_only_text():
+    assert make_video._title("   \n  ") == ""
+    assert make_video._title("  First line  \nsecond") == "First line"
 
 
 def test_busy_lock_exits_1(tmp_path):
