@@ -235,6 +235,9 @@ def pick_candidates(urls: list, state: State, args) -> list:
     """Resumable/retryable posts first (oldest first), then brand-new posts oldest first."""
     if args.only_url:
         e = state.get(args.only_url)
+        if e is not None and "type" in e:
+            logger.info("%s is a brief; use python -m scheduler.make_video --yes", args.only_url)
+            return []
         if e and e["status"] in ("published", "held", "failed_gate", "awaiting_review", "rejected") \
                 and args.only_url != args.retry_url:
             hint = ("use `python -m scheduler.review` to approve or reject it" if e["status"] in ("awaiting_review", "rejected")
@@ -243,10 +246,11 @@ def pick_candidates(urls: list, state: State, args) -> list:
             return []
         return [args.only_url]
     cands = []
-    if args.retry_url:
+    retry_entry = state.get(args.retry_url) if args.retry_url else None
+    if args.retry_url and not (retry_entry is not None and "type" in retry_entry):
         cands.append(args.retry_url)
     for url, e in state.entries.items():
-        if url == args.retry_url:
+        if url == args.retry_url or "type" in e:   # brief entries belong to make_video, never the daily run
             continue
         if e["status"] in RESUMABLE or (e["status"] == "failed" and int(e.get("attempts") or 0) < MAX_ATTEMPTS):
             cands.append(url)
@@ -278,6 +282,9 @@ def run(args, deps: Deps) -> int:
         if args.retry_url not in state:
             logger.error("--retry-url %s is unknown to the state file", args.retry_url)
             return 2
+        if "type" in state.get(args.retry_url):
+            logger.error("%s is a brief; use python -m scheduler.make_video --yes", args.retry_url)
+            return 2
         state.update(args.retry_url, status="queued", attempts=0, run_dir=None, last_error=None)
 
     if not args.dry_run and state.count_awaiting_review() >= MAX_AWAITING_REVIEW:
@@ -289,7 +296,7 @@ def run(args, deps: Deps) -> int:
         logger.info("daily upload cap (%d) reached; nothing to do", args.max_uploads_per_day)
         return 0
 
-    urls =[] if args.only_url else deps.discover()
+    urls = [] if args.only_url else deps.discover()
     if not args.only_url and not urls:
         logger.warning("discovery returned no posts (site down?); only resuming known work")
     unseen = [u for u in urls if u not in state]

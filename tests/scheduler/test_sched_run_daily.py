@@ -427,3 +427,42 @@ def test_publish_entry_brief_without_url_passes_none(tmp_path):
     outcome = run_daily.publish_entry(bid, st, env.deps, tmp_path / "video_alerts.log")
     assert outcome == "published"
     assert seen["url"] is None
+
+
+BRIEF_ID = "brief-c1test"
+
+
+def _seed_brief(env, status):
+    st = env.state()
+    st.entries[BRIEF_ID] = {"status": status, "type": "proof", "brief": "Proof text", "url": None,
+                            "run_dir": str(env.tmp / "ws" / BRIEF_ID), "attempts": 0, "last_error": None,
+                            "video_path": None, "rejects": 0}
+    st.save()
+
+
+def test_brief_entry_in_text_done_is_never_picked(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    _seed_brief(env, "text_done")
+    assert env.run() == 0
+    assert env.calls["director"] == 0 and env.calls["gate"] == 0
+    assert env.state().get(BRIEF_ID)["status"] == "text_done"
+
+
+def test_only_url_refuses_brief_entry(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    _seed_brief(env, "text_done")
+    env.run("--only-url", BRIEF_ID)
+    assert env.calls["director"] == 0 and env.calls["gate"] == 0
+    assert env.state().get(BRIEF_ID)["status"] == "text_done"
+
+
+def test_retry_url_refuses_brief_entry(tmp_path):
+    env = Env(tmp_path)
+    seed(env)
+    _seed_brief(env, "failed")
+    env.run("--retry-url", BRIEF_ID)
+    assert env.calls["director"] == 0 and env.calls["gate"] == 0
+    e = env.state().get(BRIEF_ID)
+    assert e["status"] == "failed" and e["attempts"] == 0
