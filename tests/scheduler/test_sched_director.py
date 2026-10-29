@@ -133,3 +133,64 @@ def test_run_cmd_real_timeout_and_log(tmp_path):
 
 def read_ok(proj):
     return json.loads((proj / "DIRECTOR_DONE.json").read_text())["ok"] is True
+
+
+def _run_dir_with_narration(tmp_path, words):
+    run = tmp_path / "r"
+    run.mkdir(parents=True, exist_ok=True)
+    beats = [{"narration": " ".join(["word"] * words)}]
+    (run / "script.json").write_text(json.dumps({"beats": beats}), encoding="utf-8")
+    return run
+
+
+def test_orientation_file_overrides_duration_rule(tmp_path):
+    short = _run_dir_with_narration(tmp_path, 10)          # ~4s narration -> portrait by duration
+    assert director.orientation_for(short) == "portrait"
+    (short / "orientation.txt").write_text("  Landscape \n", encoding="utf-8")
+    assert director.orientation_for(short) == "landscape"
+
+    long_run = _run_dir_with_narration(tmp_path / "long", 400)  # ~160s -> landscape by duration
+    (long_run / "orientation.txt").write_text("portrait", encoding="utf-8")
+    assert director.orientation_for(long_run) == "portrait"
+
+
+def test_orientation_file_garbage_is_ignored(tmp_path):
+    short = _run_dir_with_narration(tmp_path, 10)
+    (short / "orientation.txt").write_text("diagonal", encoding="utf-8")
+    assert director.orientation_for(short) == "portrait"
+
+
+def test_prepare_project_copies_supplied_assets(tmp_path):
+    run, proj = tmp_path / "r", tmp_path / "w" / "proj"
+    (run / "assets" / "photos").mkdir(parents=True)
+    (run / "assets" / "brief.pdf").write_bytes(b"pdf")
+    (run / "assets" / "photos" / "site.jpg").write_bytes(b"jpg")
+
+    def hook(cmd, kw):
+        # Stand-in for `hyperframes init` + hf_prepare_project: creates the project and its voice assets.
+        if "init" in cmd:
+            proj.mkdir(parents=True, exist_ok=True)
+        else:
+            (proj / "assets" / "voice").mkdir(parents=True, exist_ok=True)
+            (proj / "assets" / "voice" / "voiceover.mp3").write_bytes(b"mp3")
+
+    director.prepare_project(run, proj, run=FakeRunner(hook=hook))
+    assert (proj / "assets" / "brief.pdf").read_bytes() == b"pdf"
+    assert (proj / "assets" / "photos" / "site.jpg").read_bytes() == b"jpg"
+    assert (proj / "assets" / "voice" / "voiceover.mp3").exists()
+
+
+def test_prepare_project_without_assets_folder_is_unchanged(tmp_path):
+    run, proj = tmp_path / "r", tmp_path / "w" / "proj"
+    run.mkdir()
+    director.prepare_project(run, proj, run=FakeRunner())
+    assert not (proj / "assets").exists()
+
+
+def test_build_prompt_reflects_orientation_override(tmp_path):
+    run = _run_dir_with_narration(tmp_path, 10)            # short narration would be portrait
+    (run / "orientation.txt").write_text("landscape", encoding="utf-8")
+    template = tmp_path / "t.md"
+    template.write_text("{{ORIENTATION}} {{CANVAS}} {{CONTENT_Y}}", encoding="utf-8")
+    text = director.build_prompt(tmp_path / "p", run, template=template)
+    assert text == "landscape 1920x1080 110-895"

@@ -102,11 +102,20 @@ def narration_seconds(run_dir: Path | str) -> float:
 
 
 def orientation_for(run_dir: Path | str) -> str:
+    """An `orientation.txt` in the run dir ("landscape" or "portrait") wins; otherwise the duration rule."""
+    override = Path(run_dir) / "orientation.txt"
+    try:
+        word = override.read_text(encoding="utf-8").strip().lower()
+    except Exception:
+        word = ""
+    if word in ("landscape", "portrait"):
+        return word
     return "landscape" if narration_seconds(run_dir) >= LANDSCAPE_MIN_SECONDS else "portrait"
 
 
 def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = run_cmd) -> None:
-    """npx hyperframes init + scripts/hf_prepare_project.py. Recreates the project dir from scratch."""
+    """npx hyperframes init + scripts/hf_prepare_project.py, then merges run_dir/assets into project/assets.
+    Recreates the project dir from scratch."""
     run_dir, project_dir = Path(run_dir), Path(project_dir)
     if project_dir.exists():
         shutil.rmtree(project_dir)
@@ -119,6 +128,9 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
             cwd=REPO_ROOT, timeout=1800)
     if r.returncode != 0 or r.timed_out:
         raise RuntimeError(f"hf_prepare_project failed (rc={r.returncode}): {r.output[-300:]}")
+    supplied = run_dir / "assets"
+    if supplied.is_dir():
+        shutil.copytree(supplied, project_dir / "assets", dirs_exist_ok=True)
 
 
 def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH,
