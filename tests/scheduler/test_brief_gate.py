@@ -123,3 +123,24 @@ def test_numbers_in_script_tags_ignored(tmp_path):
     assert numbers_in(text) == set()
     r = _gate(run, proj, "explainer", _facts(), allowed_text="")
     assert r.ok, r.reasons
+
+
+def _narration_script(run, narration: list[str]):
+    beats = [{"beat": f"b{i}", "narration": n, "kind": "fact", "card_text": "", "broll_wish": ""}
+             for i, n in enumerate(narration, 1)]
+    (run / "script.json").write_text(json.dumps({"beats": beats}), encoding="utf-8")
+
+
+def test_proof_narration_number_not_in_documents_fails(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Purity 99.8%</p>")})
+    _narration_script(run, ["The product reaches 99.9% purity."])
+    r = _gate(run, proj, "proof", _facts(), allowed_text="Purity 99.8% per the CoA.")
+    assert not r.ok
+    assert any("99.9" in x and "narration" in x for x in r.reasons)
+
+
+def test_explainer_narration_numbers_still_allowed(tmp_path):
+    run, proj = _make_project(tmp_path, {"01-x.html": _page("<p>Purity 99.9%</p>")})
+    _narration_script(run, ["The product reaches 99.9% purity."])
+    r = _gate(run, proj, "explainer", _facts(), allowed_text="The product reaches 99.9% purity.")
+    assert r.ok, r.reasons

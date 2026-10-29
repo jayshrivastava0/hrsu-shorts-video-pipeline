@@ -348,3 +348,19 @@ def test_busy_lock_exits_1(tmp_path):
 
     assert rc == 1
     assert bt.calls == []
+
+
+def test_proof_allowed_text_excludes_narration(tmp_path):
+    run = _make_run(tmp_path / "ws", narration=("Narration says 77 tonnes.",),
+                    assets_text="CoA: purity 99.8 percent.",
+                    sources=[{"id": "s1", "snippet": "Snippet 12 kg."}])
+    allowed = make_video._allowed_text(run, get_recipe("proof"))
+    assert "Narration says 77 tonnes." not in allowed
+    assert "CoA: purity 99.8 percent." in allowed
+    assert "Snippet 12 kg." in allowed
+
+
+def test_explainer_allowed_text_keeps_narration(tmp_path):
+    run = _make_run(tmp_path / "ws", narration=("Narration says 77 tonnes.",))
+    allowed = make_video._allowed_text(run, get_recipe("explainer"))
+    assert "Narration says 77 tonnes." in allowed

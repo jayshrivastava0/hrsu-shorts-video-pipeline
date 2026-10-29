@@ -81,13 +81,16 @@ def _write_entry(state: State, brief: Brief, existing: Optional[dict], **extra) 
     return state.entries[brief.id]
 
 
-def _allowed_text(run_dir: Path) -> str:
-    """Every string the video may state: narration (not opinion beats), asset text, source snippets."""
+def _allowed_text(run_dir: Path, recipe) -> str:
+    """Every string the video may state. Proof (facts_source "documents") states only supplied documents,
+    so its narration is left out; other types also allow their non-opinion narration. Source snippets
+    and asset text are always included."""
     parts: list[str] = []
-    beats = json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("beats", [])
-    narration = [b.get("narration", "") for b in beats if b.get("kind") != "opinion" and b.get("narration")]
-    if narration:
-        parts.append("\n".join(narration))
+    if recipe.facts_source != "documents":
+        beats = json.loads((run_dir / "script.json").read_text(encoding="utf-8")).get("beats", [])
+        narration = [b.get("narration", "") for b in beats if b.get("kind") != "opinion" and b.get("narration")]
+        if narration:
+            parts.append("\n".join(narration))
     assets_txt = run_dir / "assets_text.txt"
     if assets_txt.exists():
         parts.append(assets_txt.read_text(encoding="utf-8"))
@@ -119,9 +122,8 @@ def _after_text(state: State, brief: Brief, run_dir: Path, deps: Deps, alerts: P
     """Director and gate, once the text stage is ready."""
     if brief.orientation:
         (run_dir / "orientation.txt").write_text(brief.orientation, encoding="utf-8")
-    (run_dir / "allowed_text.txt").write_text(_allowed_text(run_dir), encoding="utf-8")
-
     recipe = get_recipe(brief.type)
+    (run_dir / "allowed_text.txt").write_text(_allowed_text(run_dir, recipe), encoding="utf-8")
     project = run_dir / "videos" / "explainer"
     dres = deps.director(run_dir, project, "claude", prompt_path=recipe.prompt_path)
     if dres.usage_exhausted:

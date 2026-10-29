@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html as html_lib
+import json
 import re
 from pathlib import Path
 
@@ -62,6 +63,15 @@ def numbers_in(text: str) -> set[str]:
     return found
 
 
+def _narration_text(run_dir: Path) -> str:
+    """Narration of every beat in run_dir/script.json; empty when the file is missing."""
+    path = Path(run_dir) / "script.json"
+    if not path.is_file():
+        return ""
+    beats = json.loads(path.read_text(encoding="utf-8")).get("beats", [])
+    return "\n".join(str(b.get("narration") or "") for b in beats if isinstance(b, dict))
+
+
 def run_type_gate(brief: Brief, recipe: Recipe, facts: Facts, run_dir: Path, project_dir: Path, *,
                   allowed_text: str,
                   ffprobe=probe_duration,
@@ -92,6 +102,12 @@ def run_type_gate(brief: Brief, recipe: Recipe, facts: Facts, run_dir: Path, pro
         if offending:
             shown = ", ".join(offending[:_MAX_LISTED_NUMBERS])
             reasons.append(f"numbers on screen not found in source text: {shown}")
+        if recipe.facts_source == "documents":
+            # proof: the narration must not state a number the supplied documents do not contain
+            offending_n = sorted(numbers_in(_narration_text(run_dir)) - allowed)
+            if offending_n:
+                shown = ", ".join(offending_n[:_MAX_LISTED_NUMBERS])
+                reasons.append(f"numbers in narration not found in source text: {shown}")
 
     # (c) in-progress wording must say planned or pending on the same line
     for line in lines:
