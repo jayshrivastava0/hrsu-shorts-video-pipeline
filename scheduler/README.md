@@ -52,11 +52,12 @@ python -m scheduler.make_video --brief "..." [--type auto|explainer|proof|esg|ma
 - `--brief` is required; its first line (up to 80 characters) becomes the title.
 - `--type auto` (default) asks the text model to classify the brief and reports its guess. A low-confidence guess
   stops before any Claude spend (exit 2): rerun with an explicit `--type`.
-- `--url` links the blog post from the YouTube description and uses the blog CTA line.
+- `--url` adds `Full article: <url>` to the YouTube description. Without `--url` the type's CTA line is used instead.
 - `--assets DIR` is a folder of supporting files: PDF, PNG or JPEG only, checked by file signature, not just extension.
   **Proof briefs require `--assets`**; without it the brief is refused (exit 2), because proof videos never use invented imagery.
 - `--orientation` overrides the default: narration of 90 s or more is landscape 1920x1080, otherwise portrait.
-- `--yes` runs a brief whose ID already exists again (otherwise exit 3).
+- `--yes` reruns a brief whose entry is `queued`, `text_done`, `directed`, `failed`, `failed_gate` or `held`. An entry
+  that is `awaiting_review`, `rejected` or `published` is never reset: the command exits 3 and leaves it untouched.
 - A brief run takes the scheduler lock, so it cannot overlap the daily job.
 
 Exit codes:
@@ -65,8 +66,8 @@ Exit codes:
 |---|---|
 | 0 | Video produced and `awaiting_review`. Prints the approve and reject commands. |
 | 1 | Pipeline failure (text stage held or failed, director failed, gate failed, YouTube auth problem, unexpected error), or another run holds the lock. Claude usage exhausted leaves the entry at `text_done`; rerun with `--yes` later. |
-| 2 | Needs `--type` (classifier not confident; nothing spent), or the brief or assets were refused (e.g. proof without assets). |
-| 3 | The brief ID already exists; rerun with `--yes`. |
+| 2 | Needs `--type` (classifier not confident; nothing spent), or the brief or assets were refused (e.g. proof without assets, or an unknown type). |
+| 3 | The brief ID already exists: rerun with `--yes` if it is in a rerunnable status; `awaiting_review`, `rejected` and `published` entries are refused. |
 
 The five types (from `scheduler/briefs/types.py` and the design spec):
 
@@ -111,9 +112,9 @@ each run.
 | Tier | Meaning for a video |
 |---|---|
 | `in_place` | True today. The only tier that may be stated as true. |
-| `in_progress` | Under way; never stated as done. Only as "planned" or "pending approval" on the same line; the gate rejects it otherwise. |
+| `in_progress` | Under way; never stated as done. Only as "planned" or "pending approval" on the same line. The gate rejects in-progress KEYWORDS (e.g. "all boilers") that lack "planned" or "pending" on the same line; it does not check the tier text itself. |
 | `never_claimed` | Must not be presented as true. CSR: no video may present HRSU as having a CSR programme. |
-| `banned_claims` | Phrases that must not appear on screen (e.g. "certified", "ISO 9001", "REACH registered", "FDA approved"). The gate rejects them. |
+| `banned_claims` | Phrases that must not appear on screen or in the script (e.g. "certified", "ISO 9001", "REACH registered", "FDA approved"). The gate rejects them. |
 
 The file also has `cta_lines`. To change a fact, edit its list item in the matching tier and keep the YAML quoting and
 indentation. Move an item between tiers only when the owner says its status changed. After editing, check the file loads:
@@ -159,8 +160,10 @@ ffmpeg, Node/npx (HyperFrames) and faster-whisper available. A missed 11:00 run 
 | Disable | `scheduler/uninstall_task.ps1` (or Disable in Task Scheduler) |
 
 Exit codes for `run_daily`: 0 = ok / nothing to do / held / deferred / awaiting_review / review cap reached,
-1 = a post failed (`failed`, `failed_gate`, auth problem), 2 = refused (no seed).
-Exit codes for `make_video`: see the table above. `review` exits 0 on success and 1 on error.
+1 = a post failed (`failed`, `failed_gate`, auth problem), 2 = refused (no seed; `--retry-url` for an unknown,
+brief, or awaiting-review / rejected entry).
+Exit codes for `make_video`: see the table above.
+Exit codes for `review`: 0 success, 1 failed action, 2 bad arguments.
 
 ## Where things live
 
@@ -189,3 +192,16 @@ Exit codes for `make_video`: see the table above. `review` exits 0 on success an
 - The headless director runs with `--permission-mode acceptEdits` plus an explicit tool allowlist
   (Bash, Edit, Write, Read, Glob, Grep, Skill, Agent, TodoWrite, WebFetch) in the HyperFrames project directory and
   has a hard 90-minute timeout.
+
+## Known gaps
+
+Deliberately deferred by the owner; each one is a limit on what the automatic checks prove:
+
+- **ESG external claims** have no automatic source check. The reviewer at `awaiting_review` is the check.
+- **No LLM "fuzzy pass"** for greenwashing, story claims or marketing claims outside `in_place`. The gate matches
+  keywords and numbers only.
+- **Market source chips are not dated**, and there is no entity-claim manifest for named companies, countries or events.
+- **Mixed-type briefs are not flagged.** A brief that asks for two types is classified as one.
+- **Image-only (scanned) documents are not read.** Numbers shown from them fail the proof number check.
+- **Explainer by brief is stricter than the daily explainer.** A brief explainer goes through the type gate (base gate
+  plus banned-claim, never-claimed, number and in-progress checks). The daily blog explainer uses only the base gate.
