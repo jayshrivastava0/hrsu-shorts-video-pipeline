@@ -82,3 +82,38 @@ def test_opinion_beats_marked_hrsu_view_are_not_verified_or_dropped():
     assert "source_ids" not in opinion
     assert out["beats"][1]["narration"] == "A plant manager told us about it."
     assert len(out["beats"]) == 3
+
+
+def _one_source():
+    return [Source("S1", "T", "https://epa.gov/x", "snip", "epa.gov")]
+
+
+def test_string_false_from_llm_is_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": "false", "source_ids": ["S1"]})[0]
+    assert v.supported is False
+
+
+def test_string_true_from_llm_is_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": "true", "source_ids": ["S1"]})[0]
+    assert v.supported is False
+
+
+def test_fabricated_source_ids_make_claim_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": True, "source_ids": ["S99"]})[0]
+    assert v.supported is False
+    assert v.source_ids == []
+
+
+def test_empty_source_ids_make_claim_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": True, "source_ids": []})[0]
+    assert v.supported is False
+
+
+def test_known_source_ids_kept_and_fabricated_dropped():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": True, "source_ids": ["S1", "S99"]})[0]
+    assert v.supported is True
+    assert v.source_ids == ["S1"]
+
+
+def test_gather_sources_limit_zero_returns_nothing():
+    assert gather_sources("brief", search=lambda q: [_hit("https://a.com/1")], limit=0) == []

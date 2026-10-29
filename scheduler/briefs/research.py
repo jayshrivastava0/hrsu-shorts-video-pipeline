@@ -57,7 +57,7 @@ def gather_sources(
     seen: set[str] = set()
     for hit in raw:
         url = (hit.get("url") or "").strip()
-        if not url or url in seen:
+        if not url or url in seen or len(sources) >= limit:
             continue
         seen.add(url)
         sources.append(Source(
@@ -67,8 +67,6 @@ def gather_sources(
             snippet=str(hit.get("snippet") or ""),
             publisher=publisher_of(url),
         ))
-        if len(sources) >= limit:
-            break
     return sources
 
 
@@ -95,9 +93,12 @@ def verify_claims(
     verdicts: list[ClaimVerdict] = []
     for claim in claims:
         result = llm(_claim_prompt(claim, sources)) or {}
+        known = {s.id for s in sources}
+        ids = [str(i) for i in result.get("source_ids") or [] if str(i) in known]
+        supported = result.get("supported") is True and bool(ids)
         verdicts.append(ClaimVerdict(
             claim=claim,
-            supported=bool(result.get("supported", False)),
-            source_ids=[str(i) for i in result.get("source_ids") or []],
+            supported=supported,
+            source_ids=ids if supported else [],
         ))
     return verdicts
