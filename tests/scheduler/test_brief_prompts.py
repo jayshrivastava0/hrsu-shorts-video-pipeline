@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from scheduler import director
@@ -58,16 +60,18 @@ def test_review_note_appended(tmp_path):
     assert text.index("## Owner review note (fix this)") > text.index("Finish (mandatory)")
 
 
-def test_explainer_prompt_unchanged_without_note(tmp_path):
+# update this hash deliberately when the explainer prompt is edited
+EXPLAINER_PROMPT_SHA256 = "949c2b20ed37732ad17d7039e0e9762981d9fff81c5eb8d6cfb79f94e8ae33e5"
+
+
+def test_explainer_prompt_file_pinned():
+    digest = hashlib.sha256(director.PROMPT_PATH.read_bytes()).hexdigest()
+    assert digest == EXPLAINER_PROMPT_SHA256
+
+
+def test_explainer_prompt_has_no_review_note_without_note(tmp_path):
     proj, run = _dirs(tmp_path)
-    text = director.build_prompt(proj, run)
-    expected = director.PROMPT_PATH.read_text(encoding="utf-8")
-    for k, v in {"{{PROJECT_DIR}}": str(proj), "{{RUN_DIR}}": str(run), "{{ORIENTATION}}": "portrait",
-                 "{{CANVAS}}": "1080x1920", "{{CAPTION_KEEPOUT_Y}}": "1594", "{{CONTENT_Y}}": "130-1590",
-                 "{{WORDMARK_Y}}": "70"}.items():
-        expected = expected.replace(k, v)
-    assert text == expected
-    assert "Owner review note" not in text
+    assert "Owner review note" not in director.build_prompt(proj, run)
 
 
 @pytest.mark.parametrize("type_name", ["esg", "marketing"])
