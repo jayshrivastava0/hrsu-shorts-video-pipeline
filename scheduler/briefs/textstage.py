@@ -108,11 +108,17 @@ def _unique(items: list[str]) -> list[str]:
 
 
 def _rewrite_references(run_dir: Path, recipe: Recipe, sources: list[Source],
-                        verdicts: list[ClaimVerdict]) -> None:
+                        verdicts: list[ClaimVerdict]) -> Optional[str]:
+    """Rewrite references.json with verified claims, sources and chips. Returns an error or None."""
     refs_path = run_dir / "references.json"
-    refs = json.loads(refs_path.read_text(encoding="utf-8"))
-    if verdicts:
-        supported = [v for v in verdicts if v.supported]
+    try:
+        refs = json.loads(refs_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return f"unreadable references.json after write_support_files: {exc}"
+    if not isinstance(refs, dict):
+        return "malformed references.json after write_support_files: not an object"
+    if recipe.name == "market":
+        # Market claims come only from verdicts (empty when there are none); never the writer's.
         refs["claims"] = {
             f"c{i}": {
                 "text": v.claim,
@@ -121,7 +127,7 @@ def _rewrite_references(run_dir: Path, recipe: Recipe, sources: list[Source],
                 "chip": None,
                 "stance": "checkable",
             }
-            for i, v in enumerate(supported, 1)
+            for i, v in enumerate((v for v in verdicts if v.supported), 1)
         }
     refs["sources"] = [
         {"id": s.id, "title": s.title, "publisher": s.publisher, "url": s.url,
@@ -130,6 +136,7 @@ def _rewrite_references(run_dir: Path, recipe: Recipe, sources: list[Source],
     ]
     refs["chips"] = _unique([s.publisher for s in sources]) if recipe.name in ("market", "esg") else []
     refs_path.write_text(json.dumps(refs, indent=2, ensure_ascii=False), encoding="utf-8")
+    return None
 
 
 def _finish(run_dir: Optional[Path], r: CmdResult, timeout: float) -> TextResult:
@@ -201,7 +208,9 @@ def _run_scripted(brief: Brief, recipe: Recipe, root: Path, sources: list[Source
 
     _copy_inputs(run_dir, brief)
     write_support_files(run_dir, brief, script, sources)
-    _rewrite_references(run_dir, recipe, sources, verdicts)
+    err = _rewrite_references(run_dir, recipe, sources, verdicts)
+    if err:
+        return TextResult("failed", run_dir, err)
 
     # The engine's run-stage audio only runs from "shotlisted"; we authored script.json ourselves.
     checkpoint = run(_stage_cli("checkpoint", "--workspace", str(run_dir), "--status", "shotlisted"),

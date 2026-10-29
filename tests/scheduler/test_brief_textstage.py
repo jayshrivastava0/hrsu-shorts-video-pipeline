@@ -202,6 +202,74 @@ def test_market_references_get_deduplicated_chips(tmp_path):
     assert [c["text"] for c in refs["claims"].values()] == [FACT]
 
 
+def test_market_brief_with_no_fact_beats_fails_on_thesis(tmp_path):
+    # No fact beats means thesis is None, so apply_verdicts raises before references are rewritten.
+    brief = _brief("market")
+    beats = [
+        {"beat": "hook", "purpose": "hook", "fact_ids": [], "narration": "Sewers smell.",
+         "card_text": "H2S", "broll_wish": "sewer", "kind": "story"},
+        {"beat": "view", "purpose": "mechanism", "fact_ids": [], "narration": "Dose early.",
+         "card_text": "Early", "broll_wish": "tank", "kind": "opinion"},
+        {"beat": "cta", "purpose": "cta", "fact_ids": [], "narration": "Watch the plant.",
+         "card_text": "Watch", "broll_wish": "plant", "kind": "story"},
+    ]
+    run = FakeRun()
+    res = run_brief_text(
+        brief, tmp_path, run=run, search=_search(),
+        llm=lambda system, user, schema: {"thesis": None, "beats": beats},
+        verifier=lambda prompt: {"supported": True, "source_ids": ["S1"]},
+    )
+    assert res.status == "failed" and "Thesis" in res.error
+    assert run.calls == []
+
+
+def test_market_claims_come_only_from_verdicts(tmp_path):
+    brief = _brief("market")
+    second = "Lime dosing raises pH in clarifiers."
+    beats = [
+        {"beat": "hook", "purpose": "hook", "fact_ids": [], "narration": "Sewers smell.",
+         "card_text": "H2S", "broll_wish": "sewer", "kind": "story"},
+        {"beat": "claim", "purpose": "mechanism", "fact_ids": [], "narration": FACT,
+         "card_text": "Dose", "broll_wish": "plant", "kind": "fact"},
+        {"beat": "claim2", "purpose": "mechanism", "fact_ids": [], "narration": second,
+         "card_text": "pH", "broll_wish": "tank", "kind": "fact"},
+        {"beat": "cta", "purpose": "cta", "fact_ids": [], "narration": "Watch the plant.",
+         "card_text": "Watch", "broll_wish": "plant", "kind": "story"},
+    ]
+
+    def verifier(prompt):
+        if FACT in prompt:
+            return {"supported": True, "source_ids": ["S1"]}
+        return {"supported": False, "source_ids": []}
+
+    res = run_brief_text(
+        brief, tmp_path, run=FakeRun(), search=_search(),
+        llm=lambda system, user, schema: {"thesis": FACT, "beats": beats},
+        verifier=verifier,
+    )
+    assert res.status == "ready"
+    refs = json.loads((tmp_path / RUN_ID / "references.json").read_text(encoding="utf-8"))
+    assert refs["claims"] == {
+        "c1": {"text": FACT, "sources": ["S1"], "tier": "verified", "chip": None, "stance": "checkable"},
+    }
+
+
+def test_malformed_references_json_fails_cleanly(tmp_path, monkeypatch):
+    from scheduler.briefs import textstage
+
+    real_write = textstage.write_support_files
+
+    def corrupt(run_dir, brief, script, sources):
+        real_write(run_dir, brief, script, sources)
+        (run_dir / "references.json").write_text("{not json", encoding="utf-8")
+
+    monkeypatch.setattr(textstage, "write_support_files", corrupt)
+    run = FakeRun()
+    res = run_brief_text(_brief("marketing"), tmp_path, run=run, llm=_script_llm(thesis=None))
+    assert res.status == "failed" and "references.json" in res.error
+    assert not any("run-stage" in c for c in run.calls)
+
+
 def test_esg_brief_gathers_sources_but_does_not_verify_claims(tmp_path):
     brief = _brief("esg")
     searched, verified = [], []
