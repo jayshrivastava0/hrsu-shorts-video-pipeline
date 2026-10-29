@@ -29,7 +29,9 @@ from scheduler.briefs.claims import ThesisUnsourced, apply_verdicts
 from scheduler.briefs.facts import load_facts
 from scheduler.briefs.intake import extract_asset_text
 from scheduler.briefs.model import Brief
-from scheduler.briefs.research import ClaimVerdict, Source, gather_sources, make_queries, verify_claims
+from scheduler.briefs.research import (
+    ClaimVerdict, Source, gather_sources, make_queries, trusted_site_queries, verify_claims,
+)
 from scheduler.briefs.types import Recipe, get_recipe
 from scheduler.briefs.writer import WriterFailed, write_script, write_support_files
 
@@ -239,11 +241,15 @@ def run_brief_text(brief: Brief, workspace_root: Path | None = None, *, run: Run
     sources: list[Source] = []
     if recipe.needs_research:
         queries = make_queries(brief.text, llm or _default_writer_llm)
-        sources = gather_sources(brief.text, search=search, queries=queries)
+        trusted = recipe.facts_source in ("sources", "facts_and_sources")
+        if trusted:
+            queries = queries + trusted_site_queries(queries[0])
+        sources = gather_sources(brief.text, search=search, queries=queries, trusted_only=trusted)
         if recipe.facts_source == "sources" and not sources:
             return TextResult("failed", None,
-                              "no web sources found for this brief (search returned nothing); "
-                              "check the network connection and rerun with --yes")
+                              "no trusted web sources found for this brief (government, standards, HRSU's own "
+                              "site or a recognised market publisher); check the network connection and rerun "
+                              "with --yes, or edit TRUSTED_PUBLISHERS in scheduler/briefs/research.py")
     if brief.type == "explainer":
         return _run_explainer(brief, root, sources, run, timeout, log_path)
     return _run_scripted(brief, recipe, root, sources, run=run, llm=llm or _default_writer_llm,

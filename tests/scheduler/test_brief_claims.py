@@ -154,3 +154,36 @@ def test_gather_sources_merges_queries_and_survives_a_failing_query():
     sources = gather_sources("brief", search=search, queries=["q1", "bad", "q2"])
     assert [s.url for s in sources] == [
         "https://example.org/q1", "https://example.org/shared", "https://example.org/q2"]
+
+
+from scheduler.briefs.research import is_trusted, trusted_site_queries
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.eia.gov/outlooks/steo/", "https://hrsuindore.com/blog/x/", "https://www.reuters.com/markets/x",
+    "https://www.epa.gov/x", "https://news.mit.edu/x", "https://www.iea.org/reports/y"])
+def test_trusted_publishers_and_authoritative_hosts(url):
+    assert is_trusted(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://byjus.com/chemistry/calcium-nitrate/", "https://www.gardeningknowhow.com/x",
+    "https://www.youtube.com/watch?v=1", "https://energy-shock.ru/tpost/1", "https://greenok.lv/en/shop"])
+def test_random_web_pages_are_not_trusted(url):
+    assert not is_trusted(url)
+
+
+def test_gather_sources_trusted_only_filters_and_renumbers():
+    hits = [_hit("https://byjus.com/a"), _hit("https://www.eia.gov/b"), _hit("https://gardeningknowhow.com/c"),
+            _hit("https://hrsuindore.com/d")]
+    sources = gather_sources("brief", search=lambda q: hits, trusted_only=True)
+    assert [(s.id, s.publisher) for s in sources] == [("S1", "eia.gov"), ("S2", "hrsuindore.com")]
+    assert len(gather_sources("brief", search=lambda q: hits)) == 4
+
+
+def test_trusted_site_queries_use_first_words_and_each_trusted_domain():
+    qs = trusted_site_queries("calcium nitrate price 2026 Gulf war energy shock ammonia nitric acid")
+    assert qs == ["calcium nitrate price 2026 Gulf war energy site:eia.gov",
+                  "calcium nitrate price 2026 Gulf war energy site:iea.org",
+                  "calcium nitrate price 2026 Gulf war energy site:hrsuindore.com"]
+    assert trusted_site_queries("") == []

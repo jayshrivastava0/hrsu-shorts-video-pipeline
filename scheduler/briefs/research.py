@@ -46,6 +46,32 @@ def _default_search(query: str, limit: int) -> list[dict]:
     return [{"title": h.title, "url": h.url, "snippet": h.snippet} for h in hits]
 
 
+# Publishers a procurement manager or executive would accept as evidence, beyond .gov/.edu and the standards and
+# paper domains the engine already treats as authoritative. HRSU's own site is included (its Market Pulse index).
+# Edit this list to change which sources market and ESG videos may cite on screen.
+TRUSTED_PUBLISHERS = frozenset({
+    "hrsuindore.com", "iea.org", "eia.gov", "worldbank.org", "oecd.org", "imf.org", "fao.org", "unctad.org",
+    "reuters.com", "ft.com", "bloomberg.com", "wsj.com", "economist.com",
+    "spglobal.com", "icis.com", "argusmedia.com", "imarcgroup.com", "chemanalyst.com", "wto.org",
+})
+TRUSTED_SITE_QUERY_DOMAINS = ("eia.gov", "iea.org", "hrsuindore.com")
+
+
+def is_trusted(url: str) -> bool:
+    """True for a trusted publisher, or any host the engine classifies as authoritative (gov, edu, standards, papers)."""
+    from shorts_engine.retrieval import source_kind
+
+    publisher = publisher_of(url)
+    return publisher in TRUSTED_PUBLISHERS or any(
+        publisher.endswith("." + d) for d in TRUSTED_PUBLISHERS) or source_kind(url) == "authoritative"
+
+
+def trusted_site_queries(base_query: str) -> list[str]:
+    """One site-restricted query per trusted domain, built from the first words of `base_query`."""
+    words = " ".join(base_query.split()[:7])
+    return [f"{words} site:{d}" for d in TRUSTED_SITE_QUERY_DOMAINS] if words else []
+
+
 MAX_QUERIES = 3
 _QUERY_WORDS = 12
 _QUERY_SCHEMA = {
@@ -90,10 +116,12 @@ def gather_sources(
     search: Callable[[str], list[dict]] | None = None,
     limit: int = 12,
     queries: list[str] | None = None,
+    trusted_only: bool = False,
 ) -> list[Source]:
     """Search each query (default: short queries derived from the brief) and return up to `limit` deduplicated sources.
 
-    A query whose search raises is skipped; the others still contribute.
+    A query whose search raises is skipped; the others still contribute. With `trusted_only`, hits from
+    publishers that are not trusted (see `is_trusted`) are dropped before ids are assigned.
     """
     raw: list[dict] = []
     for query in (queries or fallback_queries(brief_text)):
@@ -106,6 +134,8 @@ def gather_sources(
     for hit in raw:
         url = (hit.get("url") or "").strip()
         if not url or url in seen or len(sources) >= limit:
+            continue
+        if trusted_only and not is_trusted(url):
             continue
         seen.add(url)
         sources.append(Source(

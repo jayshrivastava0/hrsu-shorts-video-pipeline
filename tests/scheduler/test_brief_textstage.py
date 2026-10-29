@@ -191,7 +191,8 @@ def test_market_references_get_deduplicated_chips(tmp_path):
     hits = (
         {"title": "A", "url": "https://www.epa.gov/a", "snippet": FACT},
         {"title": "B", "url": "https://epa.gov/b", "snippet": FACT},
-        {"title": "C", "url": "https://www.example.org/c", "snippet": FACT},
+        {"title": "C", "url": "https://www.eia.gov/c", "snippet": FACT},
+        {"title": "D", "url": "https://byjus.com/d", "snippet": FACT},
     )
     res = run_brief_text(
         brief, tmp_path, run=FakeRun(), llm=_script_llm(), search=_search(*hits),
@@ -199,7 +200,7 @@ def test_market_references_get_deduplicated_chips(tmp_path):
     )
     assert res.status == "ready"
     refs = json.loads((tmp_path / RUN_ID / "references.json").read_text(encoding="utf-8"))
-    assert refs["chips"] == ["epa.gov", "example.org"]
+    assert refs["chips"] == ["epa.gov", "eia.gov"]  # byjus.com is not a trusted publisher
     assert [c["text"] for c in refs["claims"].values()] == [FACT]
 
 
@@ -284,7 +285,7 @@ def test_esg_brief_gathers_sources_but_does_not_verify_claims(tmp_path):
         verifier=lambda prompt: verified.append(prompt) or {"supported": False, "source_ids": []},
     )
     assert res.status == "ready"
-    assert searched == [brief.text]
+    assert searched  # queries ran; esg only gathers sources
     assert verified == []
 
 
@@ -297,6 +298,15 @@ def test_market_brief_with_no_sources_fails_before_the_writer(tmp_path):
 
     run = FakeRun()
     res = run_brief_text(_brief("market"), tmp_path, run=run, llm=llm, search=lambda q: [])
-    assert res.status == "failed" and "no web sources" in res.error
+    assert res.status == "failed" and "no trusted web sources" in res.error
     assert not any("beats" in str(c) or "Write 5-8 beats" in str(c) for c in calls)
+    assert not run.calls
+
+
+def test_market_brief_with_only_untrusted_sources_fails_before_the_writer(tmp_path):
+    run = FakeRun()
+    junk = ({"title": "x", "url": "https://byjus.com/x", "snippet": FACT},
+            {"title": "y", "url": "https://gardeningknowhow.com/y", "snippet": FACT})
+    res = run_brief_text(_brief("market"), tmp_path, run=run, llm=_script_llm(), search=_search(*junk))
+    assert res.status == "failed" and "no trusted web sources" in res.error
     assert not run.calls
