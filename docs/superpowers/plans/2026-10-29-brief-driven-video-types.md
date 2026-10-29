@@ -190,7 +190,7 @@ Each prompt file starts from the explainer prompt's recipe (BRIEF.md, frame.md, 
 - Consumes: Tasks 2 to 7; `scheduler.textstage.TextResult`, `run_cmd`.
 - Produces: `run_brief_text(brief: Brief, workspace_root: Path | None = None, *, run: Runner = run_cmd, llm=..., search=...) -> TextResult`.
   - Explainer type: writes a synthetic source page (`<title>`, article body built from the brief plus gathered sources) and calls the engine with `html_override`, so the existing explanation-first stages run unchanged, up to `--until audio`.
-  - Other types: `python -m shorts_engine.stage_cli init brief://<id> --workspace-root ...`, then `write_support_files`, then `run-stage audio`; `market` runs `gather_sources`, `verify_claims`, `apply_verdicts` before audio. Returns `TextResult("failed", ...)` with the reason on `ThesisUnsourced`.
+  - Other types: `python -m shorts_engine.stage_cli init brief://<id> --workspace-root ...`, then `write_support_files`, then `run-stage audio`; `market` runs `gather_sources`, `verify_claims`, `apply_verdicts` before audio. Returns `TextResult("failed", ...)` with the reason on `ThesisUnsourced`. For every type it also copies the repo-root `brand_facts.yaml` to `run_dir / "brand_facts.yaml"` (the director prompts read it as `{{RUN_DIR}}/brand_facts.yaml`); add test `test_brand_facts_copied_into_run_dir`.
 
 - [ ] **Step 1: Write failing tests** using a recording fake `run`: `test_marketing_brief_runs_init_then_audio_only`; `test_market_brief_unsourced_thesis_fails_without_calling_audio`; `test_explainer_brief_passes_html_override`; `test_result_ready_only_when_four_artifacts_exist`.
 - [ ] **Step 2: Run** `pytest tests/scheduler/test_brief_textstage.py -v`. Expected: FAIL.
