@@ -56,6 +56,9 @@ def numbers_in(text: str) -> set[str]:
             token = token[:-1]
         token = token.replace(",", "")
         has_decimal = "." in token
+        if token in ("0", "0.0", "0.00"):
+            # the static HTML of an animated counter reads "0%" until its script runs; a start value, not a claim
+            continue
         if not has_decimal and not is_percent and token.isdigit() and int(token) <= 12:
             # list numbering and small step counts ("step 3") are not claims
             continue

@@ -203,5 +203,8 @@ Deliberately deferred by the owner; each one is a limit on what the automatic ch
 - **Market source chips are not dated**, and there is no entity-claim manifest for named companies, countries or events.
 - **Mixed-type briefs are not flagged.** A brief that asks for two types is classified as one.
 - **Image-only (scanned) documents are not read.** Numbers shown from them fail the proof number check.
+- **The number check reads static HTML.** Animated counters show their start value ("0%") in the HTML and their end
+  value comes from a script the gate does not execute, so a bare zero is ignored and a counter's animated end value is
+  not checked. The reviewer at `awaiting_review` watches the final video.
 - **Explainer by brief is stricter than the daily explainer.** A brief explainer goes through the type gate (base gate
   plus banned-claim, never-claimed, number and in-progress checks). The daily blog explainer uses only the base gate.
