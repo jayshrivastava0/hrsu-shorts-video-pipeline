@@ -279,7 +279,4 @@ def write_support_files(run_dir: Path, brief: Brief, script: dict, sources: list
             "category": brief.type, "citations": [], "images": []}
     (run_dir / "post.json").write_text(json.dumps(post, indent=2), encoding="utf-8")
     (run_dir / "canonical.txt").write_text(
-        "
-
-".join(b.get("narration", "") for b in beats) + "
-", encoding="utf-8")
+        "\n\n".join(b.get("narration", "") for b in beats) + "\n", encoding="utf-8")
