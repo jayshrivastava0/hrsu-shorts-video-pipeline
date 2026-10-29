@@ -38,9 +38,10 @@ def test_chimney_fact_forbids_fully_compliant():
     assert "no more" in chimney[0]
 
 
-def test_delivery_fact_is_door_delivery_without_trade_term_or_customs_claims():
+def test_delivery_fact_says_terms_vary_and_never_promises_door_delivery_as_standard():
     facts = load_facts()
     delivery = next(s for s in facts.in_place if "deliver" in s.lower())
-    assert "buyer's door" in delivery and "buyer pays the transport" in delivery
-    assert "any agreed trade term is acceptable" not in delivery
+    assert "agreed with each buyer" in delivery and "five or six possible terms" in delivery
+    assert "never promise door delivery, or any single term, as the standard" in delivery
     assert "never claim that customs, duties or paperwork are handled" in delivery
+    assert "is a real offer" not in delivery
