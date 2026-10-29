@@ -106,3 +106,77 @@ def test_forced_private_warns_and_is_recorded(run_dir, tmp_path, monkeypatch, ca
 def test_dry_run_needs_no_auth(run_dir, tmp_path):
     out = publish.publish_video(run_dir, tmp_path / "v.mp4", "u", dry_run=True, base=tmp_path / "nothing")
     assert out["video_id"] is None
+
+
+MAIN = "https://hrsuindore.com"
+GENERIC_CTA = "Sourcing calcium nitrate? Visit hrsuindore.com"
+
+
+def _write_refs(run, post_kind):
+    (run / "references.json").write_text(json.dumps({"post_kind": post_kind}))
+
+
+def test_package_without_blog_url_has_no_full_article_line(run_dir):
+    pkg = publish.build_package(run_dir, None, "public", cta_line="Ask us at hrsuindore.com")
+    assert "Full article" not in pkg.description
+    assert pkg.description.endswith(f"\n\nAsk us at hrsuindore.com\nHRSU Indore: {MAIN}/\n")
+
+
+def test_package_with_blog_url_unchanged(run_dir):
+    pkg = publish.build_package(run_dir, "https://hrsuindore.com/blog/x/", "public")
+    assert pkg.description == (
+        "Sources:\n[1] Publisher A"
+        f"\n\nFull article: https://hrsuindore.com/blog/x/\nHRSU Indore: {MAIN}/\n")
+    assert pkg.tags == ["calcium nitrate", "HRSU", "chemical procurement", "explainer",
+                        "water treatment", "eu"]
+
+
+def test_package_uses_cta_line(run_dir):
+    pkg = publish.build_package(run_dir, None, "public", cta_line="CTA X")
+    assert pkg.description.endswith(f"\n\nCTA X\nHRSU Indore: {MAIN}/\n")
+
+
+def test_no_blog_url_defaults_cta_and_tag_from_recipe(run_dir):
+    from scheduler.briefs.types import get_recipe
+    _write_refs(run_dir, "marketing")
+    pkg = publish.build_package(run_dir, None, "public")
+    assert f"\n\n{get_recipe('marketing').cta_line}\nHRSU Indore: {MAIN}/\n" in pkg.description
+    assert "marketing" in pkg.tags
+
+
+def test_unknown_post_kind_falls_back_to_generic_cta(run_dir):
+    _write_refs(run_dir, "not_a_type")
+    pkg = publish.build_package(run_dir, None, "public")
+    assert f"\n\n{GENERIC_CTA}\nHRSU Indore: {MAIN}/\n" in pkg.description
+    assert "not_a_type" not in pkg.tags
+
+
+def test_missing_references_json_falls_back_to_generic_cta(run_dir):
+    assert not (run_dir / "references.json").exists()
+    pkg = publish.build_package(run_dir, None, "public")
+    assert f"\n\n{GENERIC_CTA}\nHRSU Indore: {MAIN}/\n" in pkg.description
+
+
+def test_blog_driven_run_ignores_recipe_lookup(run_dir, monkeypatch):
+    import scheduler.briefs.types as types_mod
+
+    def boom(name):
+        raise AssertionError("recipe lookup must not run for blog-driven runs")
+    monkeypatch.setattr(types_mod, "get_recipe", boom)
+    _write_refs(run_dir, "technical")
+    pkg = publish.build_package(run_dir, "https://hrsuindore.com/blog/x/", "public")
+    assert pkg.description.endswith(
+        f"\n\nFull article: https://hrsuindore.com/blog/x/\nHRSU Indore: {MAIN}/\n")
+    assert pkg.tags == ["calcium nitrate", "HRSU", "chemical procurement", "explainer",
+                        "water treatment", "eu"]
+
+
+def test_publish_video_passes_cta_line_through(run_dir, tmp_path, monkeypatch):
+    import scheduler.thumbnail as thumb_mod
+    monkeypatch.delenv(publish.PRIVACY_ENV, raising=False)
+    monkeypatch.setattr(thumb_mod, "make_thumbnail", lambda video, out: None)
+    cap = {}
+    publish.publish_video(run_dir, tmp_path / "v.mp4", None, cta_line="CTA Y",
+                          base=_auth_dir(tmp_path), publisher=make_publisher(cap),
+                          service_factory=lambda: FakeService("public"))
+    assert cap["package"].description.endswith(f"\n\nCTA Y\nHRSU Indore: {MAIN}/\n")

@@ -16,6 +16,7 @@ PRIVACY_ENV = "HRSU_YOUTUBE_PRIVACY"
 YOUTUBE_DIR_ENV = "HRSU_YOUTUBE_DIR"
 AUTH_HINT = "run `python -m scheduler.youtube_auth` interactively once"
 MAIN_SITE = "https://hrsuindore.com"
+GENERIC_CTA = "Sourcing calcium nitrate? Visit hrsuindore.com"
 
 
 class YouTubeAuthMissing(RuntimeError):
@@ -80,7 +81,25 @@ def _read(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def build_package(run_dir: Path | str, blog_url: str, privacy: str, thumbnail_path: Optional[Path | str] = None):
+def _video_type(run: Path) -> Optional[str]:
+    """Brief-driven video type from references.json post_kind, or None when absent or not a known type."""
+    from scheduler.briefs.types import get_recipe
+
+    try:
+        post_kind = _read(run / "references.json").get("post_kind")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(post_kind, str):
+        return None
+    try:
+        get_recipe(post_kind)
+    except KeyError:
+        return None
+    return post_kind
+
+
+def build_package(run_dir: Path | str, blog_url: Optional[str], privacy: str,
+                  thumbnail_path: Optional[Path | str] = None, cta_line: Optional[str] = None):
     from video_agent.config import YOUTUBE_CATEGORY_ID, YOUTUBE_DESC_MAX, YOUTUBE_TITLE_MAX
     from video_agent.harness.manifest import PublishPackage
 
@@ -92,13 +111,24 @@ def build_package(run_dir: Path | str, blog_url: str, privacy: str, thumbnail_pa
         title = title[: YOUTUBE_TITLE_MAX - 3].rstrip() + "..."
 
     body = (run / "video_description.txt").read_text(encoding="utf-8").strip()
-    footer = f"\n\nFull article: {blog_url}\nHRSU Indore: {MAIN_SITE}/\n"
+    video_type = None
+    if blog_url:
+        footer = f"\n\nFull article: {blog_url}\nHRSU Indore: {MAIN_SITE}/\n"
+    else:
+        from scheduler.briefs.types import get_recipe
+
+        video_type = _video_type(run)
+        if cta_line is None:
+            cta_line = get_recipe(video_type).cta_line if video_type else GENERIC_CTA
+        footer = f"\n\n{cta_line}\nHRSU Indore: {MAIN_SITE}/\n"
     description = body[: YOUTUBE_DESC_MAX - len(footer)] + footer
 
     tags = ["calcium nitrate", "HRSU", "chemical procurement", "explainer"]
     for key in ("category", "subcategory", "region"):
         if post.get(key):
             tags.append(str(post[key]).replace("_", " "))
+    if video_type:
+        tags.append(video_type)
     return PublishPackage(title=title, description=description, tags=tags,
                           category_id=YOUTUBE_CATEGORY_ID, privacy_status=privacy,
                           thumbnail_path=str(thumbnail_path) if thumbnail_path else None)
@@ -110,8 +140,8 @@ def read_privacy(service, video_id: str) -> Optional[str]:
     return items[0]["status"]["privacyStatus"] if items else None
 
 
-def publish_video(run_dir: Path | str, video_path: Path | str, blog_url: str, *,
-                  dry_run: bool = False, base: Optional[Path] = None,
+def publish_video(run_dir: Path | str, video_path: Path | str, blog_url: Optional[str], *,
+                  cta_line: Optional[str] = None, dry_run: bool = False, base: Optional[Path] = None,
                   publisher: Optional[Callable] = None,
                   service_factory: Optional[Callable] = None) -> dict[str, Any]:
     """Upload and verify. Returns {video_id, url, privacy_requested, privacy_actual}."""
@@ -123,7 +153,7 @@ def publish_video(run_dir: Path | str, video_path: Path | str, blog_url: str, *,
         thumb = make_thumbnail(video_path, run / "thumbnail.jpg")
         if thumb is None:
             logger.warning("thumbnail generation failed; uploading with YouTube's auto thumbnail")
-    package = build_package(run_dir, blog_url, privacy, thumb)
+    package = build_package(run_dir, blog_url, privacy, thumb, cta_line=cta_line)
     if dry_run:
         return {"video_id": None, "url": None, "privacy_requested": privacy,
                 "privacy_actual": None, "title": package.title}
