@@ -14,7 +14,7 @@ The verified text-stage run is: `{{RUN_DIR}}`
 - `assets/voice/frame-NN.mp3`: the real voice for each frame. Do not re-record or re-time it.
 - `audio_meta.json`: per-frame duration and REAL word timings (relative to each frame's own audio).
 - `capture/extracted/`: visible text + brand tokens.
-- The owner's fact tiers: `brand_facts.yaml` with the sections `in_place`, `in_progress`, `never_claimed` and
+- The owner's fact tiers: `{{RUN_DIR}}/brand_facts.yaml` with the sections `in_place`, `in_progress`, `never_claimed` and
   `banned_claims`. If a copy is not in the run folder, use only what `user_script.txt` states.
 
 ## Workflow

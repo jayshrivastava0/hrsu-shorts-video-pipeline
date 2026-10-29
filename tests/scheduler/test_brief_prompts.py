@@ -68,3 +68,12 @@ def test_explainer_prompt_unchanged_without_note(tmp_path):
         expected = expected.replace(k, v)
     assert text == expected
     assert "Owner review note" not in text
+
+
+@pytest.mark.parametrize("type_name", ["esg", "marketing"])
+def test_facts_file_path_uses_run_dir(type_name, tmp_path):
+    proj, run = _dirs(tmp_path)
+    text = director.build_prompt(proj, run, template=get_recipe(type_name).prompt_path)
+    assert f"{run}/brand_facts.yaml" in text
+    assert " brand_facts.yaml" not in text
+    assert "`brand_facts.yaml`" not in text

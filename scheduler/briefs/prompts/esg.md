@@ -16,7 +16,7 @@ The verified text-stage run is: `{{RUN_DIR}}`
 - `capture/extracted/`: visible text + brand tokens.
 - `{{RUN_DIR}}/references.json`: the external sources and, when it has a non-empty `"chips"` list, the source
   chips you may show.
-- The owner's fact tiers: `brand_facts.yaml` with the sections `in_place`, `in_progress`, `never_claimed` and
+- The owner's fact tiers: `{{RUN_DIR}}/brand_facts.yaml` with the sections `in_place`, `in_progress`, `never_claimed` and
   `banned_claims`. If a copy is not in the run folder, use only what `user_script.txt` states.
 
 ## Workflow
