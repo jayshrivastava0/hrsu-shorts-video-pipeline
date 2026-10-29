@@ -156,7 +156,8 @@ def test_market_brief_unsourced_thesis_fails_without_calling_audio(tmp_path):
 def test_explainer_brief_passes_html_override(tmp_path):
     brief = _brief("explainer")
     run = FakeRun()
-    res = run_brief_text(brief, tmp_path, run=run, search=_search())
+    res = run_brief_text(brief, tmp_path, run=run, search=_search(),
+                         llm=lambda system, prompt, schema: {"queries": ["dosing study"]})
     assert res.status == "ready"
     assert len(run.calls) == 1
     cmd = run.calls[0]
@@ -285,3 +286,17 @@ def test_esg_brief_gathers_sources_but_does_not_verify_claims(tmp_path):
     assert res.status == "ready"
     assert searched == [brief.text]
     assert verified == []
+
+
+def test_market_brief_with_no_sources_fails_before_the_writer(tmp_path):
+    calls = []
+
+    def llm(system, prompt, schema):
+        calls.append(prompt)
+        return {"queries": ["q"]}
+
+    run = FakeRun()
+    res = run_brief_text(_brief("market"), tmp_path, run=run, llm=llm, search=lambda q: [])
+    assert res.status == "failed" and "no web sources" in res.error
+    assert not any("beats" in str(c) or "Write 5-8 beats" in str(c) for c in calls)
+    assert not run.calls

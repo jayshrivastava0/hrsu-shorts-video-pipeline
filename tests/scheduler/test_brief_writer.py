@@ -264,3 +264,12 @@ def test_description_line_is_per_type(tmp_path, type_name, expected):
         assert expected in desc
         assert "This video presents HRSU's analysis." not in desc
     assert desc.rstrip().endswith(script["beats"][-1]["narration"])
+
+
+def test_market_prompt_keeps_hrsu_facts_out_of_fact_beats_and_thesis():
+    from scheduler.briefs.writer import _user_prompt
+    p = _user_prompt(_brief(), get_recipe("market"), _facts(), _sources(), "")
+    assert "NEVER as a fact beat" in p
+    assert "never a statement about HRSU" in p
+    q = _user_prompt(_brief(), get_recipe("explainer"), _facts(), _sources(), "")
+    assert "Facts you may state:" in q and "never a statement about HRSU" not in q

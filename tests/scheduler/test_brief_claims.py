@@ -117,3 +117,40 @@ def test_known_source_ids_kept_and_fabricated_dropped():
 
 def test_gather_sources_limit_zero_returns_nothing():
     assert gather_sources("brief", search=lambda q: [_hit("https://a.com/1")], limit=0) == []
+
+
+from scheduler.briefs.research import MAX_QUERIES, fallback_queries, make_queries
+
+
+def test_fallback_queries_are_short_and_cover_the_brief_start():
+    brief = " ".join(f"w{i}" for i in range(60))
+    qs = fallback_queries(brief)
+    assert 1 <= len(qs) <= 2
+    assert all(len(q.split()) <= 12 for q in qs)
+    assert qs[0].startswith("w0 w1")
+
+
+def test_make_queries_uses_llm_and_caps_at_max():
+    llm = lambda system, prompt, schema: {"queries": ["a b", "c d", "e f", "g h", "  "]}
+    assert make_queries("some brief", llm) == ["a b", "c d", "e f"][:MAX_QUERIES]
+
+
+def test_make_queries_falls_back_when_llm_raises():
+    def boom(system, prompt, schema):
+        raise RuntimeError("down")
+    assert make_queries("one two three", boom) == fallback_queries("one two three")
+
+
+@pytest.mark.parametrize("reply", [None, {}, {"queries": "not a list"}, {"queries": [1, 2]}, ["x"]])
+def test_make_queries_falls_back_on_malformed_reply(reply):
+    assert make_queries("one two three", lambda s, p, sc: reply) == fallback_queries("one two three")
+
+
+def test_gather_sources_merges_queries_and_survives_a_failing_query():
+    def search(q):
+        if q == "bad":
+            raise RuntimeError("timeout")
+        return [_hit(f"https://example.org/{q}"), _hit("https://example.org/shared")]
+    sources = gather_sources("brief", search=search, queries=["q1", "bad", "q2"])
+    assert [s.url for s in sources] == [
+        "https://example.org/q1", "https://example.org/shared", "https://example.org/q2"]

@@ -29,7 +29,7 @@ from scheduler.briefs.claims import ThesisUnsourced, apply_verdicts
 from scheduler.briefs.facts import load_facts
 from scheduler.briefs.intake import extract_asset_text
 from scheduler.briefs.model import Brief
-from scheduler.briefs.research import ClaimVerdict, Source, gather_sources, verify_claims
+from scheduler.briefs.research import ClaimVerdict, Source, gather_sources, make_queries, verify_claims
 from scheduler.briefs.types import Recipe, get_recipe
 from scheduler.briefs.writer import WriterFailed, write_script, write_support_files
 
@@ -236,7 +236,14 @@ def run_brief_text(brief: Brief, workspace_root: Path | None = None, *, run: Run
     root = Path(workspace_root) if workspace_root else default_workspace_root()
     root.mkdir(parents=True, exist_ok=True)
     recipe = get_recipe(brief.type)
-    sources = gather_sources(brief.text, search=search) if recipe.needs_research else []
+    sources: list[Source] = []
+    if recipe.needs_research:
+        queries = make_queries(brief.text, llm or _default_writer_llm)
+        sources = gather_sources(brief.text, search=search, queries=queries)
+        if recipe.facts_source == "sources" and not sources:
+            return TextResult("failed", None,
+                              "no web sources found for this brief (search returned nothing); "
+                              "check the network connection and rerun with --yes")
     if brief.type == "explainer":
         return _run_explainer(brief, root, sources, run, timeout, log_path)
     return _run_scripted(brief, recipe, root, sources, run=run, llm=llm or _default_writer_llm,

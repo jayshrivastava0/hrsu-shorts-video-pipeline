@@ -106,7 +106,13 @@ def _system_prompt(recipe: Recipe) -> str:
 
 
 def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Source], feedback: str) -> str:
-    lines = [f"Brief: {brief.text}", "", "Facts you may state:"]
+    sources_only = recipe.facts_source == "sources"
+    if sources_only:
+        lines = [f"Brief: {brief.text}", "",
+                 "HRSU facts (use ONLY in opinion beats labelled as HRSU's view, or in the closing call to "
+                 "action; NEVER as a fact beat and NEVER as the thesis):"]
+    else:
+        lines = [f"Brief: {brief.text}", "", "Facts you may state:"]
     lines += [f"- {f}" for f in facts.in_place]
     lines += ["", "Source snippets:"]
     for s in sources:
@@ -118,6 +124,9 @@ def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Sourc
         "Each beat has kind \"fact\", \"opinion\" or \"story\".",
         "thesis is the single core claim, equal to the narration of one fact beat; null for marketing.",
     ]
+    if sources_only:
+        lines.append("The thesis is the central claim of the brief's topic, directly supported by the source "
+                     "snippets above (never a statement about HRSU, its services or its delivery terms).")
     if feedback:
         lines += ["", feedback]
     return "\n".join(lines)

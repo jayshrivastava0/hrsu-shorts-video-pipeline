@@ -46,13 +46,61 @@ def _default_search(query: str, limit: int) -> list[dict]:
     return [{"title": h.title, "url": h.url, "snippet": h.snippet} for h in hits]
 
 
+MAX_QUERIES = 3
+_QUERY_WORDS = 12
+_QUERY_SCHEMA = {
+    "type": "object",
+    "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
+    "required": ["queries"],
+}
+
+
+def fallback_queries(brief_text: str) -> list[str]:
+    """Deterministic short queries: the first and the second `_QUERY_WORDS` words of the brief."""
+    words = brief_text.split()
+    chunks = [words[i:i + _QUERY_WORDS] for i in range(0, min(len(words), 2 * _QUERY_WORDS), _QUERY_WORDS)]
+    return [" ".join(c) for c in chunks if c] or [brief_text.strip()[:100]]
+
+
+def make_queries(brief_text: str, llm: Callable[[str, str, dict], dict] | None = None) -> list[str]:
+    """Up to MAX_QUERIES short web-search queries for the brief; never raises.
+
+    `llm(system, prompt, schema) -> dict` proposes them; any failure or malformed reply falls back to
+    `fallback_queries` (a whole 300-character brief makes a poor, slow search query).
+    """
+    if llm is not None:
+        try:
+            reply = llm(
+                "You write web search queries. Reply with JSON only.",
+                f"Write up to {MAX_QUERIES} short web search queries (at most 10 words each) that would find "
+                f"factual, citable sources for this video brief:\n{brief_text}",
+                _QUERY_SCHEMA,
+            )
+            raw = reply.get("queries") if isinstance(reply, dict) else None
+            queries = [q.strip()[:100] for q in raw if isinstance(q, str) and q.strip()] if isinstance(raw, list) else []
+            if queries:
+                return queries[:MAX_QUERIES]
+        except Exception:
+            pass
+    return fallback_queries(brief_text)
+
+
 def gather_sources(
     brief_text: str,
     search: Callable[[str], list[dict]] | None = None,
     limit: int = 12,
+    queries: list[str] | None = None,
 ) -> list[Source]:
-    """Run one search for the brief and return up to `limit` deduplicated sources."""
-    raw = search(brief_text) if search is not None else _default_search(brief_text, limit)
+    """Search each query (default: short queries derived from the brief) and return up to `limit` deduplicated sources.
+
+    A query whose search raises is skipped; the others still contribute.
+    """
+    raw: list[dict] = []
+    for query in (queries or fallback_queries(brief_text)):
+        try:
+            raw += search(query) if search is not None else _default_search(query, limit)
+        except Exception:
+            continue
     sources: list[Source] = []
     seen: set[str] = set()
     for hit in raw:
