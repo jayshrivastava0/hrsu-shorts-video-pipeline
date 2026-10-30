@@ -213,3 +213,24 @@ Deliberately deferred by the owner; each one is a limit on what the automatic ch
   not checked. The reviewer at `awaiting_review` watches the final video.
 - **Explainer by brief is stricter than the daily explainer.** A brief explainer goes through the type gate (base gate
   plus banned-claim, never-claimed, number and in-progress checks). The daily blog explainer uses only the base gate.
+
+## Choosing the text models
+
+Each text-stage role has a default in `_shorts_engine_impl/shorts_engine/config.py` (`MODEL_ROLES`) and can be
+overridden per run with an environment variable, no code change:
+
+| Role | Does | Default | Override |
+|---|---|---|---|
+| planner | picks the explanation plan | `gemma4:31b-cloud` | `HRSU_MODEL_PLANNER` |
+| writer | writes the script (every video type) | `gemma4:31b-cloud` | `HRSU_MODEL_WRITER` |
+| verifier | checks claims against sources | `qwen3:8b` (local) | `HRSU_MODEL_VERIFIER` |
+| critic | reviews the script | `qwen3:8b` (local) | `HRSU_MODEL_CRITIC` |
+
+Example (PowerShell): `$env:HRSU_MODEL_WRITER = "qwen3:8b"; $env:HRSU_MODEL_VERIFIER = "gemma3:4b"`.
+
+The verifier and critic must be a different model family from the writer and planner (a model must not grade its
+own work), so changing the writer to a Qwen model means also moving the verifier/critic off Qwen. The run stops
+with a clear error if the families match. Models whose name contains `cloud` are called through the Ollama cloud
+SDK and need credits on Ollama after 2026-11-09. Check a new verifier with
+`python scripts/eval_verifier.py <model>` first (false_support_rate must be 0.0).
+The visual director is separate: `HRSU_DIRECTOR_MODEL` / `HRSU_DIRECTOR_EFFORT`.
