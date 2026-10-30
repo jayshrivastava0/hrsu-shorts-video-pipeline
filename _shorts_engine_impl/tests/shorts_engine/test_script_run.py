@@ -20,8 +20,9 @@ FACTSHEET = {"facts": [{"id": "f1", "verbatim_quote": "a 20% calcium carbonate a
                         "citation_marker": None}]}
 
 
-def _claim(cid, text, kind, quote="", verdict="supported"):
-    return {"id": cid, "text": text, "kind": kind, "verdict": verdict, "needs_number": False,
+def _claim(cid, text, kind, quote="", verdict="supported", role="mechanism"):
+    return {"id": cid, "text": text, "kind": kind, "role": role, "verdict": verdict,
+            "needs_number": False,
             "support": {"type": "blog_quote" if kind == "blog_stated" else None,
                         "quote": quote, "url": None}}
 
@@ -68,7 +69,7 @@ def _doc(**over):
 
 
 GOOD_CRITIQUE = {"actionable_score": 8, "coherence_score": 9, "hrsu_reason_score": 8,
-                 "faithfulness_score": 9, "revise_notes": ""}
+                 "faithfulness_score": 9, "flow_score": 8, "revise_notes": ""}
 LOW_CRITIQUE = dict(GOOD_CRITIQUE, coherence_score=3, revise_notes="Step 2 does not follow.")
 
 
@@ -87,6 +88,7 @@ class Router:
     def __init__(self, docs, critiques):
         self.docs, self.critiques = list(docs), list(critiques)
         self.writer_prompts, self.roles, self.local_only = [], [], []
+        self.critic_prompts, self.critic_systems = [], []
 
     def __call__(self, prompt, system, schema, **kw):
         self.roles.append(kw.get("role"))
@@ -95,6 +97,8 @@ class Router:
             self.writer_prompts.append(prompt)
             return self.docs.pop(0) if len(self.docs) > 1 else self.docs[0]
         if schema is script_stage.CRITIQUE_SCHEMA:
+            self.critic_prompts.append(prompt)
+            self.critic_systems.append(system)
             return self.critiques.pop(0) if len(self.critiques) > 1 else self.critiques[0]
         raise AssertionError(schema)
 
@@ -163,6 +167,12 @@ class TestSchemas:
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(bad, script_stage.CRITIQUE_SCHEMA)
 
+    def test_critique_schema_requires_flow_score(self):
+        jsonschema.validate(GOOD_CRITIQUE, script_stage.CRITIQUE_SCHEMA)
+        bad = {k: v for k, v in GOOD_CRITIQUE.items() if k != "flow_score"}
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(bad, script_stage.CRITIQUE_SCHEMA)
+
 
 class TestRunHappyPath:
     def test_writes_script_json_with_final_critique(self, tmp_path, monkeypatch):
@@ -223,6 +233,157 @@ class TestWriterPrompt:
         assert "b_purity" in prompt
         assert "no maximum" in prompt.lower()
 
+    BUILDS_LABEL = "BUILDS ON (earlier verified claims):"
+    TRANS_LABEL = "OPENING TRANSITION (guidance, words only):"
+    MECH_LABEL = ("WHY / HOW (the mechanism - explain THIS claim as cause and effect in plain "
+                  "words; add no causes, steps, conditions or facts that are not listed):")
+    FACT_LABEL = "SUPPORTING FACTS:"
+    S2_TRANSITION = "With the model soil in hand, the next question is how water moves through it."
+
+    @classmethod
+    def _role_plan(cls):
+        plan = _plan()
+        plan["steps"][0]["depends_on"] = []
+        plan["steps"][0]["transition"] = ""
+        plan["steps"][0]["claims"].append(_claim(
+            "f1x", "Desert soil is mostly loose sand.", "external_fact", role="fact"))
+        plan["steps"][1]["depends_on"] = ["c1"]
+        plan["steps"][1]["transition"] = cls.S2_TRANSITION
+        plan["steps"][1]["claims"].append(_claim(
+            "f2x", "Sand grains are large compared with clay particles.", "external_fact",
+            role="fact"))
+        plan["steps"][1]["claims"].append(_claim(
+            "u2", "UNSUPPORTED-MECH-MARKER drains everything.", "external_fact",
+            verdict="unsupported"))
+        plan["steps"][2]["depends_on"] = ["c2"]
+        plan["steps"][2]["transition"] = "Once nutrients drain fast, holding them matters."
+        return plan
+
+    @staticmethod
+    def _step_section(prompt, step_id):
+        body = prompt.split(f"STEP {step_id}\n", 1)[1]
+        for end in ("\nSTEP ", "\nCTA:"):
+            body = body.split(end, 1)[0]
+        return body
+
+    @staticmethod
+    def _group(section, label):
+        labels = ("BUILDS ON", "OPENING TRANSITION", "WHY / HOW", "SUPPORTING FACTS:",
+                  "Terms to define:")
+        body = section.split(label, 1)[1]
+        cut = min((body.find(lb) for lb in labels if lb in body), default=len(body))
+        return body[:cut]
+
+    def test_prompt_shows_builds_on_transition_mechanism_and_facts_in_order(self):
+        plan = self._role_plan()
+        plan["steps"][1]["terms"] = [{"term": "EC", "definition": "conductivity", "unit": ""}]
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        s2 = self._step_section(prompt, "s2")
+        builds = self._group(s2, self.BUILDS_LABEL)
+        trans = self._group(s2, self.TRANS_LABEL)
+        mech = self._group(s2, self.MECH_LABEL)
+        facts = self._group(s2, self.FACT_LABEL)
+        assert "20% calcium carbonate sand mixture" in builds       # c1, from s1
+        assert "Sandy soil" not in builds
+        assert self.S2_TRANSITION in trans
+        assert "Sandy soil drains nutrients quickly." in mech
+        assert "Sand grains are large" in facts and "Sand grains" not in mech
+        assert (s2.index(self.BUILDS_LABEL) < s2.index(self.TRANS_LABEL)
+                < s2.index(self.MECH_LABEL) < s2.index(self.FACT_LABEL))
+        assert "Terms to define:" in s2 and "EC: conductivity" in s2
+        assert "UNSUPPORTED-MECH-MARKER" not in prompt
+        s3 = self._step_section(prompt, "s3")
+        assert "Sandy soil drains nutrients quickly." in self._group(s3, self.BUILDS_LABEL)
+        assert "held in solution" in self._group(s3, self.MECH_LABEL)
+
+    def test_prompt_has_no_link_labels(self):
+        prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
+                                             load_brand_facts())
+        assert "HOW THIS FOLLOWS FROM" not in prompt and "LINK" not in prompt
+        assert not hasattr(script_stage, "_LINK_LABEL")
+
+    def test_builds_on_lists_only_supported_claims_of_earlier_steps(self):
+        plan = self._role_plan()
+        plan["steps"][2]["claims"].append(_claim("u3", "OWN-STEP-MARKER claim.", "external_fact"))
+        plan["steps"][2]["depends_on"] = ["c2", "u2", "u3", "nope"]
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        builds = self._group(self._step_section(prompt, "s3"), self.BUILDS_LABEL)
+        assert "Sandy soil drains nutrients quickly." in builds
+        assert "UNSUPPORTED-MECH-MARKER" not in builds         # unsupported claim
+        assert "OWN-STEP-MARKER" not in builds                 # same step, not earlier
+
+    def test_first_step_builds_on_the_question_and_empty_transition_is_omitted(self):
+        prompt = script_stage._writer_prompt(self._role_plan(), {"title": "T"},
+                                             load_brand_facts())
+        s1 = self._step_section(prompt, "s1")
+        assert "QUESTION" in self._group(s1, self.BUILDS_LABEL)
+        assert self.TRANS_LABEL not in s1
+        assert "20% calcium carbonate" in self._group(s1, self.MECH_LABEL)
+        assert "mostly loose sand" in self._group(s1, self.FACT_LABEL)
+
+    def test_first_step_transition_is_shown_when_given(self):
+        plan = self._role_plan()
+        plan["steps"][0]["transition"] = "To answer that, start with the soil itself."
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        s1 = self._step_section(prompt, "s1")
+        assert "start with the soil itself" in self._group(s1, self.TRANS_LABEL)
+
+    def test_step_without_depends_on_gets_a_placeholder(self):
+        prompt = script_stage._writer_prompt(_plan(), {"title": "T"}, load_brand_facts())
+        builds = self._group(self._step_section(prompt, "s2"), self.BUILDS_LABEL)
+        assert "(connect this step to the previous one using only verified claims)" in builds
+
+    def test_legacy_link_role_claims_are_supporting_facts(self):
+        plan = self._role_plan()
+        plan["steps"][1]["claims"].append(_claim(
+            "l2", "LEGACY-LINK-MARKER because sand, fast.", "reasoning", role="link"))
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        facts = self._group(self._step_section(prompt, "s2"), self.FACT_LABEL)
+        assert "LEGACY-LINK-MARKER" in facts
+
+    def test_mechanism_label_forbids_adding_causes_or_steps(self):
+        assert "explain it fully, step by step" not in script_stage._MECH_LABEL
+        assert "explain THIS claim as cause and effect" in script_stage._MECH_LABEL
+
+    def test_role_prompt_still_omits_goals_and_takeaway(self):
+        plan = self._role_plan()
+        plan["steps"][1]["claim_text"] = "UNIQUE-GOAL-MARKER"
+        plan["payoff"]["takeaway"] = "UNIQUE-TAKEAWAY-MARKER"
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        assert "UNIQUE-GOAL-MARKER" not in prompt and "UNIQUE-TAKEAWAY-MARKER" not in prompt
+
+    def test_transition_appears_only_as_opening_guidance(self):
+        plan = self._role_plan()
+        prompt = script_stage._writer_prompt(plan, {"title": "T"}, load_brand_facts())
+        assert prompt.count(self.S2_TRANSITION) == 1
+        assert self.S2_TRANSITION in self._group(self._step_section(prompt, "s2"),
+                                                 self.TRANS_LABEL)
+
+    def test_writer_system_connects_builds_on_then_mechanism_then_facts(self):
+        system = script_stage._WRITER_SYSTEM.lower()
+        assert system.index("builds on") < system.index("mechanism") < \
+            system.index("supporting facts")
+        assert "may not add any cause, condition, number or fact" in system
+        assert "never skip the why/how" in system
+        assert "cause and effect" in system
+        assert "never assume the viewer already knows" in system
+        assert "answers the question" in system
+        assert "no maximum" in system and "filler" in system
+        assert "link" not in system
+
+    def test_extra_pool_includes_claims_of_every_role_and_builds_on(self):
+        plan = self._role_plan()
+        plan["steps"][1]["claims"].append(_claim(
+            "l2", "LEGACY-LINK-MARKER because sand, fast.", "reasoning", role="link"))
+        pool = script_stage.extra_pool_by_beat(plan)
+        assert "Sandy soil drains nutrients quickly." in pool["step_2"]  # mechanism
+        assert "Sand grains are large" in pool["step_2"]              # fact
+        assert "LEGACY-LINK-MARKER" in pool["step_2"]                 # any stored role
+        assert "20% calcium carbonate sand mixture" in pool["step_2"]  # builds on c1
+        assert "UNSUPPORTED-MECH-MARKER" not in pool["step_2"]
+        assert self.S2_TRANSITION not in pool["step_2"]               # not a claim
+        assert "20% calcium carbonate" not in pool["step_3"]          # s3 builds on c2 only
+
     def test_prompt_echoes_gate_errors_and_revise_notes(self):
         prompt = script_stage._writer_prompt(
             _plan(), {"title": "T"}, load_brand_facts(),
@@ -239,6 +400,15 @@ class TestGateRetryAndHold:
         script_stage.run(ctx)
         assert len(router.writer_prompts) == 2
         assert "'150'" in router.writer_prompts[1] and "'150'" not in router.writer_prompts[0]
+
+    def test_skipped_mechanism_flow_error_is_echoed_into_retry(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        bad["steps"][1]["narration"] = "Water moves on. " + " ".join(["word"] * 12) + "."
+        router = _install(monkeypatch, [bad, _doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert len(router.writer_prompts) == 2
+        assert "flow[step_2]: mechanism not narrated" in router.writer_prompts[1]
 
     def test_exhausted_writer_retries_hold_and_write_nothing(self, tmp_path, monkeypatch):
         ctx = _ctx(tmp_path)
@@ -290,6 +460,19 @@ class TestCriticLoop:
         router = _install(monkeypatch, [_doc()], [unfaithful, GOOD_CRITIQUE])
         script_stage.run(ctx)
         assert "Adds unsupported facts." in router.writer_prompts[1]
+
+    def test_flow_score_alone_below_bar_triggers_rewrite(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        jumpy = dict(GOOD_CRITIQUE, flow_score=4,
+                     revise_notes="Step 2 asserts drainage without explaining why.")
+        router = _install(monkeypatch, [_doc()], [jumpy, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        out = json.loads((ctx.workspace / "script.json").read_text(encoding="utf-8"))
+        assert out["rewrites"] == 1
+        assert "Step 2 asserts drainage without explaining why." in router.writer_prompts[1]
+
+    def test_max_rewrites_is_three(self):
+        assert config.SCRIPT_MAX_REWRITES == 3
 
     def test_still_low_after_max_rewrites_holds(self, tmp_path, monkeypatch):
         ctx = _ctx(tmp_path)
@@ -367,6 +550,8 @@ class TestCritiqueSchemaBounds:
         dict(GOOD_CRITIQUE, coherence_score=11),
         dict(GOOD_CRITIQUE, actionable_score=-1),
         dict(GOOD_CRITIQUE, surprise="x"),
+        dict(GOOD_CRITIQUE, flow_score=11),
+        dict(GOOD_CRITIQUE, flow_score=-1),
     ])
     def test_rejects_out_of_range_and_extra_keys(self, bad):
         with pytest.raises(jsonschema.ValidationError):
@@ -475,3 +660,202 @@ class TestStaleHoldReasons:
         script_stage.run(ctx)
         saved = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
         assert saved["hold_reasons"] == [] and saved["status"] == "verified"
+
+
+class TestCtaBrandStatements:
+    def _critic_prompt_text(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [_doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        return router, router.critic_prompts[0]
+
+    def test_critic_prompt_lists_approved_brand_statements(self, tmp_path, monkeypatch):
+        brand = load_brand_facts()
+        diff = next(d for d in brand.differentiators if d["id"] == "b_purity")
+        _, prompt = self._critic_prompt_text(tmp_path, monkeypatch)
+        assert "APPROVED BRAND STATEMENTS" in prompt
+        section = prompt.split("APPROVED BRAND STATEMENTS", 1)[1]
+        assert diff["text"] in section
+        assert brand.cta_lines[0] in section
+        assert brand.domain in section
+
+    def test_critic_prompt_still_has_verified_claims(self, tmp_path, monkeypatch):
+        _, prompt = self._critic_prompt_text(tmp_path, monkeypatch)
+        for step in _plan()["steps"]:
+            for c in step["claims"]:
+                if c.get("verdict") == "supported":
+                    assert c["text"] in prompt
+
+    def test_critic_prompt_shows_question_and_labelled_chain(self):
+        plan = _plan()
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                c["role"] = "fact"
+        plan["steps"][0]["claims"].append(_claim(
+            "m1", "Carbonate grains hold little water, so the mixture dries fast.",
+            "external_fact", role="mechanism"))
+        plan["steps"][1]["depends_on"] = ["m1"]
+        plan["steps"][1]["transition"] = "TRANSITION-MARKER once it dries, water moves on."
+        beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+        prompt = script_stage._critic_prompt(plan, beats, load_brand_facts())
+        assert plan["question"] in prompt
+        chain = prompt.split("EXPLANATION CHAIN", 1)[1].split("Verified claims", 1)[0]
+        step2 = chain.split("step_2:", 1)[1].split("step_3:", 1)[0]
+        assert "BUILDS ON (earlier verified claim): Carbonate grains hold little water" in step2
+        assert "OPENING TRANSITION (guidance, not a claim): TRANSITION-MARKER" in step2
+        step1 = chain.split("step_1:", 1)[1].split("step_2:", 1)[0]
+        assert "MECHANISM (why/how): Carbonate grains hold little water" in step1
+        assert "LINK" not in prompt
+        verified = prompt.split("Verified claims the script may rely on:", 1)[1] \
+            .split("APPROVED BRAND STATEMENTS", 1)[0]
+        assert "TRANSITION-MARKER" not in verified
+        assert "APPROVED BRAND STATEMENTS" in prompt
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                assert c["text"] in prompt
+
+    def test_critic_system_explains_flow_score(self):
+        system = script_stage._CRITIC_SYSTEM.lower()
+        assert "flow_score" in system
+        assert "defined" in system and "answer the question" in system
+        assert "below 5" in system and "why/how" in system
+        assert "link" not in system
+
+    def test_critic_system_polices_transitions_under_faithfulness(self):
+        system = script_stage._CRITIC_SYSTEM.lower()
+        assert "transition" in system and "builds on" in system
+        assert "faithfulness_score below 5" in system
+
+    def test_critic_system_exempts_approved_brand_statements(self, tmp_path, monkeypatch):
+        router, _ = self._critic_prompt_text(tmp_path, monkeypatch)
+        system = router.critic_systems[0].lower()
+        assert "approved brand statements" in system
+        assert "do not count against faithfulness" in system
+
+    def test_writer_limits_company_claims_to_approved_text(self):
+        prompt = script_stage._writer_prompt(_plan(), {"title": "T"}, load_brand_facts())
+        text = (script_stage._WRITER_SYSTEM + prompt).lower()
+        assert "only the cited differentiator text, the brand cta lines and the domain" in text
+        assert "purity, qc, certifications, delivery or pricing" in text
+        assert "The hook and the CTA must not contain any numbers." in prompt
+
+
+class TestEditInstructionsAndProvenance:
+    BAD = "Sandy soil drains nutrients quickly, thanks to the Zanzibar Protocol."
+
+    def _doc_with(self, s2=None):
+        d = _doc()
+        if s2:
+            d["steps"][1]["narration"] = s2 + " " + " ".join(["word"] * 12) + "."
+        return d
+
+    def test_critic_edit_becomes_explicit_instruction_with_plan_claim_text(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        d = _doc()
+        sent = "Sandy soil drains nutrients quickly."
+        crit = dict(LOW_CRITIQUE, edits=[{"beat": "step_2", "offending_sentence": sent,
+                                          "issue": "not verified", "replacement_claim_id": "c3"}])
+        router = _install(monkeypatch, [d], [crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        p = router.writer_prompts[1]
+        assert "EDIT INSTRUCTIONS" in p and sent in p
+        assert "So nutrients must be held in solution." in p      # the plan's claim text
+        assert "Do NOT re-add" in p
+        assert "EDIT INSTRUCTIONS" not in router.writer_prompts[0]
+
+    def test_phantom_critic_edit_is_not_forwarded(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        crit = dict(LOW_CRITIQUE, edits=[{"beat": "step_2", "offending_sentence": "Never said.",
+                                          "issue": "x", "replacement_claim_id": "c3"}])
+        router = _install(monkeypatch, [_doc()], [crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert "EDIT INSTRUCTIONS" not in router.writer_prompts[1]
+
+    def test_unsupported_sentence_is_sent_back_before_any_critic_call(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [self._doc_with(self.BAD), _doc()], [GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert router.roles[:2] == ["writer", "writer"] and router.roles.count("critic") == 1
+        assert "Zanzibar" in router.writer_prompts[1] and "EDIT INSTRUCTIONS" in router.writer_prompts[1]
+
+    def test_provenance_never_holds_after_its_round_cap(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [self._doc_with(self.BAD)], [GOOD_CRITIQUE])
+        script_stage.run(ctx)                       # writer stubborn: critic still gets the draft
+        assert router.roles.count("writer") == 1 + script_stage.PROVENANCE_MAX_ROUNDS
+        assert router.roles.count("critic") == 1
+
+    def test_rejected_sentence_coming_back_is_caught_without_the_critic(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        sent = "Sandy soil drains nutrients quickly."
+        crit = dict(LOW_CRITIQUE, edits=[{"beat": "step_2", "offending_sentence": sent,
+                                          "issue": "x", "replacement_claim_id": "c3"}])
+        fixed = self._doc_with("So nutrients must be held in solution.")
+        router = _install(monkeypatch, [_doc(), _doc(), fixed], [crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        assert "was already rejected" in router.writer_prompts[2]
+        assert router.roles.count("critic") == 2
+
+
+class TestCtaReasonGate:
+    def test_cta_that_only_cites_the_id_but_never_states_the_reason_fails(self):
+        from shorts_engine.stages.script import gate_cta_reason
+        brand = load_brand_facts()
+        beats = [{"beat": "cta", "purpose": "cta", "fact_ids": ["b_purity"],
+                  "narration": "Sandy soil drains fast. Visit hrsuindore.com."}]
+        assert gate_cta_reason(beats, brand)
+
+    def test_cta_stating_the_reason_passes(self):
+        from shorts_engine.stages.script import gate_cta_reason
+        brand = load_brand_facts()
+        beats = [{"beat": "cta", "purpose": "cta", "fact_ids": ["b_supply"],
+                  "narration": "HRSU offers flexible minimum order quantities for trial orders."}]
+        assert gate_cta_reason(beats, brand) == []
+
+    def test_critic_prompt_labels_claims_with_ids_and_system_forbids_invented_reasons(self):
+        plan = _plan()
+        beats, _ = script_stage.build_beats(_doc(), plan, FACTSHEET, load_brand_facts())
+        prompt = script_stage._critic_prompt(plan, beats, load_brand_facts())
+        assert "- [c2] Sandy soil drains nutrients quickly." in prompt
+        assert "ONLY an approved brand statement" in script_stage._CRITIC_SYSTEM
+
+
+class TestHeldDraft:
+    def test_critic_hold_keeps_the_last_draft_and_critique_for_review(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
+        with pytest.raises(HoldForReview):
+            script_stage.run(ctx)
+        draft = json.loads((ctx.workspace / "script_held_draft.json").read_text(encoding="utf-8"))
+        assert draft["critique"]["coherence_score"] == 3 and draft["beats"][0]["beat"] == "hook"
+        assert not (ctx.workspace / "script.json").exists()
+
+
+def test_diagram_labels_never_carry_digits():
+    assert script_stage._labels(["Node 1", "Main supplier", "Hub 2", "Buyer"]) == ["Main supplier", "Buyer"]
+
+
+class TestSurgeryAfterRewrites:
+    def test_stubborn_quoted_sentence_is_cut_and_rescored(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        bad = _doc()
+        sent = "Sandy soil drains nutrients quickly."
+        bad["steps"][1]["narration"] = f"{sent} Dry sand also loses water fast. {' '.join(['word'] * 20)}."
+        bad["steps"][1]["narration"] = bad["steps"][1]["narration"]
+        crit = dict(LOW_CRITIQUE, faithfulness_score=3,
+                    edits=[{"beat": "step_2", "offending_sentence": "Dry sand also loses water fast.",
+                            "issue": "unsupported", "replacement_claim_id": ""}])
+        router = _install(monkeypatch, [bad], [crit, crit, crit, crit, GOOD_CRITIQUE])
+        script_stage.run(ctx)
+        out = json.loads((ctx.workspace / "script.json").read_text(encoding="utf-8"))
+        step2 = next(b for b in out["beats"] if b["beat"] == "step_2")["narration"]
+        assert "Dry sand" not in step2 and sent in step2
+        assert router.roles.count("critic") == script_stage.config.SCRIPT_MAX_REWRITES + 2
+        assert out["critique"] == GOOD_CRITIQUE
+
+    def test_no_edits_means_no_surgery_and_still_holds(self, tmp_path, monkeypatch):
+        ctx = _ctx(tmp_path)
+        router = _install(monkeypatch, [_doc()], [LOW_CRITIQUE])
+        with pytest.raises(HoldForReview):
+            script_stage.run(ctx)
+        assert router.roles.count("critic") == config.SCRIPT_MAX_REWRITES + 1

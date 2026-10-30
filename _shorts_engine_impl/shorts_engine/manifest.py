@@ -121,6 +121,13 @@ class RunManifest:
     last_ok_status: str = "init"
     """Last status that completed successfully (used for resume logic)."""
 
+    post_kind: str | None = None
+    """"technical" | "strategic" (set by the explain stage; None before it runs)."""
+
+    trust_summary: dict = field(default_factory=dict)
+    """Readiness signal for the scheduler: counts of checkable claims verified / dropped,
+    analysis claims kept (to be attributed), set by the verify_claims stage."""
+
     created_at: str = ""
     """ISO timestamp of run creation."""
 

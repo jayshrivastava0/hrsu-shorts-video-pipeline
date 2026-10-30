@@ -1,6 +1,6 @@
 """Score a candidate verifier model on the claims fixture.
 
-Usage: python scripts/eval_verifier.py <model-name>   (needs the model reachable via Ollama)
+Usage: python scripts/eval_verifier.py <model-name>   (an Ollama model, or claude:<opus|sonnet|haiku>)
 The metric that matters most is false_support_rate: how often the model calls a
 contradicted/unsupported claim "supported" (that is how a wrong fact reaches a video).
 """
@@ -35,7 +35,11 @@ def _ask_factory(model: str):
     from video_agent.ollama_client import OllamaClient
     from shorts_engine.llm import text_llm
     from shorts_engine.stages import verify_claims as vc
-    client = OllamaClient(model=model)
+    if model.startswith("claude:"):          # e.g. claude:opus, claude:sonnet
+        from video_agent.claude_client import ClaudeCliClient
+        client = ClaudeCliClient(model=model.split(":", 1)[1])
+    else:
+        client = OllamaClient(model=model)
     if "cloud" in model:
         client.generate = lambda prompt, system=None, **_k: client._generate_via_sdk(prompt, system)
 

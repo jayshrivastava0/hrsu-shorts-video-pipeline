@@ -40,14 +40,20 @@ def reflow(shots: list[dict], beats_audio: list[dict],
             raise EngineError(f"reflow: no shots for beat '{beat}'")
         planned = sum(s["duration_s"] for s in group) or 1.0
         scale = span / planned
+        # Adaptive floor: the planner estimates speech at WORDS_PER_SECOND
+        # (1.7 w/s) but the TTS can run ~2.6 w/s, so a crowded beat's real span
+        # may be too short for len(group) shots at SHOT_MIN_S. Let such a beat
+        # cut faster (<= 90% of an even split) instead of aborting. Equals
+        # SHOT_MIN_S whenever the beat is not crowded.
+        floor = min(config.SHOT_MIN_S, 0.9 * span / len(group))
         for s in group[:-1]:
-            new = min(max(s["duration_s"] * scale, config.SHOT_MIN_S), _cap(s))
+            new = min(max(s["duration_s"] * scale, floor), _cap(s))
             s["reflow_delta_s"] = round(new - s["duration_s"], 3)
             s["duration_s"] = new
         last = group[-1]
         allotted = sum(s["duration_s"] for s in group[:-1])
         new_last = span - allotted
-        if new_last < config.SHOT_MIN_S / 2:
+        if span <= 0 or new_last < floor / 2:
             raise EngineError(f"reflow: beat '{beat}' leaves last shot "
                               f"{new_last:.2f}s — audio/shot mismatch")
         last["reflow_delta_s"] = round(new_last - last["duration_s"], 3)
@@ -110,7 +116,7 @@ def build_ass(words: list[dict], out_path: Path, margin_v: int = 440) -> Path:
 
 def _ffmpeg(args: list[str], what: str) -> None:
     res = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace")
     if res.returncode != 0:
         raise EngineError(f"ASSEMBLE {what} failed: {res.stderr[:800]}")
 

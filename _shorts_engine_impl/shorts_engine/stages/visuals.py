@@ -105,7 +105,7 @@ def sample_frame(mp4: Path, t: float, out_png: Path) -> Path:
     res = subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{max(t, 0):.3f}",
          "-i", str(mp4), "-frames:v", "1", str(out_png)],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8", errors="replace")
     if res.returncode != 0 or not out_png.exists():
         raise EngineError(f"frame sample failed for {mp4}: {res.stderr}")
     return out_png

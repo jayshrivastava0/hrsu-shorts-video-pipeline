@@ -131,6 +131,46 @@ class TestPackageFromVerifiedPlan:
         assert "sponge" not in cap and "unsupported leap" not in cap
         assert "dosing window" not in cap and "92 percent" not in cap
 
+    def test_key_points_are_mechanism_and_fact_claims_in_chain_order(self, tmp_path):
+        from shorts_engine.stages import package
+        ws = _ws(tmp_path)
+
+        def c(cid, text, role, kind="reasoning"):
+            return dict(_plan_claim(cid, text, kind=kind), role=role)
+
+        steps = [{"step_id": "s1", "depends_on": [], "transition": "",
+                  "claims": [c("m1", "Mechanism one.", "mechanism")]},
+                 {"step_id": "s2", "depends_on": ["m1"],
+                  "transition": "TRANSITION-MARKER words only",
+                  "claims": [c("f2", "Fact two.", "fact"),
+                             c("i2", "Like tea.", "fact", kind="illustrative"),
+                             c("m2", "Mechanism two.", "mechanism")]},
+                 {"step_id": "s3", "depends_on": ["m2"], "transition": "",
+                  "claims": [c("f3", "Fact three.", "fact")]}]
+        plan = {"question": "q", "status": "verified", "steps": steps,
+                "payoff": {"takeaway": "t", "differentiator_id": "b_purity"}}
+        (ws / "explanation_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        points = package._key_points(ws, {})
+        assert points == ["Mechanism one.", "Fact two.", "Mechanism two."]
+        assert not any("TRANSITION-MARKER" in p for p in points)   # narration guidance only
+
+    def test_legacy_link_claims_only_fill_in(self, tmp_path):
+        from shorts_engine.stages import package
+        ws = _ws(tmp_path)
+
+        def c(cid, text, role):
+            return dict(_plan_claim(cid, text, kind="reasoning"), role=role)
+
+        steps = [{"step_id": "s1", "claims": [c("m1", "Mechanism one.", "mechanism")]},
+                 {"step_id": "s2", "claims": [c("l2", "Because one, two.", "link"),
+                                              c("m2", "Mechanism two.", "mechanism")]},
+                 {"step_id": "s3", "claims": [c("l3", "Because two, three.", "link")]}]
+        plan = {"question": "q", "status": "verified", "steps": steps,
+                "payoff": {"takeaway": "t", "differentiator_id": "b_purity"}}
+        (ws / "explanation_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        assert package._key_points(ws, {}) == ["Mechanism one.", "Mechanism two.",
+                                               "Because one, two."]
+
     def test_unverified_plan_never_falls_back_to_factsheet(self, tmp_path, monkeypatch):
         ws = _ws(tmp_path)
         _write_plan(ws, status="held")

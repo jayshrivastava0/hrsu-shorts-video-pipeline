@@ -1,0 +1,136 @@
+{
+  "task": "h2s-sewers",
+  "source": "output/shorts/run-241fb598/explanation_plan.json (verified claims); answers hand-written 2026-10-21",
+  "questions": [
+    {
+      "id": "q1",
+      "beat": "step_1",
+      "q": "In an oxygen-free sewer, which organisms produce hydrogen sulfide gas?",
+      "answer": "Sulfate-reducing bacteria",
+      "distractors": [
+        "Nitrate-reducing bacteria",
+        "Algae growing on the pipe walls",
+        "Fungi that feed on concrete"
+      ]
+    },
+    {
+      "id": "q2",
+      "beat": "step_1",
+      "q": "What do these H2S-producing microbes use to break down organic matter?",
+      "answer": "Sulfate, as their electron acceptor",
+      "distractors": [
+        "Oxygen dissolved in the sewage",
+        "Nitrate added by the operator",
+        "Calcium from the concrete"
+      ]
+    },
+    {
+      "id": "q3",
+      "beat": "step_2",
+      "q": "How does adding calcium nitrate cut H2S production?",
+      "answer": "Nitrate-reducing bacteria outcompete the H2S producers for organic carbon",
+      "distractors": [
+        "The nitrate chemically neutralises H2S gas into water",
+        "Calcium coats the concrete so H2S cannot touch it",
+        "The nitrate kills every bacterium in the sewer"
+      ]
+    },
+    {
+      "id": "q4",
+      "beat": "step_2",
+      "q": "Why do nitrate-reducing bacteria win that competition?",
+      "answer": "They have a higher affinity for nitrate than the H2S producers have for sulfate",
+      "distractors": [
+        "They consume sulfate faster than the H2S producers",
+        "They are the only bacteria that survive without oxygen",
+        "They release an acid that dissolves the H2S producers"
+      ]
+    },
+    {
+      "id": "q5",
+      "beat": "step_3",
+      "q": "How does hydrogen sulfide actually damage concrete pipes?",
+      "answer": "It reacts with moisture to form sulfuric acid, which degrades the concrete",
+      "distractors": [
+        "It freezes inside the pores and cracks the concrete",
+        "It raises the gas pressure until the pipe bursts",
+        "It dissolves the steel reinforcement directly"
+      ]
+    },
+    {
+      "id": "q6",
+      "beat": "step_3",
+      "q": "At what point does calcium nitrate stop the corrosion?",
+      "answer": "At the source: it stops H2S being produced, so no acid forms",
+      "distractors": [
+        "After the damage: it repairs acid-eaten concrete",
+        "In the air: it dilutes the sulfuric acid",
+        "On the surface: it seals the pipe wall"
+      ]
+    },
+    {
+      "id": "q7",
+      "beat": "step_1",
+      "q": "Besides sulfate, what do the H2S-producing bacteria consume?",
+      "answer": "Organic matter in the sewage",
+      "distractors": [
+        "The concrete of the pipe wall",
+        "Dissolved oxygen",
+        "Calcium ions"
+      ]
+    },
+    {
+      "id": "q8",
+      "beat": "step_1",
+      "q": "Under what condition does this H2S production happen?",
+      "answer": "Without free oxygen (anaerobic)",
+      "distractors": [
+        "In strong sunlight",
+        "Only above 60 degrees C",
+        "Only in fast-flowing water"
+      ]
+    },
+    {
+      "id": "q9",
+      "beat": "step_2",
+      "q": "What do the two groups of bacteria compete for?",
+      "answer": "The available organic carbon",
+      "distractors": [
+        "Space on the pipe wall",
+        "Dissolved oxygen",
+        "Calcium from the dosing"
+      ]
+    },
+    {
+      "id": "q10",
+      "beat": "step_3",
+      "q": "What forms when hydrogen sulfide meets moisture on the pipe?",
+      "answer": "Sulfuric acid",
+      "distractors": [
+        "Calcium nitrate",
+        "Methane",
+        "Ammonia"
+      ]
+    }
+  ],
+  "canary": {
+    "id": "canary",
+    "beat": "hook",
+    "q": "Which organisms produce hydrogen sulfide gas in an oxygen-free sewer?",
+    "answer": "Sulfate-reducing bacteria",
+    "planted": "Methane-producing archaea",
+    "distractors": [
+      "Nitrate-reducing bacteria",
+      "Fungi that feed on concrete"
+    ],
+    "planted_label": "H2S PRODUCERS: METHANE-PRODUCING ARCHAEA",
+    "planted_narration": "In an oxygen-free sewer, it is methane-producing archaea, not bacteria, that release hydrogen sulfide gas."
+  },
+  "_canary_doc": "Grounding check (user's idea, 2026-10-21): with no video the viewer must give the real answer; with the planted label drawn on the beat's frames (and planted narration) it must give the planted wrong answer. Passing proves it reads the media instead of answering from prior knowledge.",
+  "control": {
+    "task": "mining-dust",
+    "beat": "hook",
+    "role": "ceiling",
+    "_doc": "Fixed foreign control: the other task's hook frames contain none of these answers, so a grounded viewer must answer E (not shown). Any other answer = prior-knowledge leakage."
+  }
+}

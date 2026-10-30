@@ -138,7 +138,7 @@ export function groupWordsIntoCues(
       buf = []
     }
   }
-  for (const w of words) {
+  for (const w of Array.isArray(words) ? words : []) {
     if (buf.length > 0 && (buf.length >= maxWords || w.end - buf[0].start > maxDurS)) flush()
     buf.push(w)
   }

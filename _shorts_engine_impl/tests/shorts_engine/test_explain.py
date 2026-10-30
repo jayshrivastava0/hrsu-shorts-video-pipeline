@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from shorts_engine import config
+from shorts_engine import explanation as explanation_mod
 from shorts_engine.errors import HoldForReview
 from shorts_engine.manifest import RunManifest
 from shorts_engine.runner import StageContext
@@ -31,19 +32,28 @@ def _ctx(tmp_path: Path) -> StageContext:
 
 
 def _good_plan():
-    def step(sid, claims):
+    def step(sid, claims, depends_on=(), transition=""):
         return {"step_id": sid, "claim_text": f"goal {sid}", "claims": claims, "terms": [],
+                "depends_on": list(depends_on), "transition": transition,
                 "visual_intent": {"entities": ["water"], "relationship": "r", "quantity": "q"}}
     return {
         "question": "Why does calcium nitrate suit foliar sprays?",
         "steps": [
             step("s1", [{"id": "c1", "text": "Calcium nitrate dissolves readily in water.",
-                         "kind": "blog_stated",
+                         "kind": "blog_stated", "role": "mechanism",
                          "quote": "Calcium nitrate dissolves readily in water."}]),
             step("s2", [{"id": "c2", "text": "Dissolved salt passes through spray nozzles.",
-                         "kind": "reasoning", "quote": ""}]),
+                         "kind": "reasoning", "role": "mechanism", "quote": ""},
+                        {"id": "f2", "text": "So nothing solid reaches the nozzle.",
+                         "kind": "reasoning", "role": "fact", "quote": ""}],
+                 depends_on=["c1"],
+                 transition="Once the salt is in solution, follow it to the sprayer."),
             step("s3", [{"id": "c3", "text": "Soluble powder avoids clogged nozzles.",
-                         "kind": "reasoning", "quote": ""}]),
+                         "kind": "reasoning", "role": "mechanism", "quote": ""},
+                        {"id": "f3", "text": "So the nozzle does not clog.",
+                         "kind": "reasoning", "role": "fact", "quote": ""}],
+                 depends_on=["c2", "f2"],
+                 transition="That leaves the question of what reaches the nozzle."),
         ],
         "payoff": {"takeaway": "Choose a consistently soluble powder.",
                    "differentiator_id": "b_purity"},
@@ -65,6 +75,8 @@ def test_writes_plan_document_and_returns_artifact(tmp_path, monkeypatch):
     assert doc["status"] == "planned" and doc["attempts"] == 1
     assert doc["steps"][0]["claims"][0]["support"]["type"] == "blog_quote"
     assert doc["steps"][0]["claims"][0]["verdict"] is None
+    assert doc["steps"][1]["depends_on"] == ["c1"] and doc["steps"][0]["depends_on"] == []
+    assert doc["steps"][1]["transition"].startswith("Once the salt")
 
 
 def test_validation_errors_are_echoed_into_the_retry_prompt(tmp_path, monkeypatch):
@@ -90,6 +102,57 @@ def test_prompt_contains_full_article_and_differentiators(tmp_path):
                                      CANONICAL, {"facts": []}, load_brand_facts())
     assert CANONICAL in prompt
     assert "b_purity" in prompt
+
+
+def test_planner_is_told_to_explain_the_mechanism_and_chain_the_steps():
+    system = explain._PLANNER_SYSTEM.lower()
+    assert "mechanism" in system and "depends_on" in system and "define" in system
+    assert "role" in system and "transition" in system
+    assert "link" not in system
+    # worked examples use a generic illustration, never the blog under test
+    assert "oxide film" in system
+
+
+def test_planner_is_told_depends_on_and_transition_rules():
+    system = explain._PLANNER_SYSTEM
+    assert "ids of claims in EARLIER steps" in system
+    assert "first step" in system and "depends_on: []" in system
+    # a transition is words only: no facts, no numbers, and it is not a claim
+    assert "no facts" in system and "no numbers" in system and "not a claim" in system
+    assert "Good transition" in system and "Bad transition" in system
+    # the article's own mechanism is quoted, otherwise an external_fact
+    assert "blog_stated" in system and "external_fact" in system
+    prompt = explain._planner_prompt({"title": "T"}, CANONICAL, {"facts": []},
+                                     __import__("shorts_engine.brand", fromlist=["x"])
+                                     .load_brand_facts())
+    assert "depends_on" in prompt and "link" not in prompt.split("Remember:", 1)[1]
+
+
+def test_schema_role_enum_has_no_link():
+    from shorts_engine import explanation
+    item = explanation.PLAN_SCHEMA["properties"]["steps"]["items"]
+    assert item["properties"]["claims"]["items"]["properties"]["role"]["enum"] == \
+        ["fact", "mechanism"]
+    assert {"depends_on", "transition"} <= set(item["required"])
+
+
+def test_missing_mechanism_and_depends_on_errors_are_echoed_into_the_retry_prompt(
+        tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    bad = _good_plan()
+    bad["steps"][1]["claims"] = [dict(bad["steps"][1]["claims"][0], role="fact")]
+    bad["steps"][1]["depends_on"] = []
+    prompts = []
+
+    def fake(prompt, system, schema, **kw):
+        prompts.append(prompt)
+        return bad if len(prompts) == 1 else _good_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    assert len(prompts) == 2
+    assert "step[s2]: missing a 'mechanism' claim" in prompts[1]
+    assert "step[s2]: missing depends_on" in prompts[1]
 
 
 def test_exhausted_retries_hold_for_review_and_write_no_plan(tmp_path, monkeypatch):
@@ -137,3 +200,99 @@ def test_thin_plan_holds_instead_of_crashing_on_schema(tmp_path, monkeypatch):
     assert not isinstance(e.value, EngineLLMError)
     assert len(calls) == config.LLM_MAX_RETRIES
     assert any("structure" in r for r in e.value.reasons)
+
+
+STRAT_CANONICAL = ("Trade policy and tariff changes reshape the supply chain. A free trade "
+                   "agreement3 shifts sourcing strategy; resilience and geopolitical risk "
+                   "drive CapEx versus OpEx. Strategic diversification beats single-source "
+                   "exposure. ESG policy and sustainability matter to the board. " * 2)
+QUOTE = "Trade policy and tariff changes reshape the supply chain."
+
+
+def _strategic_plan(quote=QUOTE):
+    def step(sid, claims, depends_on=()):
+        return {"step_id": sid, "claim_text": f"goal {sid}", "claims": claims, "terms": [],
+                "depends_on": list(depends_on), "transition": "",
+                "visual_intent": {"entities": ["trade"], "relationship": "r", "quantity": "q"}}
+
+    def claim(cid, text, kind="blog_stated", role="mechanism", stance="analysis"):
+        return {"id": cid, "text": text, "kind": kind, "role": role, "stance": stance,
+                "quote": quote if kind == "blog_stated" else ""}
+    return {"question": "Should we diversify sourcing?",
+            "steps": [step("s1", [claim("c1", "Tariff changes reshape the supply chain.")]),
+                      step("s2", [claim("c2", "Resilience drives the choice.")], ["c1"]),
+                      step("s3", [claim("c3", "So diversify.", "reasoning")], ["c2"])],
+            "payoff": {"takeaway": "Diversify.", "differentiator_id": "b_supply"}}
+
+
+def test_strategic_post_uses_strategic_planner_schema_and_records_kind(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    (ctx.workspace / "canonical.txt").write_text(STRAT_CANONICAL, encoding="utf-8")
+    (ctx.workspace / "post.json").write_text(json.dumps(
+        {"url": URL, "title": "Trade frameworks and supply chain resilience", "region": "eu",
+         "category": None, "citations": [], "images": []}), encoding="utf-8")
+    seen = {}
+
+    def fake(prompt, system, schema, **kw):
+        seen.update(system=system, schema=schema)
+        return _strategic_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    doc = json.loads((ctx.workspace / "explanation_plan.json").read_text(encoding="utf-8"))
+    assert doc["post_kind"] == "strategic"
+    assert seen["system"] is explain._PLANNER_SYSTEM_STRATEGIC
+    assert seen["schema"] is explanation_mod.STRATEGIC_PLAN_SCHEMA
+    assert doc["steps"][0]["claims"][0]["stance"] == "analysis"
+    assert ctx.manifest.post_kind == "strategic"
+    assert json.loads((ctx.workspace / "run_manifest.json").read_text())["post_kind"] == "strategic"
+
+
+def test_technical_post_keeps_the_original_prompt_and_schema(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    seen = {}
+
+    def fake(prompt, system, schema, **kw):
+        seen.update(system=system, schema=schema)
+        return _good_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    assert seen["system"] is explain._PLANNER_SYSTEM
+    assert seen["schema"] is explanation_mod.PLAN_SCHEMA
+    assert ctx.manifest.post_kind == "technical"
+
+
+def test_strategic_plan_with_bad_stance_is_sent_back(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    (ctx.workspace / "canonical.txt").write_text(STRAT_CANONICAL, encoding="utf-8")
+    ctx.flags["post_kind"] = "strategic"
+    bad = _strategic_plan()
+    bad["steps"][0]["claims"][0]["stance"] = "bogus"
+    prompts = []
+
+    def fake(prompt, system, schema, **kw):
+        prompts.append(prompt)
+        return bad if len(prompts) == 1 else _strategic_plan()
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    explain.run(ctx)
+    assert "unknown stance" in prompts[1]
+
+
+def test_tie_break_uses_planner_role_and_defaults_to_technical_on_failure(monkeypatch):
+    calls = []
+
+    def fake(prompt, system, schema, **kw):
+        calls.append(kw.get("role"))
+        return {"post_kind": "strategic"}
+
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", fake)
+    tie = ("Trade policy tariff supply chain sourcing strategy resilience " * 3
+           + "dosage corrosion wastewater mechanism concentration " * 3)
+    assert explain.detect_post_kind({"title": "x"}, tie) == "strategic" and calls == ["planner"]
+
+    def boom(*a, **k):
+        raise RuntimeError("offline")
+    monkeypatch.setattr(explain.text_llm, "generate_schema_json", boom)
+    assert explain.detect_post_kind({"title": "x"}, tie) == "technical"

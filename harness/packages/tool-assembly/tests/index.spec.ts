@@ -121,4 +121,46 @@ describe('authorAssemblyComposition', () => {
     await authorAssemblyComposition(baseArgs(workspace), deps)
     expect(registeredPath).toBe(outputPath)
   })
+
+  describe('authoritative brief file', () => {
+    const fullBrief = {
+      shots: [{ id: '1', video_path: 'x.mp4', start_s: 0, duration_s: 2, beat: 'hook' }],
+      word_timings: [{ word: 'FileWord', start: 0, end: 0.4 }],
+      audio_path: 'a.mp3', logo_path: 'l.png', voice_total_s: 2, target_duration_s: 3.5,
+    }
+    const failingDeps = (extra: Partial<AuthorAssemblyCompositionDeps>) => makeDeps({
+      subagents: {
+        start: vi.fn(async () => ({
+          result: Promise.resolve({ output: [], stopReason: 'error', diagnostic: 'nope' } as SubagentResult),
+          dispose: vi.fn(async () => {}),
+        })),
+      },
+      ...extra,
+    })
+
+    test('uses the workspace assembly_brief.json over a truncated arg brief (prompt and fallback)', async () => {
+      const workspace = mkdtempSync(join(tmpdir(), 'assemble-ws-'))
+      const readBriefFile = vi.fn((_p: string) => JSON.stringify(fullBrief))
+      const deps = failingDeps({ readBriefFile })
+      const args = baseArgs(workspace)
+      args.assembly_brief = { shots: [] } as never
+      await authorAssemblyComposition(args, deps)
+      expect(readBriefFile).toHaveBeenCalledWith(join(workspace, 'assembly_brief.json'))
+      const promptText = (deps.subagents.start as ReturnType<typeof vi.fn>).mock.calls[0][1].prompt[0].text as string
+      expect(promptText).toContain('FileWord')
+      const fallbackBrief = (deps.renderFallbackComposition as ReturnType<typeof vi.fn>).mock.calls[0][3]
+      expect(fallbackBrief.word_timings).toEqual(fullBrief.word_timings)
+    })
+
+    test('falls back to the arg brief when the reader returns undefined or unparseable/non-object', async () => {
+      for (const reader of [() => undefined, () => 'not json', () => '[1,2]']) {
+        const workspace = mkdtempSync(join(tmpdir(), 'assemble-ws-'))
+        const deps = failingDeps({ readBriefFile: reader })
+        const args = baseArgs(workspace)
+        await authorAssemblyComposition(args, deps)
+        const fallbackBrief = (deps.renderFallbackComposition as ReturnType<typeof vi.fn>).mock.calls[0][3]
+        expect(fallbackBrief).toEqual(args.assembly_brief)
+      }
+    })
+  })
 })

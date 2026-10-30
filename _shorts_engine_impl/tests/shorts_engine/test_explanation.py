@@ -19,12 +19,13 @@ BRAND = BrandFacts(company="HRSU", domain="hrsuindore.com", tagline="t",
                    cta_lines=["Visit hrsuindore.com"], banned_claims=[])
 
 
-def _claim(cid, text, kind="blog_stated", quote=""):
-    return {"id": cid, "text": text, "kind": kind, "quote": quote}
+def _claim(cid, text, kind="blog_stated", quote="", role="mechanism"):
+    return {"id": cid, "text": text, "kind": kind, "role": role, "quote": quote}
 
 
-def _step(sid, claims, entities=("sand",)):
+def _step(sid, claims, entities=("sand",), depends_on=(), transition=""):
     return {"step_id": sid, "claim_text": f"goal {sid}", "claims": claims, "terms": [],
+            "depends_on": list(depends_on), "transition": transition,
             "visual_intent": {"entities": list(entities), "relationship": "r", "quantity": "q"}}
 
 
@@ -35,8 +36,15 @@ def _plan():
             _step("s1", [_claim("c1", "Engineers model desert soil with a sand mixture.",
                                 quote="a 20% calcium carbonate and 80% river sand mixture")]),
             _step("s2", [_claim("c2", "Calcium nitrate dissolves readily in water.",
-                                kind="external_fact")]),
-            _step("s3", [_claim("c3", "So nutrients move with the water.", kind="reasoning")]),
+                                kind="external_fact"),
+                         _claim("f2", "So dissolved salts meet little resistance in sand.",
+                                kind="reasoning", role="fact")],
+                  depends_on=["c1"],
+                  transition="With the model soil described, the next question is what "
+                             "dissolves in it."),
+            _step("s3", [_claim("c3", "So nutrients move with the water.", kind="reasoning")],
+                  depends_on=["c2", "f2"],
+                  transition="Once the salt is dissolved, follow where the water goes."),
         ],
         "payoff": {"takeaway": "Pick a consistent powder.", "differentiator_id": "b_purity"},
     }
@@ -111,6 +119,72 @@ class TestGateClaimNumbers:
         assert ex.gate_claim_numbers("graph 5 widgets", "graph 5 widgets") != []
 
 
+class TestExtendedUnits:
+    def test_length_units_are_known(self):
+        for unit in ("meters", "metres", "km", "kilometers", "miles", "ft", "feet", "nm"):
+            assert ex.gate_claim_numbers(f"within 12 {unit} of the port",
+                                         f"within 12 {unit} of the port") == [], unit
+
+    def test_money_logistics_and_time_units_are_known(self):
+        for unit in ("million", "billion", "bps", "TEU", "containers", "vessels", "MT",
+                     "months", "USD"):
+            assert ex.gate_claim_numbers(f"about 7 {unit}", f"about 7 {unit}") == [], unit
+
+    def test_currency_symbol_counts_as_unit(self):
+        assert ex.gate_claim_numbers("price of $1,600", "price of $1,600") == []
+        assert ex.gate_claim_numbers("price of $1,600", "price of 1,600") != []
+
+    def test_known_unit_still_needs_the_pair(self):
+        assert ex.gate_claim_numbers("12 miles away", "12 meters away") != []
+
+
+class TestSourceStatedUnits:
+    TEXT = "Plants sit 1600 widgets from the coast."
+    QUOTE = "Many plants sit 1,600 Widgets from the coast, the blog says."
+
+    def test_unknown_unit_rejected_by_default(self):
+        assert any("unknown unit" in e for e in
+                   ex.gate_claim_numbers("sites 1600 widgets away", "sites 1600 widgets away"))
+
+    def test_unknown_prose_unit_accepted_when_pair_in_source(self):
+        assert ex.gate_claim_numbers("sites 1600 widgets away", "sites 1,600 widgets away",
+                                     source_units=True) == []
+
+    def test_case_and_whitespace_insensitive(self):
+        assert ex.gate_claim_numbers(self.TEXT, self.QUOTE, source_units=True) == []
+        assert ex.gate_claim_numbers("sites 1600  widgets away", "SITES 1600 \n Widgets away",
+                                     source_units=True) == []
+
+    def test_pair_must_be_in_source_even_for_prose_unit(self):
+        errs = ex.gate_claim_numbers("1600 widgets", "1600 gadgets", source_units=True)
+        assert any("1600" in e for e in errs)
+        assert ex.gate_claim_numbers("1500 widgets", "1600 widgets", source_units=True) != []
+
+    def test_acronym_units_are_never_accepted_on_the_sources_say_so(self):
+        assert ex.gate_claim_numbers("EC peaked at 425 EC", "EC peaking at 425 EC",
+                                     source_units=True) != []
+
+    def test_substring_and_in_word_loopholes_stay_closed(self):
+        assert ex.gate_claim_numbers("5 widget", "5 widgets", source_units=True) != []
+        assert ex.gate_claim_numbers("2 widgets", "H2 widgets", source_units=True) != []
+
+    def test_the_1600_meters_case_from_the_east_asia_post(self):
+        quote = "Ports within 1600 meters of the rail hub cut handling time."
+        text = "Handling time falls for ports within 1600 meters of the rail hub."
+        assert ex.gate_claim_numbers(text, quote) == []          # meters is now known
+        assert ex.gate_claim_numbers(text.replace("meters", "paces"),
+                                     quote.replace("meters", "paces"), source_units=True) == []
+
+    def test_validate_plan_accepts_source_stated_unit(self):
+        plan = _plan()
+        canon = CANONICAL + " Ports sit 1600 paces from the hub."
+        plan["steps"][0]["claims"][0].update(
+            text="Ports sit 1600 paces from the hub.", kind="blog_stated",
+            quote="Ports sit 1600 paces from the hub.")
+        errs = ex.validate_plan(plan, canon, BRAND)
+        assert not any("unknown unit" in e for e in errs), errs
+
+
 class TestValidatePlan:
     def test_valid_plan_has_no_errors(self):
         assert ex.validate_plan(_plan(), CANONICAL, BRAND) == []
@@ -161,12 +235,188 @@ class TestValidatePlan:
         assert any("question" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
 
 
+class TestExplanationRules:
+    """Spec section 12: every step explains its why/how and follows from the previous one."""
+
+    def test_schema_requires_role(self):
+        p = _plan()
+        del p["steps"][0]["claims"][0]["role"]
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(p, ex.PLAN_SCHEMA)
+
+    def test_step_without_mechanism_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["claims"][0]["role"] = "fact"
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "mechanism" in e for e in errs)
+
+    def test_first_step_without_mechanism_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["claims"][0]["role"] = "fact"
+        assert any("s1" in e and "mechanism" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_second_step_without_depends_on_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["depends_on"] = []
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        hits = [e for e in errs if "s2" in e and "depends_on" in e]
+        assert hits and "c1" in hits[0]          # names the earlier claim ids to choose from
+
+    def test_term_used_in_a_claim_before_the_step_that_defines_it_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["claims"][0]["text"] = "Engineers model desert soil infiltration."
+        p["steps"][2]["terms"] = [{"term": "Infiltration", "definition": "water soaking in",
+                                   "unit": ""}]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        hits = [e for e in errs if "'Infiltration'" in e]
+        assert len(hits) == 1
+        assert "s3" in hits[0] and "s1" in hits[0]
+        assert "define" in hits[0] and "reorder" in hits[0]
+
+    def test_term_defined_in_the_step_that_first_uses_it_passes(self):
+        p = _plan()
+        p["steps"][0]["claims"][0]["text"] = "Engineers model desert soil infiltration."
+        p["steps"][0]["terms"] = [{"term": "infiltration", "definition": "water soaking in",
+                                   "unit": ""}]
+        p["steps"][2]["terms"] = [{"term": "infiltration", "definition": "water soaking in",
+                                   "unit": ""}]
+        assert not any("infiltration" in e.lower() for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_term_order_rule_ignores_short_terms_question_terms_and_partial_words(self):
+        p = _plan()
+        p["question"] = "Why does sand drain nutrients through infiltration?"
+        p["steps"][0]["claims"][0]["text"] = ("Engineers model desert soil infiltration with "
+                                              "EC data and saltwater.")
+        p["steps"][2]["terms"] = [{"term": "infiltration", "definition": "d", "unit": ""},
+                                  {"term": "EC", "definition": "d", "unit": "dS/m"},
+                                  {"term": "salt", "definition": "d", "unit": ""}]
+        assert not any("term" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_first_step_needs_no_depends_on_and_may_have_an_empty_transition(self):
+        p = _plan()
+        assert p["steps"][0]["depends_on"] == [] and p["steps"][0]["transition"] == ""
+        assert ex.validate_plan(p, CANONICAL, BRAND) == []
+
+    def test_first_step_with_depends_on_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["depends_on"] = ["c1"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s1" in e and "depends_on" in e for e in errs)
+
+    def test_depends_on_same_step_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["depends_on"] = ["c2"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "'c2'" in e and "same step" in e for e in errs)
+
+    def test_depends_on_later_step_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["depends_on"] = ["c1", "c3"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "'c3'" in e and "later step" in e for e in errs)
+
+    def test_depends_on_unknown_id_is_rejected(self):
+        p = _plan()
+        p["steps"][2]["depends_on"] = ["c2", "nope"]
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s3" in e and "'nope'" in e and "unknown" in e for e in errs)
+
+    def test_missing_or_malformed_depends_on_is_an_error_not_a_crash(self):
+        p = _plan()
+        del p["steps"][1]["depends_on"]
+        p["steps"][2]["depends_on"] = "c2"
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "depends_on" in e for e in errs)
+        assert any("s3" in e and "depends_on" in e for e in errs)
+
+    def test_transition_with_digits_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["transition"] = "With 3 checks done, look at what dissolves."
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "transition" in e and "digit" in e for e in errs)
+
+    def test_transition_too_long_is_rejected(self):
+        from shorts_engine import config
+        p = _plan()
+        p["steps"][1]["transition"] = " ".join(["word"] * (config.TRANSITION_MAX_WORDS + 1))
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("s2" in e and "transition" in e and "words" in e for e in errs)
+        p["steps"][1]["transition"] = " ".join(["word"] * config.TRANSITION_MAX_WORDS)
+        assert ex.validate_plan(p, CANONICAL, BRAND) == []
+
+    def test_transition_max_words_is_twenty_five(self):
+        from shorts_engine import config
+        assert config.TRANSITION_MAX_WORDS == 25
+
+    def test_link_role_is_no_longer_accepted(self):
+        p = _plan()
+        p["steps"][1]["claims"][1]["role"] = "link"
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("f2" in e and "role" in e for e in errs)
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(p, ex.PLAN_SCHEMA)
+
+    def test_claim_roles_are_fact_and_mechanism(self):
+        assert ex.CLAIM_ROLES == ("fact", "mechanism")
+
+    def test_schema_requires_depends_on_and_transition(self):
+        for key in ("depends_on", "transition"):
+            p = _plan()
+            del p["steps"][1][key]
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate(p, ex.PLAN_SCHEMA)
+
+    def test_illustrative_mechanism_is_rejected(self):
+        p = _plan()
+        p["steps"][1]["claims"][0] = _claim("c2", "Like sugar vanishing in tea.",
+                                            kind="illustrative")
+        errs = ex.validate_plan(p, CANONICAL, BRAND)
+        assert any("c2" in e and "mechanism" in e and "illustrative" in e for e in errs)
+
+    def test_illustrative_fact_is_still_allowed(self):
+        p = _plan()
+        p["steps"][1]["claims"].append(_claim("i2", "Like sugar vanishing in tea.",
+                                              kind="illustrative", role="fact"))
+        assert ex.validate_plan(p, CANONICAL, BRAND) == []
+
+    def test_empty_question_is_rejected(self):
+        p = _plan()
+        p["question"] = "   "
+        assert any("question" in e and "empty" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+    def test_unknown_role_is_rejected(self):
+        p = _plan()
+        p["steps"][0]["claims"].append(_claim("cx", "x y z", kind="reasoning", role="vibe"))
+        assert any("cx" in e and "role" in e for e in ex.validate_plan(p, CANONICAL, BRAND))
+
+
 class TestDocumentHelpers:
     def test_finalize_claim_shape(self):
         c = ex.finalize_claim(_claim("c1", "Mix is 20% carbonate", quote="q"))
         assert c == {"id": "c1", "text": "Mix is 20% carbonate", "kind": "blog_stated",
+                     "role": "mechanism",
                      "support": {"type": "blog_quote", "quote": "q", "url": None},
                      "verdict": None, "needs_number": True}
+
+    def test_finalize_claim_defaults_role_to_fact_for_legacy_claims(self):
+        raw = {"id": "c1", "text": "Old claim.", "kind": "external_fact", "quote": ""}
+        assert ex.finalize_claim(raw)["role"] == "fact"
+
+    def test_finalize_claim_maps_legacy_link_role_to_fact(self):
+        raw = {"id": "l2", "text": "Because x, y.", "kind": "reasoning", "role": "link",
+               "quote": ""}
+        assert ex.finalize_claim(raw)["role"] == "fact"
+
+    def test_to_plan_document_keeps_depends_on_and_transition(self):
+        doc = ex.to_plan_document(_plan(), attempts=1)
+        assert doc["steps"][1]["depends_on"] == ["c1"]
+        assert doc["steps"][1]["transition"].startswith("With the model soil")
+
+    def test_depends_on_ids_is_tolerant(self):
+        assert ex.depends_on_ids({}) == []
+        assert ex.depends_on_ids({"depends_on": None}) == []
+        assert ex.depends_on_ids({"depends_on": "c1"}) == []
+        assert ex.depends_on_ids({"depends_on": ["c1", 3, "c2"]}) == ["c1", "c2"]
 
     def test_to_plan_document_finalizes_every_claim_and_does_not_mutate_input(self):
         raw = _plan()
@@ -194,3 +444,87 @@ class TestFormulaLabels:
         assert ex.gate_claim_numbers("Dose is 5 g", "the dose is 5 kg")
         assert any("no unit" in e for e in ex.gate_claim_numbers("425", "EC peaking at 425"))
         assert ex.gate_claim_numbers("2 kg", "2 kg") == []
+
+
+class TestPostKindHeuristic:
+    STRAT = ("Trade policy and tariff changes reshape the supply chain. A free trade agreement "
+             "shifts sourcing strategy; resilience and geopolitical risk drive CapEx versus "
+             "OpEx choices. Strategic diversification beats single-source exposure. ESG policy "
+             "and sustainability matter to the board. " * 3)
+    TECH = ("Dosage of 40 mg/L controls H2S in wastewater. The mechanism: nitrate oxidises "
+            "sulfide; corrosion falls; concentration of 5 ppm; setting time shortens. " * 3)
+
+    def test_strategic_text_is_strategic(self):
+        assert ex.heuristic_post_kind("Trade frameworks and supply chain risk", None,
+                                      self.STRAT) == "strategic"
+
+    def test_technical_text_is_technical(self):
+        assert ex.heuristic_post_kind("H2S dosing", None, self.TECH) == "technical"
+
+    def test_no_strategic_evidence_defaults_to_technical(self):
+        assert ex.heuristic_post_kind("T", "c", "Calcium nitrate dissolves in water.") == "technical"
+
+    def test_mixed_evidence_is_a_tie_for_the_llm(self):
+        assert ex.heuristic_post_kind("x", None, self.STRAT + self.TECH * 2) is None
+
+
+class TestStrategicSchemaAndStances:
+    def test_strategic_schema_requires_stance_technical_does_not(self):
+        assert "stance" in ex.STRATEGIC_CLAIM_ITEM_SCHEMA["required"]
+        assert "stance" not in ex.CLAIM_ITEM_SCHEMA["required"]
+        assert ex.plan_schema("strategic") is ex.STRATEGIC_PLAN_SCHEMA
+        assert ex.plan_schema("technical") is ex.PLAN_SCHEMA and ex.plan_schema(None) is ex.PLAN_SCHEMA
+        assert ex.claim_schema("strategic") is ex.STRATEGIC_CLAIM_ITEM_SCHEMA
+
+    def test_technical_plan_still_validates_against_original_schema(self):
+        jsonschema.validate(_plan(), ex.PLAN_SCHEMA)
+
+    def test_stance_kind_rules(self):
+        ok = lambda **kw: ex.stance_errors({"id": "c", **kw}) == []  # noqa: E731
+        assert ok(stance="checkable", kind="blog_stated")
+        assert ok(stance="checkable", kind="external_fact")
+        assert not ok(stance="checkable", kind="reasoning")
+        assert ok(stance="analysis", kind="blog_stated") and ok(stance="analysis", kind="reasoning")
+        assert not ok(stance="analysis", kind="external_fact")
+        assert not ok(stance="framework", kind="external_fact")
+        assert not ok(stance="opinion", kind="blog_stated")
+        assert not ok(kind="blog_stated")
+        assert ok(stance="analysis", kind="illustrative")
+
+    def test_validate_plan_enforces_stance_only_for_strategic(self):
+        plan = _plan()
+        assert ex.validate_plan(plan, CANONICAL, BRAND) == []
+        errs = ex.validate_plan(plan, CANONICAL, BRAND, post_kind="strategic")
+        assert any("stance" in e for e in errs)
+        for s in plan["steps"]:
+            for c in s["claims"]:
+                c["stance"] = "analysis"
+        assert not any("stance" in e for e in ex.validate_plan(
+            plan, CANONICAL, BRAND, post_kind="strategic"))
+
+    def test_finalize_claim_keeps_stance_only_when_present(self):
+        raw = {"id": "a", "text": "t", "kind": "reasoning", "role": "fact", "quote": ""}
+        assert "stance" not in ex.finalize_claim(raw)
+        assert ex.finalize_claim(dict(raw, stance="analysis"))["stance"] == "analysis"
+        assert ex.to_plan_document(_plan(), 1, "strategic")["post_kind"] == "strategic"
+        assert ex.to_plan_document(_plan(), 1)["post_kind"] == "technical"
+
+
+class TestUnitAliases:
+    def test_spellings_of_one_unit_match_each_other(self):
+        assert ex.gate_claim_numbers("1600 m", "1600 meters") == []
+        assert ex.gate_claim_numbers("1600 meters", "1600 m") == []
+        assert ex.gate_claim_numbers("3 container", "3 containers") == []
+
+    def test_different_units_never_alias(self):
+        assert ex.gate_claim_numbers("5 m", "5 miles") != []
+        assert ex.gate_claim_numbers("5 g", "5 kg") != []
+        assert ex.gate_claim_numbers("5 m", "5 km") != []
+
+
+def test_spoken_units_must_match_the_source_pair():
+    from shorts_engine.explanation import gate_claim_numbers
+    src = "Solubility: 1290 g/L at 20°C"
+    assert gate_claim_numbers("about 1290 grams per litre at 20 degrees Celsius", src) == []
+    assert gate_claim_numbers("about 1290 kilograms per litre at 20 degrees Celsius", src)
+    assert gate_claim_numbers("1290 grams at 20 degrees", src)

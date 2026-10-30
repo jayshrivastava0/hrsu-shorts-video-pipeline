@@ -8,13 +8,15 @@ from urllib.parse import urlparse
 
 from shorts_engine import config
 from shorts_engine.retrieval.fetch import fetch_text
-from shorts_engine.retrieval.passages import best_passages
+from shorts_engine.retrieval.passages import _content_words as _passage_words
+from shorts_engine.retrieval.passages import best_passages, key_terms_query
 from shorts_engine.retrieval.search import SearchHit, web_search
 from shorts_engine.stages.facts import normalize_for_match
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Passage", "Retriever", "SearchHit", "source_kind"]
+__all__ = ["Passage", "Retriever", "SearchHit", "authority_queries", "key_terms_query",
+           "query_variants", "source_kind"]
 
 _AUTHORITATIVE = tuple(config.PAPER_DOMAINS) + tuple(config.STANDARD_DOMAINS)
 _RANK = {"blog_citation": 0, "authoritative": 1, "web": 2}
@@ -70,22 +72,77 @@ def _content_words(text: str) -> set[str]:
             if len(w) > 2 and w not in _STOPWORDS}
 
 
+def query_variants(claim_text: str) -> list[str]:
+    """Search queries tried in order for a claim (spec section 12): the claim itself,
+    its key terms, and its key terms plus "why how" (finds mechanism explanations).
+    Empty queries and duplicates (compared after normalize_for_match, so a query that
+    differs only in case is not searched twice) are skipped."""
+    terms = key_terms_query(claim_text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for q in (claim_text.strip(), terms, f"{terms} why how" if terms else ""):
+        key = normalize_for_match(q)
+        if q and key not in seen:
+            seen.add(key)
+            out.append(q)
+    return out
+
+
+# Host groups for authority-biased searches (small groups keep the queries short).
+AUTHORITY_GROUPS = (
+    ("epa.gov", "osha.gov", "cdc.gov", "usgs.gov", "nist.gov"),
+    ("echa.europa.eu", "eur-lex.europa.eu", "who.int", "oecd.org", "fao.org"),
+    ("pubchem.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "acs.org", "rsc.org"),
+    ("sciencedirect.com", "springer.com", "tandfonline.com", "wiley.com", "iso.org"),
+)
+
+
+AUTHORITY_STOP_COVERAGE = 0.6
+
+
+def authority_queries(claim_text: str) -> list[str]:
+    """Search queries biased toward authorities: the claim's key terms plus a `site:`
+    group each (government/regulators, EU/international, chemistry databases and
+    societies, publishers/standards). Empty when the claim has no key terms."""
+    terms = key_terms_query(claim_text)
+    if not terms:
+        return []
+    return [f"{terms} " + " OR ".join(f"site:{h}" for h in group)
+            for group in AUTHORITY_GROUPS]
+
+
+def _default_search(query: str) -> list[SearchHit]:
+    # raise_on_failure: a failed search must be distinguishable from an empty one
+    return web_search(query, raise_on_failure=True)
+
+
 class Retriever:
     """Finds evidence passages for a claim. Blog citations first, then ranked web hits.
 
-    Never raises: search/fetch failures yield fewer (or zero) passages. Results are
-    cached per normalised claim so repair rounds do not repeat searches, and every URL
-    is fetched at most once per Retriever (empty results cached too). The per-claim
-    fetch budget (config.RETRIEVAL_MAX_FETCHES) is shared: at most half goes to the
-    blog citations that best match the claim, the rest to ranked search hits.
+    Never raises: search/fetch failures yield fewer (or zero) passages. Query variants
+    (`query_variants`) are tried in order until one yields passages; passages of
+    different variants are never merged, and they are always scored against the claim
+    text. Results are cached per normalised claim so repair rounds do not repeat
+    searches -- except an EMPTY result caused by a search failure, which is not cached
+    so a later call retries. (A fetch failure is only detected when an injected
+    `fetch_fn` raises; the default fetch_text never raises and returns "" on failure,
+    so in production only search failures leave a result uncached.)
+    `last_search_failed` says whether the last uncached retrieve() saw a search failure.
+    Every URL is fetched at most once per Retriever (failed/empty pages cached too).
+    The fetch budget
+    (config.RETRIEVAL_MAX_FETCHES, per variant; cached pages cost nothing) is shared:
+    at most half goes to the blog citations that best match the claim, the rest to
+    ranked search hits.
     """
 
     def __init__(self, citation_urls: list[str], *, search_fn=None, fetch_fn=None) -> None:
         self._citations = list(citation_urls)
-        self._search = search_fn or web_search
+        self._search = search_fn or _default_search
         self._fetch = fetch_fn or fetch_text
         self._cache: dict[str, list[Passage]] = {}
         self._pages: dict[str, str] = {}
+        self._failed_urls: set[str] = set()
+        self.last_search_failed = False
 
     def _fetch_once(self, url: str) -> str:
         key = _norm_url(url)
@@ -95,6 +152,7 @@ class Retriever:
             except Exception as exc:
                 logger.warning(f"fetch failed for {url!r}: {exc}")
                 self._pages[key] = ""
+                self._failed_urls.add(key)
         return self._pages[key]
 
     def _pick_citations(self, claim_text: str, limit: int) -> list[str]:
@@ -116,20 +174,34 @@ class Retriever:
 
     def retrieve(self, claim_text: str) -> list[Passage]:
         key = normalize_for_match(claim_text)
-        if key not in self._cache:
-            try:
-                self._cache[key] = self._retrieve(claim_text)
-            except Exception as exc:
-                logger.warning(f"retrieval failed for {claim_text!r}: {exc}")
-                self._cache[key] = []
-        return self._cache[key]
-
-    def _retrieve(self, claim_text: str) -> list[Passage]:
+        if key in self._cache:
+            return self._cache[key]
+        passages: list[Passage] = []
+        search_failed = fetch_failed = False
         try:
-            hits = list(self._search(claim_text))
+            for query in query_variants(claim_text):
+                found, search_ok, fetch_ok = self._retrieve(query, claim_text)
+                search_failed = search_failed or not search_ok
+                fetch_failed = fetch_failed or not fetch_ok
+                if found:
+                    passages = found
+                    break
         except Exception as exc:
-            logger.warning(f"search failed for {claim_text!r}: {exc}")
-            hits = []
+            logger.warning(f"retrieval failed for {claim_text!r}: {exc}")
+            passages, fetch_failed = [], True
+        self.last_search_failed = search_failed
+        if passages or not (search_failed or fetch_failed):
+            self._cache[key] = passages
+        return passages
+
+    def _retrieve(self, query: str, claim_text: str) -> tuple[list[Passage], bool, bool]:
+        """Passages for one query variant -> (passages, search_ok, fetch_ok)."""
+        search_ok = True
+        try:
+            hits = list(self._search(query))
+        except Exception as exc:
+            logger.warning(f"search failed for {query!r}: {exc}")
+            hits, search_ok = [], False
         budget = config.RETRIEVAL_MAX_FETCHES
         ordered_cites = self._pick_citations(claim_text, len(self._citations))
         cite_keys = {_norm_url(u) for u in self._citations}
@@ -151,4 +223,57 @@ class Retriever:
             for p in best_passages(text, claim_text, 2):
                 passages.append(Passage(url, p, kind))
         passages.sort(key=lambda p: _RANK[p.kind])  # stable: keeps page order within a kind
-        return passages[:config.RETRIEVAL_MAX_PASSAGES]
+        fetch_ok = not any(_norm_url(u) in self._failed_urls for u, _k in candidates)
+        return passages[:config.RETRIEVAL_MAX_PASSAGES], search_ok, fetch_ok
+
+    def retrieve_authoritative(self, claim_text: str) -> list[Passage]:
+        """Passages for `claim_text` from AUTHORITATIVE hosts only (source_kind), via the
+        `site:`-biased authority queries tried in order. Passages from all queries tried
+        are pooled and ranked by how much of the claim's vocabulary they cover (best
+        first, at most RETRIEVAL_MAX_PASSAGES + 1); the loop stops early once a passage
+        covers AUTHORITY_STOP_COVERAGE of it. Never raises; cached per claim (a
+        failure-caused empty result is not cached); each URL is fetched at most once and
+        at most config.RETRIEVAL_MAX_FETCHES hits are fetched per query."""
+        key = "auth:" + normalize_for_match(claim_text)
+        if key in self._cache:
+            return self._cache[key]
+        want = _passage_words(claim_text)
+        scored: list[tuple[float, int, Passage]] = []
+        seen_passages: set[tuple[str, str]] = set()
+        failed = False
+        try:
+            for query in authority_queries(claim_text):
+                try:
+                    hits = list(self._search(query))
+                except Exception as exc:
+                    logger.warning(f"authority search failed for {query!r}: {exc}")
+                    failed = True
+                    continue
+                urls, seen = [], set()
+                for h in hits:
+                    nu = _norm_url(h.url)
+                    if source_kind(h.url) == "authoritative" and nu not in seen:
+                        seen.add(nu)
+                        urls.append(h.url)
+                for url in urls[:config.RETRIEVAL_MAX_FETCHES]:
+                    text = self._fetch_once(url)
+                    failed = failed or _norm_url(url) in self._failed_urls
+                    snippet = next((h.snippet for h in hits if h.url == url), "") or ""
+                    # the engine's own excerpt of the page backs up pages we cannot parse
+                    for p in best_passages(text, claim_text, 2) + best_passages(
+                            snippet, claim_text, 1):
+                        if (url, p) in seen_passages:
+                            continue
+                        seen_passages.add((url, p))
+                        cover = len(want & _passage_words(p)) / len(want) if want else 0.0
+                        scored.append((cover, len(scored), Passage(url, p, "authoritative")))
+                if scored and max(c for c, _i, _p in scored) >= AUTHORITY_STOP_COVERAGE:
+                    break
+        except Exception as exc:
+            logger.warning(f"authoritative retrieval failed for {claim_text!r}: {exc}")
+            failed = True
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        passages = [p for _c, _i, p in scored[:config.RETRIEVAL_MAX_PASSAGES + 1]]
+        if passages or not failed:
+            self._cache[key] = passages
+        return passages

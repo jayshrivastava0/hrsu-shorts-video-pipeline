@@ -1,0 +1,189 @@
+import pytest
+
+from scheduler.briefs.claims import ThesisUnsourced, apply_verdicts
+from scheduler.briefs.research import ClaimVerdict, Source, gather_sources, publisher_of, verify_claims
+
+
+def _hit(url, title="T", snippet="S"):
+    return {"url": url, "title": title, "snippet": snippet}
+
+
+def test_gather_sources_dedupes_by_url():
+    hits = [
+        _hit("https://www.epa.gov/a", "A"),
+        _hit("https://www.epa.gov/a", "A again"),
+        _hit("https://example.org/b", "B"),
+    ]
+    sources = gather_sources("brief", search=lambda q: hits, limit=12)
+    assert [s.url for s in sources] == ["https://www.epa.gov/a", "https://example.org/b"]
+    assert sources[0].publisher == "epa.gov"
+    assert sources[1].publisher == "example.org"
+
+
+def test_publisher_is_registrable_domain():
+    assert publisher_of("https://www.gov.uk/x") == "gov.uk"
+    assert publisher_of("https://news.bbc.co.uk/x") == "bbc.co.uk"
+
+
+def test_unsupported_claim_beat_dropped():
+    script = {"beats": [
+        {"kind": "fact", "narration": "Claim one."},
+        {"kind": "fact", "narration": "Claim two."},
+    ]}
+    verdicts = [
+        ClaimVerdict("Claim one.", True, ["S1"]),
+        ClaimVerdict("Claim two.", False, []),
+    ]
+    out = apply_verdicts(script, verdicts, thesis_claim="Claim one.")
+    assert [b["narration"] for b in out["beats"]] == ["Claim one."]
+
+
+def test_supported_claims_keep_source_ids():
+    script = {"beats": [{"kind": "fact", "narration": "Claim one."}]}
+    verdicts = [ClaimVerdict("Claim one.", True, ["S1", "S3"])]
+    out = apply_verdicts(script, verdicts, thesis_claim="Claim one.")
+    beat = out["beats"][0]
+    assert beat["narration"] == "Claim one."
+    assert beat["source_ids"] == ["S1", "S3"]
+
+
+def test_unsupported_thesis_raises_before_any_director_call():
+    script = {"beats": [{"kind": "fact", "narration": "Thesis."}]}
+    verdicts = [ClaimVerdict("Thesis.", False, [])]
+    with pytest.raises(ThesisUnsourced) as exc:
+        apply_verdicts(script, verdicts, thesis_claim="Thesis.")
+    assert "Thesis." in str(exc.value)
+
+
+def test_verify_claims_calls_llm_once_per_claim_and_maps_verdicts():
+    sources = [Source("S1", "T", "https://epa.gov/x", "snip", "epa.gov")]
+    calls = []
+
+    def fake_llm(prompt):
+        calls.append(prompt)
+        return {"supported": "rain" in prompt, "source_ids": ["S1"] if "rain" in prompt else []}
+
+    verdicts = verify_claims(["rain falls", "pigs fly"], sources, fake_llm)
+    assert len(calls) == 2
+    assert verdicts[0] == ClaimVerdict("rain falls", True, ["S1"])
+    assert verdicts[1] == ClaimVerdict("pigs fly", False, [])
+
+
+def test_opinion_beats_marked_hrsu_view_are_not_verified_or_dropped():
+    script = {"beats": [
+        {"kind": "opinion", "narration": "We think this is the best option."},
+        {"kind": "story", "narration": "A plant manager told us about it."},
+        {"kind": "fact", "narration": "Claim one."},
+    ]}
+    verdicts = [ClaimVerdict("Claim one.", True, ["S1"])]
+    out = apply_verdicts(script, verdicts, thesis_claim="Claim one.")
+    opinion = out["beats"][0]
+    assert opinion["narration"] == "We think this is the best option."
+    assert "source_ids" not in opinion
+    assert out["beats"][1]["narration"] == "A plant manager told us about it."
+    assert len(out["beats"]) == 3
+
+
+def _one_source():
+    return [Source("S1", "T", "https://epa.gov/x", "snip", "epa.gov")]
+
+
+def test_string_false_from_llm_is_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": "false", "source_ids": ["S1"]})[0]
+    assert v.supported is False
+
+
+def test_string_true_from_llm_is_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": "true", "source_ids": ["S1"]})[0]
+    assert v.supported is False
+
+
+def test_fabricated_source_ids_make_claim_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": True, "source_ids": ["S99"]})[0]
+    assert v.supported is False
+    assert v.source_ids == []
+
+
+def test_empty_source_ids_make_claim_unsupported():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": True, "source_ids": []})[0]
+    assert v.supported is False
+
+
+def test_known_source_ids_kept_and_fabricated_dropped():
+    v = verify_claims(["c"], _one_source(), lambda p: {"supported": True, "source_ids": ["S1", "S99"]})[0]
+    assert v.supported is True
+    assert v.source_ids == ["S1"]
+
+
+def test_gather_sources_limit_zero_returns_nothing():
+    assert gather_sources("brief", search=lambda q: [_hit("https://a.com/1")], limit=0) == []
+
+
+from scheduler.briefs.research import MAX_QUERIES, fallback_queries, make_queries
+
+
+def test_fallback_queries_are_short_and_cover_the_brief_start():
+    brief = " ".join(f"w{i}" for i in range(60))
+    qs = fallback_queries(brief)
+    assert 1 <= len(qs) <= 2
+    assert all(len(q.split()) <= 12 for q in qs)
+    assert qs[0].startswith("w0 w1")
+
+
+def test_make_queries_uses_llm_and_caps_at_max():
+    llm = lambda system, prompt, schema: {"queries": ["a b", "c d", "e f", "g h", "  "]}
+    assert make_queries("some brief", llm) == ["a b", "c d", "e f"][:MAX_QUERIES]
+
+
+def test_make_queries_falls_back_when_llm_raises():
+    def boom(system, prompt, schema):
+        raise RuntimeError("down")
+    assert make_queries("one two three", boom) == fallback_queries("one two three")
+
+
+@pytest.mark.parametrize("reply", [None, {}, {"queries": "not a list"}, {"queries": [1, 2]}, ["x"]])
+def test_make_queries_falls_back_on_malformed_reply(reply):
+    assert make_queries("one two three", lambda s, p, sc: reply) == fallback_queries("one two three")
+
+
+def test_gather_sources_merges_queries_and_survives_a_failing_query():
+    def search(q):
+        if q == "bad":
+            raise RuntimeError("timeout")
+        return [_hit(f"https://example.org/{q}"), _hit("https://example.org/shared")]
+    sources = gather_sources("brief", search=search, queries=["q1", "bad", "q2"])
+    assert [s.url for s in sources] == [
+        "https://example.org/q1", "https://example.org/shared", "https://example.org/q2"]
+
+
+from scheduler.briefs.research import is_trusted, trusted_site_queries
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.eia.gov/outlooks/steo/", "https://hrsuindore.com/blog/x/", "https://www.reuters.com/markets/x",
+    "https://www.epa.gov/x", "https://news.mit.edu/x", "https://www.iea.org/reports/y"])
+def test_trusted_publishers_and_authoritative_hosts(url):
+    assert is_trusted(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://byjus.com/chemistry/calcium-nitrate/", "https://www.gardeningknowhow.com/x",
+    "https://www.youtube.com/watch?v=1", "https://energy-shock.ru/tpost/1", "https://greenok.lv/en/shop"])
+def test_random_web_pages_are_not_trusted(url):
+    assert not is_trusted(url)
+
+
+def test_gather_sources_trusted_only_filters_and_renumbers():
+    hits = [_hit("https://byjus.com/a"), _hit("https://www.eia.gov/b"), _hit("https://gardeningknowhow.com/c"),
+            _hit("https://hrsuindore.com/d")]
+    sources = gather_sources("brief", search=lambda q: hits, trusted_only=True)
+    assert [(s.id, s.publisher) for s in sources] == [("S1", "eia.gov"), ("S2", "hrsuindore.com")]
+    assert len(gather_sources("brief", search=lambda q: hits)) == 4
+
+
+def test_trusted_site_queries_use_first_words_and_each_trusted_domain():
+    qs = trusted_site_queries("calcium nitrate price 2026 Gulf war energy shock ammonia nitric acid")
+    assert qs == ["calcium nitrate price 2026 Gulf war energy site:eia.gov",
+                  "calcium nitrate price 2026 Gulf war energy site:iea.org",
+                  "calcium nitrate price 2026 Gulf war energy site:hrsuindore.com"]
+    assert trusted_site_queries("") == []

@@ -27,7 +27,7 @@ def test_run_creative_stage_assemble_reports_video_and_report():
 
 def test_run_creative_stage_raises_engine_error_with_stderr_on_failure():
     with mock.patch("shorts_engine.harness_bridge.subprocess.run") as mock_run:
-        mock_run.return_value = mock.Mock(returncode=1, stderr="agent turn trace: (no tool calls made)")
+        mock_run.return_value = mock.Mock(returncode=1, stdout="", stderr="agent turn trace: (no tool calls made)")
         with pytest.raises(EngineError, match="agent turn trace"):
             harness_bridge.run_creative_stage(mock.Mock(workspace="/ws"), "assemble")
 
@@ -41,3 +41,19 @@ def test_run_creative_stage_invokes_node_bridge_script_with_phase_and_workspace(
     assert args[0] == "node"
     assert "run-visual-authoring.mts" in args[3]
     assert args[4] == "assemble"
+
+
+def test_run_creative_stage_decodes_child_output_as_utf8_replace():
+    with mock.patch("shorts_engine.harness_bridge.subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=0, stderr="")
+        harness_bridge.run_creative_stage(mock.Mock(workspace="/ws"), "assemble")
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["encoding"] == "utf-8"
+    assert kwargs["errors"] == "replace"
+
+
+def test_run_creative_stage_failure_with_none_stderr_does_not_typeerror_and_includes_stdout():
+    with mock.patch("shorts_engine.harness_bridge.subprocess.run") as mock_run:
+        mock_run.return_value = mock.Mock(returncode=1, stderr=None, stdout="boom")
+        with pytest.raises(EngineError, match="boom"):
+            harness_bridge.run_creative_stage(mock.Mock(workspace="/ws"), "assemble")

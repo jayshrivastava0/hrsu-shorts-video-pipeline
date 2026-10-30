@@ -801,3 +801,50 @@ def test_assemble_finalize_handles_reflow_grown_shot_without_seek_past_eof(tmp_p
         assert payload["status_after"] == "assembled"
         report = json.loads((workspace / "assemble_report.json").read_text())
         assert len(report["shots"]) == 2
+
+
+def _init_workspace(tmp_path) -> str:
+    result = run_cli([
+        "init", "https://hrsuindore.com/brief/checkpoint-test/",
+        "--workspace-root", str(tmp_path),
+    ])
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])["workspace"]
+
+
+def test_checkpoint_advances_status(tmp_path):
+    workspace = _init_workspace(tmp_path)
+    result = run_cli(["checkpoint", "--workspace", workspace, "--status", "shotlisted"])
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload == {"status": "ok", "status_after": "shotlisted"}
+    manifest = json.loads((Path(workspace) / "run_manifest.json").read_text())
+    assert manifest["status"] == "shotlisted"
+    assert manifest["last_ok_status"] == "shotlisted"
+
+
+def test_checkpoint_refuses_backwards(tmp_path):
+    workspace = _init_workspace(tmp_path)
+    assert run_cli(["checkpoint", "--workspace", workspace, "--status", "shotlisted"]).returncode == 0
+    result = run_cli(["checkpoint", "--workspace", workspace, "--status", "scripted"])
+    assert result.returncode == 1
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error" and "refusing" in payload["message"]
+    manifest = json.loads((Path(workspace) / "run_manifest.json").read_text())
+    assert manifest["last_ok_status"] == "shotlisted"
+
+
+def test_checkpoint_refuses_unknown_status(tmp_path):
+    workspace = _init_workspace(tmp_path)
+    result = run_cli(["checkpoint", "--workspace", workspace, "--status", "not_a_status"])
+    assert result.returncode == 1
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["status"] == "error" and "unknown status" in payload["message"]
+    manifest = json.loads((Path(workspace) / "run_manifest.json").read_text())
+    assert manifest["last_ok_status"] == "init"
+
+
+def test_audio_order_check_passes_after_checkpoint_to_shotlisted():
+    from shorts_engine import stage_cli
+    assert stage_cli._stage_order_error("shotlisted", "audio", "audio") is None
+    assert stage_cli._stage_order_error("init", "audio", "audio") is not None

@@ -14,6 +14,25 @@ def _content_words(text: str) -> set[str]:
     return {w for w in _WORD_RE.findall(normalize_for_match(text)) if w not in _STOP and len(w) > 2}
 
 
+# Generic verbs/adverbs/connectives: kept in a query only when nothing better is left.
+_GENERIC = frozenset("starts start started break breaks broken because makes make made "
+                     "causes cause caused allows allow remains remain helps help keeps keep "
+                     "which while when where there also very much more most down into onto "
+                     "does done gets leads lead becomes become stays stay".split())
+
+
+def key_terms_query(text: str, limit: int = 6) -> str:
+    """A short search query from `text`: its `limit` most informative content words
+    (words not in _GENERIC first, then longest first, ties by position), emitted in their
+    original order. Deterministic."""
+    seen: dict[str, int] = {}
+    for w in _WORD_RE.findall(normalize_for_match(text or "")):
+        if w not in _STOP and len(w) > 2 and w not in seen:
+            seen[w] = len(seen)
+    top = sorted(seen, key=lambda w: (w in _GENERIC, -len(w), seen[w]))[:limit]
+    return " ".join(sorted(top, key=seen.__getitem__))
+
+
 def best_passages(text: str, claim: str, k: int) -> list[str]:
     """Top-k sentences by content-word overlap with `claim` (needs >=2 shared words,
     or >=1 when the claim has fewer than 3 content words). Ties keep page order."""

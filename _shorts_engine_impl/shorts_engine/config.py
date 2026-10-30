@@ -108,7 +108,10 @@ PAPER_DOMAINS = [
     "acs.org", "pubs.acs.org", "rsc.org", "pubs.rsc.org",
     "pubmed.ncbi.nlm.nih.gov", "ncbi.nlm.nih.gov", "arxiv.org", "doi.org",
 ]
-STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org"]
+STANDARD_DOMAINS = ["europa.eu", "eur-lex.europa.eu", "epa.gov", "iso.org",
+                    # intergovernmental bodies (claim -> source attribution tiers)
+                    "who.int", "unep.org", "oecd.org", "worldbank.org",
+                    "fao.org", "nist.gov"]
 
 # ── LLM behavior ───────────────────────────────────────────────────────────
 # 5, not 3: SCRIPT's writer must pass every deterministic gate at once (number
@@ -125,7 +128,9 @@ LLM_TIMEOUT_S = 60
 # different model family from both the planner and the writer (a model checking
 # its own claims agrees with itself); check_role_independence() enforces that
 # at call time.
-# Verifier/critic default: nemotron-3-ultra:cloud. glm-5.2:cloud needs a paid
+# Verifier/critic default: qwen3:8b (local, free; Ollama cloud models go pay-as-you-go
+# 2026-11-09). qwen3:8b scored 24/24, false_support_rate 0.0 on scripts/eval_verifier.py
+# on 2026-10-30, same as nemotron-3-ultra:cloud, the previous default. glm-5.2:cloud needs a paid
 # Ollama plan (HTTP 402), glm-5.1:cloud is retired (410), minimax-m3:cloud 402;
 # nemotron-3-ultra:cloud passed the 24-case scripts/eval_verifier.py bake-off
 # with false_support_rate 0.0 on 2026-10-09.
@@ -133,8 +138,8 @@ LLM_TIMEOUT_S = 60
 MODEL_ROLES: dict[str, str] = {
     "planner": SMART_TEXT_MODEL,
     "writer": SMART_TEXT_MODEL,
-    "verifier": "nemotron-3-ultra:cloud",
-    "critic": "nemotron-3-ultra:cloud",
+    "verifier": "qwen3:8b",
+    "critic": "qwen3:8b",
 }
 _INDEPENDENT_ROLES = ("verifier", "critic")
 
@@ -173,13 +178,18 @@ def check_role_independence(role: str) -> None:
 
 # ── Explanation plan / verification (spec 2026-10-08 §5-7) ─────────────────
 MIN_VERIFIED_STEPS = 3
-PLAN_MAX_REPAIR_ROUNDS = 2
-SCRIPT_MAX_REWRITES = 2          # critic-triggered rewrites before holding
+PLAN_MAX_REPAIR_ROUNDS = 4       # spec §12: retry a missing mechanism/depends_on before dropping
+TRANSITION_MAX_WORDS = 25        # spec §12: a step's words-only narration transition
+SCRIPT_MAX_REWRITES = 3          # spec §12: critic-triggered rewrites before holding
 RETRIEVAL_MAX_RESULTS = 5
 RETRIEVAL_MAX_FETCHES = 6
 RETRIEVAL_MAX_PASSAGES = 3
 RETRIEVAL_FETCH_TIMEOUT_S = 10
 RETRIEVAL_SEARCH_RETRIES = 2
+# Authority corroboration: independently find an authoritative passage per key claim so
+# the video can show a truthful source chip (never changes a claim's verdict).
+CORROBORATE_CLAIMS = True
+CORROBORATION_LIMIT = 10
 # YouTube Shorts accepts up to 3 minutes (verify against current YouTube rules);
 # anything longer is labelled long-form at packaging time.
 SHORT_FORM_MAX_S = 180.0

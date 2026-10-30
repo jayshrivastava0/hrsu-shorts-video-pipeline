@@ -109,6 +109,48 @@ class TestReflow:
         assert last["duration_s"] == span2 - non_last["duration_s"]
 
 
+    def _crowded(self, n, dur, span):
+        shots = [{"id": f"m{i:02d}", "beat": "mechanism", "type": "DIAGRAM",
+                  "duration_s": dur, "narration_span": "", "payload": {},
+                  "fallback": None} for i in range(n)]
+        shots.append({"id": "c0", "beat": "cta", "type": "LOGO_CTA",
+                      "duration_s": 3.0, "narration_span": "", "payload": {},
+                      "fallback": None})
+        beats_audio = [{"beat": "mechanism", "start_s": 0.0, "duration_s": span},
+                       {"beat": "cta", "start_s": span, "duration_s": 3.0}]
+        return shots, beats_audio, span + 3.0
+
+    def test_crowded_beat_relaxes_floor_instead_of_aborting(self):
+        """Real 3-minute run: 19 shots of 2.57s planned for a beat whose real
+        voice span is 31.8s; the SHOT_MIN_S floor would overshoot the span."""
+        from shorts_engine.stages import assemble
+        shots, beats_audio, voice_total = self._crowded(19, 2.57, 31.8)
+        out = assemble.reflow(shots, beats_audio, voice_total)
+        grp = [s for s in out if s["beat"] == "mechanism"]
+        assert len(grp) == 19
+        assert all(s["duration_s"] > 0 for s in grp)
+        assert abs(sum(s["duration_s"] for s in grp) - 31.8) < 0.01
+        assert all(s["duration_s"] >= 0.9 * 31.8 / 19 - 1e-6 for s in grp)
+
+    def test_uncrowded_beat_keeps_normal_floor(self):
+        from shorts_engine.stages import assemble
+        shots, beats_audio, voice_total = self._crowded(4, 3.0, 12.0)
+        out = assemble.reflow(shots, beats_audio, voice_total)
+        grp = [s for s in out if s["beat"] == "mechanism"]
+        assert all(s["duration_s"] >= config.SHOT_MIN_S - 1e-6 for s in grp)
+        assert abs(sum(s["duration_s"] for s in grp) - 12.0) < 1e-6
+
+    def test_nonpositive_span_still_raises(self):
+        import pytest
+        from shorts_engine.errors import EngineError
+        from shorts_engine.stages import assemble
+        for span in (0.0, -1.0):
+            shots, beats_audio, voice_total = self._crowded(3, 3.0, 5.0)
+            beats_audio[1]["start_s"] = span  # mechanism span = span
+            with pytest.raises(EngineError):
+                assemble.reflow(shots, beats_audio, 10.0)
+
+
 class TestCaptions:
     WORDS = [{"word": f"w{i}", "start": i * 0.4, "end": i * 0.4 + 0.35}
              for i in range(10)]

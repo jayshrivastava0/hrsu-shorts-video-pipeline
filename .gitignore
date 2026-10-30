@@ -18,3 +18,9 @@ output_torture/
 .worktrees/
 harness/.sessions/
 node_modules/
+
+# video scheduler runtime state
+data/video_state.json
+data/video_runs/
+data/video_scheduler.lock
+data/video_alerts.log

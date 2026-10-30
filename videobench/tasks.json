@@ -1,0 +1,41 @@
+{
+  "_doc": "HRSU-VideoBench tasks. Inputs are FROZEN (script, per-beat voice, word timings) so only visuals vary. split: dev = harness may be tuned on it; heldout = only scored. references: known renders used to check the scorer (ceiling = Claude-authored HyperFrames, floor = open-model pipeline).",
+  "tasks": [
+    {
+      "id": "mining-dust",
+      "run": "output/shorts/run-b2a193ef",
+      "kind": "procurement",
+      "split": "dev",
+      "references": {
+        "ceiling": "videos/mining-dust-explainer/renders/video.mp4",
+        "floor": "video_short.mp4"
+      }
+    },
+    {
+      "id": "h2s-sewers",
+      "run": "output/shorts/run-241fb598",
+      "kind": "procurement",
+      "split": "dev",
+      "references": {
+        "ceiling": "videos/h2s-explainer/renders/video.mp4",
+        "floor": "videos/h2s-gemma/renders/video.mp4"
+      }
+    },
+    {
+      "id": "sourcing-capex",
+      "run": "output/shorts/run-b497ade3",
+      "kind": "executive",
+      "split": "heldout",
+      "references": {
+        "ceiling": "videos/explainer/renders/video.mp4"
+      }
+    },
+    {
+      "id": "mining-tco",
+      "run": "output/shorts/run-b3eb8df7",
+      "kind": "procurement",
+      "split": "heldout",
+      "references": {}
+    }
+  ]
+}
