@@ -1,0 +1,11 @@
+# Video formats and ratios. Edit this file to add a format; no code change needed.
+# duration_s is the target narration length; ratio picks the canvas.
+formats:
+  short:    {duration_s: 45,  ratio: "9:16"}
+  standard: {duration_s: 75,  ratio: "9:16"}
+  long:     {duration_s: 180, ratio: "16:9"}
+# ratio -> HyperFrames orientation (canvas 16:9 1920x1080, 9:16 1080x1920, 1:1 1080x1080)
+ratios:
+  "16:9": landscape
+  "9:16": portrait
+  "1:1": square

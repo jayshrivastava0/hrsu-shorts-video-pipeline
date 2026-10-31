@@ -16,6 +16,7 @@ class Facts:
     never_claimed: list[str] = field(default_factory=list)
     banned_claims: list[str] = field(default_factory=list)
     cta_lines: list[str] = field(default_factory=list)
+    buyer_reasons: list[dict] = field(default_factory=list)   # {id, text}: why a buyer may choose HRSU
 
 
 def load_facts(path: Path | None = None) -> Facts:
@@ -29,4 +30,5 @@ def load_facts(path: Path | None = None) -> Facts:
         never_claimed=[str(s) for s in data.get("never_claimed") or []],
         banned_claims=[str(s) for s in data.get("banned_claims") or []],
         cta_lines=[str(s) for s in data.get("cta_lines") or []],
+        buyer_reasons=[{"id": str(r["id"]), "text": str(r["text"])} for r in data.get("buyer_reasons") or []],
     )

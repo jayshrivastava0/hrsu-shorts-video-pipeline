@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
+from scheduler.briefs import formats
 from scheduler.briefs.model import VIDEO_TYPES, Brief, brief_id
 
 MAX_BRIEF_CHARS = 4000
@@ -104,6 +105,12 @@ def build_brief(
     orientation: str | None = None,
     llm: Callable | None = None,
     confidence_floor: float = 0.6,
+    *,
+    angles: list[str] | None = None,
+    cta: str | None = None,
+    fmt: str | None = None,
+    ratio: str | None = None,
+    duration_s: int | None = None,
 ) -> Brief:
     """Validate the brief text and assets and return a Brief with a resolved type."""
     if not text or not text.strip():
@@ -137,13 +144,22 @@ def build_brief(
             "add them to the assets folder and try again"
         )
 
+    fmt_orientation, duration_s = formats.resolve(fmt, ratio, duration_s)
+    orientation = orientation or fmt_orientation
+    angles = [a.strip() for a in angles or [] if a and a.strip()]
+    cta = (cta or "").strip() or None
+    # only the new options change the id, so ids of older briefs (incl. --orientation ones) stay stable
+    variant = "|".join(filter(None, [",".join(angles), cta or "", fmt_orientation or "", str(duration_s or "")]))
     return Brief(
-        id=brief_id(text),
+        id=brief_id(text, variant),
         text=text,
         type=video_type,
         url=url,
         assets=assets,
         orientation=orientation,
+        angles=angles,
+        cta=cta,
+        duration_s=duration_s,
     )
 
 

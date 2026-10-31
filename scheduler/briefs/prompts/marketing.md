@@ -32,7 +32,7 @@ for approval.
    on the spoken word that names it). ONE continuous animated scene per beat in one consistent visual world: a
    character or a simple set of characters, a story that moves from problem to outcome, or a metaphor drawn step
    by step. Each frame's build finishes about 1.5-2 s before its voice ends, then holds with life. The final frame
-   carries one CTA end card shown exactly once: the line "Ask for a quotation at hrsuindore.com".
+   carries one CTA end card shown exactly once: the line "{{CTA}}".
 4. Build each `compositions/frames/NN-*.html` (one per frame; parallel work is fine), then the captions,
    assemble-index and transitions steps of the HyperFrames project.
 
@@ -40,7 +40,13 @@ for approval.
 - **Story, characters and metaphor are allowed.** Use them to carry the narration's story. A metaphor or a
   character is an illustration, and the frame that uses one carries the word "illustration" on screen in small
   type.
-- **Product claims only from `in_place`.** Any statement about what HRSU's product or service does, is, offers or
+- **Why choose HRSU.** The owner's fact tiers also list `buyer_reasons` (new supplier, less dependence on one
+  supplier, an India-based alternative, powder form, purity, low impurities, quality, batch-level QC, a nearby source,
+  flexible orders). Those are HRSU's own positioning and may be shown, in the qualitative words the narration uses.
+  Lead with the reasons the narration leads with; do not add other reasons, and do not make batch-level QC the
+  default message. A specific, checkable detail (a number, a named impurity being absent, a grade, a certificate)
+  may appear only if the narration states it and it is printed on the CoA/TDS lines in `in_place`.
+- **Product claims only from `in_place`** (plus the `buyer_reasons` above). Any statement about what HRSU's product or service does, is, offers or
   achieves may appear on screen only when it is listed under `in_place` in the owner's fact tiers (or the narration
   states it and it is in `in_place`). Never show an `in_progress` item as done, and never show a `never_claimed`
   or `banned_claims` item, even as a negative.
@@ -51,7 +57,7 @@ for approval.
   or "offer ends" messaging appears anywhere in the video, in any frame, unless the narration literally states the
   exact figure and it is in `in_place`. The default is no price at all.
 - **Exact CTA.** The final frame's call to action is exactly this line, word for word, shown once:
-  "Ask for a quotation at hrsuindore.com"
+  "{{CTA}}"
   Do not reword, shorten, add to or repeat it elsewhere in the video.
 - NEVER invent facts, numbers, percentages, units, stamps, badges, certifications or labels. No "QC passed",
   "certified", "REACH registered", "ISO", "FDA" or similar unless the narration literally says it and it is in `in_place`.
@@ -142,8 +148,7 @@ closing beat.
 1. `npx hyperframes lint` must report 0 errors.
 2. `npx hyperframes check` must report 0 errors (caption-word layout notices may be ignored).
 3. Snapshot-review EVERY frame (`npx hyperframes snapshot`, then look at the images). Check that no price appears,
-   that every product claim is in `in_place`, and that the final CTA reads exactly "Ask for a quotation at
-   hrsuindore.com". Fix any empty areas, clipped/overlapping text, invented labels, then re-run lint and check.
+   that every product claim is in `in_place`, and that the final CTA reads exactly "{{CTA}}". Fix any empty areas, clipped/overlapping text, invented labels, then re-run lint and check.
 4. Render: `npx hyperframes render --quality high --output renders/video.mp4`. The rendered duration must be within
    3 seconds of the total voice duration in `audio_meta.json`.
 

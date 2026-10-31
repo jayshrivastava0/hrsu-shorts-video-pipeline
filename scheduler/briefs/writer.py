@@ -69,9 +69,29 @@ _LENGTH_RULES = {
 _BEAT_RANGE = {"marketing": (3, 5)}
 
 
-def _script_schema(recipe: Recipe) -> dict:
-    """The script JSON schema with the beat count range of this video type (default 5-8)."""
-    low, high = _BEAT_RANGE.get(recipe.name, (5, 8))
+WORDS_PER_SECOND = 2.5
+
+
+def _beat_range(recipe: Recipe, brief: Brief) -> tuple[int, int]:
+    """Beat count range: from the brief's target duration when it has one, else the type's default (5-8)."""
+    if brief.duration_s:
+        low = max(3, round(brief.duration_s / 15))
+        return low, max(low + 2, round(brief.duration_s / 6))
+    return _BEAT_RANGE.get(recipe.name, (5, 8))
+
+
+def _length_rule(recipe: Recipe, brief: Brief) -> str:
+    if brief.duration_s:
+        low, high = _beat_range(recipe, brief)
+        words = round(brief.duration_s * WORDS_PER_SECOND * 0.9)
+        return (f"Write {low}-{high} beats, about {brief.duration_s} seconds in total (about {words} words of "
+                f"narration).")
+    return _LENGTH_RULES.get(recipe.name, "Write 5-8 beats.")
+
+
+def _script_schema(recipe: Recipe, brief: Brief) -> dict:
+    """The script JSON schema with the beat count range for this brief."""
+    low, high = _beat_range(recipe, brief)
     schema = json.loads(json.dumps(_SCRIPT_SCHEMA))
     schema["properties"]["beats"].update(minItems=low, maxItems=high)
     return schema
@@ -121,6 +141,28 @@ def _system_prompt(recipe: Recipe) -> str:
     return "\n".join(lines)
 
 
+def _resolve_angles(brief: Brief, facts: Facts) -> list[str]:
+    """Texts of the angles the brief asked to lead with: a buyer_reasons id maps to its text, free text stays."""
+    by_id = {r["id"]: r["text"] for r in facts.buyer_reasons}
+    return [by_id.get(a, a) for a in brief.angles]
+
+
+def _reasons_block(brief: Brief, recipe: Recipe, facts: Facts) -> list[str]:
+    """Why-choose-HRSU guidance for marketing briefs (or any brief with explicit angles)."""
+    if recipe.name != "marketing" and not brief.angles:
+        return []
+    lines = ["Reasons a buyer may choose HRSU (HRSU's own positioning, which you may state qualitatively):"]
+    lines += [f"- {r['text']}" for r in facts.buyer_reasons]
+    angles = _resolve_angles(brief, facts)
+    if angles:
+        lines.append("Lead with these angles: " + "; ".join(angles) + ".")
+    else:
+        lines.append("Pick the one or two reasons that best fit the brief. Do not default to batch-level QC.")
+    lines.append("Never state a number, grade, certificate or a named impurity being absent unless it is in the "
+                 "facts list above.")
+    return lines
+
+
 def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Source], feedback: str) -> str:
     sources_only = recipe.facts_source == "sources"
     if sources_only:
@@ -130,12 +172,15 @@ def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Sourc
     else:
         lines = [f"Brief: {brief.text}", "", "Facts you may state:"]
     lines += [f"- {f}" for f in facts.in_place]
+    reasons = _reasons_block(brief, recipe, facts)
+    if reasons:
+        lines += [""] + reasons
     lines += ["", "Source snippets:"]
     for s in sources:
         lines.append(f"[{s.id}] {s.title} ({s.publisher}): {s.snippet}")
     lines += [
         "",
-        _LENGTH_RULES.get(recipe.name, "Write 5-8 beats.") + " The first beat is a hook with purpose \"hook\".",
+        _length_rule(recipe, brief) + " The first beat is a hook with purpose \"hook\".",
         f"The last beat must end with this exact line: {recipe.cta_line}",
         "Each beat has kind \"fact\", \"opinion\" or \"story\".",
         "thesis is the single core claim, equal to the narration of one fact beat; null for marketing.",
@@ -213,7 +258,7 @@ def write_script(
     feedback = ""
     offending: list[str] = []
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        result = llm(system, _user_prompt(brief, recipe, facts, sources, feedback), _script_schema(recipe))
+        result = llm(system, _user_prompt(brief, recipe, facts, sources, feedback), _script_schema(recipe, brief))
         if not isinstance(result, dict):
             result = {}
         raw_beats = result.get("beats")
