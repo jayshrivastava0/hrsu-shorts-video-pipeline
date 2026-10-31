@@ -85,6 +85,15 @@ LANDSCAPE_MIN_SECONDS = 90.0   # videos of 1.5 min or more are landscape (1920x1
 WORDS_PER_SECOND = 2.5         # fallback estimate from the narration when no audio duration is available
 
 
+# orientation -> (canvas, caption keep-out y, content y range, wordmark y)
+CANVASES = {
+    "landscape": ("1920x1080", "905", "110-895", "50"),
+    "portrait": ("1080x1920", "1594", "130-1590", "70"),
+    "square": ("1080x1080", "890", "110-880", "50"),
+}
+DEFAULT_CTA = "Ask for a quotation at hrsuindore.com"
+
+
 def narration_seconds(run_dir: Path | str) -> float:
     """Voice length of a run: real voiceover duration when present, else narration words / 2.5."""
     run_dir = Path(run_dir)
@@ -110,7 +119,7 @@ def orientation_for(run_dir: Path | str) -> str:
         word = override.read_text(encoding="utf-8").strip().lower()
     except Exception:
         word = ""
-    if word in ("landscape", "portrait"):
+    if word in ("landscape", "portrait", "square"):
         return word
     return "landscape" if narration_seconds(run_dir) >= LANDSCAPE_MIN_SECONDS else "portrait"
 
@@ -154,13 +163,15 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
 def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH,
                  review_note: str | None = None) -> str:
     text = template.read_text(encoding="utf-8")
-    land = orientation_for(run_dir) == "landscape"
+    orientation = orientation_for(run_dir)
+    canvas, keepout, content_y, wordmark_y = CANVASES[orientation]
+    try:
+        cta = (Path(run_dir) / "cta.txt").read_text(encoding="utf-8").strip() or DEFAULT_CTA
+    except OSError:
+        cta = DEFAULT_CTA
     fill = {"{{PROJECT_DIR}}": str(project_dir), "{{RUN_DIR}}": str(run_dir),
-            "{{ORIENTATION}}": "landscape" if land else "portrait",
-            "{{CANVAS}}": "1920x1080" if land else "1080x1920",
-            "{{CAPTION_KEEPOUT_Y}}": "905" if land else "1594",
-            "{{CONTENT_Y}}": "110-895" if land else "130-1590",
-            "{{WORDMARK_Y}}": "50" if land else "70"}
+            "{{ORIENTATION}}": orientation, "{{CANVAS}}": canvas, "{{CAPTION_KEEPOUT_Y}}": keepout,
+            "{{CONTENT_Y}}": content_y, "{{WORDMARK_Y}}": wordmark_y, "{{CTA}}": cta}
     for k, v in fill.items():
         text = text.replace(k, v)
     if review_note:
