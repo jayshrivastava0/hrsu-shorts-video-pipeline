@@ -24,6 +24,21 @@ banned_claims:
   - "delivery to your door"
   - "Incoterm"
 
+# Reasons a buyer may choose HRSU (owner-supplied 2026-10-31). These are HRSU's positioning: videos may lead with
+# any of them, qualitatively. A buyer judges "better" for themselves. Anything specific and checkable (a number,
+# a named impurity being absent, a grade, a certificate) must come from the CoA/TDS lines under in_place.
+buyer_reasons:
+  - {id: new_supplier, text: "An additional supplier for importers who want to add or find new sources"}
+  - {id: dual_source, text: "Helps buyers reduce their dependence on a single supplier"}
+  - {id: alt_to_china, text: "An India-based alternative for buyers moving away from sourcing in China"}
+  - {id: powder_form, text: "Calcium nitrate in powder form, not granules"}
+  - {id: higher_purity, text: "Higher-purity calcium nitrate"}
+  - {id: low_impurities, text: "Low impurities"}
+  - {id: quality, text: "Better product quality"}
+  - {id: batch_qc, text: "Batch-level quality control"}
+  - {id: nearby, text: "A nearby source for buyers in India, Asia and the Gulf"}
+  - {id: flexible_orders, text: "Flexible minimum order quantities and responsive quoting for trial orders"}
+
 # Fact tiers (owner-supplied 2026-10-29). Only in_place may be stated as true.
 # in_progress must never be stated as done. never_claimed must not be presented as true.
 in_place:

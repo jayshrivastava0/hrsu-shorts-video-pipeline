@@ -240,3 +240,22 @@ with a clear error if the families match. Models whose name contains `cloud` are
 SDK and need credits on Ollama after 2026-11-09. Check a new verifier with
 `python scripts/eval_verifier.py <model>` first (false_support_rate must be 0.0).
 The visual director is separate: `HRSU_DIRECTOR_MODEL` / `HRSU_DIRECTOR_EFFORT`.
+
+## Brief options (dynamic, not hardcoded)
+
+| Option | What it does | Where the choices live |
+|---|---|---|
+| `--format short\|standard\|long` | target length and default ratio | `scheduler/briefs/formats.yaml` |
+| `--ratio 16:9\|9:16\|1:1` | canvas (1920x1080, 1080x1920, 1080x1080); overrides the format's ratio | `formats.yaml` |
+| `--duration SECONDS` | target narration length; sets the script's word budget and beat count | per brief |
+| `--angle REASON` (repeatable) | which "why choose HRSU" reason to lead with: a `buyer_reasons` id or free text | `brand_facts.yaml` |
+| `--cta LINE` | call to action; default is the video type's own | `scheduler/briefs/types.py` default |
+
+Without `--angle`, a marketing script picks the one or two `buyer_reasons` that fit the brief and does not default to
+batch-level QC. Reasons are HRSU's positioning and are stated qualitatively; anything specific and checkable (a number,
+a named impurity being absent, a grade, a certificate) must come from the CoA/TDS lines in `in_place`.
+Options other than `--orientation` are part of the brief id, so the same text in another format or angle is a new video.
+4:5 is not offered yet (HyperFrames has no preset for it).
+
+**Rule for new work:** when adding or changing a behaviour, ask whether it should be a setting (a file, a flag, a
+brief field) instead of a constant in code. Defaults stay in data files; code reads them.

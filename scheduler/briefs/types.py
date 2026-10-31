@@ -1,7 +1,7 @@
 """Per-type recipes for brief-driven videos."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from scheduler.briefs.model import VIDEO_TYPES
@@ -82,3 +82,10 @@ def get_recipe(type_name: str) -> Recipe:
     except KeyError:
         valid = ", ".join(VIDEO_TYPES)
         raise KeyError(f"unknown video type {type_name!r}; valid types: {valid}") from None
+
+
+def recipe_for(brief) -> Recipe:
+    """The recipe of the brief's type, with the brief's own call to action when it set one."""
+    recipe = get_recipe(brief.type)
+    cta = getattr(brief, "cta", None)
+    return replace(recipe, cta_line=cta) if cta else recipe

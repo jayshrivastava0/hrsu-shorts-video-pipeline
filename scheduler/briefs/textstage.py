@@ -32,7 +32,7 @@ from scheduler.briefs.model import Brief
 from scheduler.briefs.research import (
     ClaimVerdict, Source, gather_sources, make_queries, trusted_site_queries, verify_claims,
 )
-from scheduler.briefs.types import Recipe, get_recipe
+from scheduler.briefs.types import Recipe, recipe_for
 from scheduler.briefs.writer import WriterFailed, write_script, write_support_files
 
 BRIEF_URL_PREFIX = "https://hrsuindore.com/brief/"
@@ -237,7 +237,7 @@ def run_brief_text(brief: Brief, workspace_root: Path | None = None, *, run: Run
     """
     root = Path(workspace_root) if workspace_root else default_workspace_root()
     root.mkdir(parents=True, exist_ok=True)
-    recipe = get_recipe(brief.type)
+    recipe = recipe_for(brief)
     sources: list[Source] = []
     if recipe.needs_research:
         queries = make_queries(brief.text, llm or _default_writer_llm)

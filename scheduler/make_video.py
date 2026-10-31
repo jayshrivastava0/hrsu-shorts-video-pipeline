@@ -1,7 +1,8 @@
 """Brief-driven video entry point: one brief -> text stage -> director -> gate -> awaiting review.
 
     python -m scheduler.make_video --brief "..." [--type auto|explainer|proof|esg|market|marketing]
-        [--url URL] [--assets DIR] [--orientation landscape|portrait] [--yes | --resume]
+        [--url URL] [--assets DIR] [--orientation landscape|portrait|square] [--format short|standard|long]
+        [--ratio 16:9|9:16|1:1] [--duration SECONDS] [--angle REASON ...] [--cta LINE] [--yes | --resume]
 
 Exit codes: 0 awaiting review; 1 pipeline failure or busy lock; 2 needs --type or refused brief;
 3 duplicate brief id without --yes or --resume. --resume continues an unfinished brief from its saved text stage.
@@ -20,7 +21,8 @@ from scheduler.briefs.gate import run_type_gate
 from scheduler.briefs.intake import BriefRefused, NeedsType, build_brief
 from scheduler.briefs.model import VIDEO_TYPES, Brief
 from scheduler.briefs.textstage import run_brief_text
-from scheduler.briefs.types import get_recipe
+from scheduler.briefs import formats
+from scheduler.briefs.types import recipe_for
 from scheduler.lock import LockBusy, RunLock
 from scheduler.run_daily import DATA_DIR, Deps, default_deps, notify, setup_logging
 from scheduler.state import State, now_iso
@@ -110,7 +112,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--type", default="auto", choices=["auto", *VIDEO_TYPES])
     p.add_argument("--url", default=None, help="blog URL to link from the YouTube package")
     p.add_argument("--assets", type=Path, default=None, help="folder of PDF/PNG/JPEG supporting assets")
-    p.add_argument("--orientation", choices=["landscape", "portrait"], default=None)
+    p.add_argument("--orientation", choices=["landscape", "portrait", "square"], default=None)
+    p.add_argument("--format", dest="fmt", choices=formats.format_names(), default=None,
+                   help="short | standard | long: sets the target length and default ratio (see briefs/formats.yaml)")
+    p.add_argument("--ratio", choices=formats.ratio_names(), default=None, help="canvas ratio; overrides --format")
+    p.add_argument("--duration", type=int, default=None, metavar="SECONDS",
+                   help="target narration length in seconds; overrides --format")
+    p.add_argument("--angle", action="append", default=[], metavar="REASON",
+                   help="why-choose-HRSU angle to lead with: a buyer_reasons id from brand_facts.yaml or free text "
+                        "(repeatable). Default: the writer picks what fits the brief")
+    p.add_argument("--cta", default=None, help="call-to-action line; default: the video type's own")
     p.add_argument("--yes", action="store_true", help="run again even if this brief id already exists")
     p.add_argument("--resume", action="store_true",
                    help="continue an unfinished brief from its saved text stage (skips research, script and "
@@ -139,7 +150,8 @@ def _after_text(state: State, brief: Brief, run_dir: Path, deps: Deps, alerts: P
     """Director and gate, once the text stage is ready."""
     if brief.orientation:
         (run_dir / "orientation.txt").write_text(brief.orientation, encoding="utf-8")
-    recipe = get_recipe(brief.type)
+    recipe = recipe_for(brief)
+    (run_dir / "cta.txt").write_text(recipe.cta_line, encoding="utf-8")
     (run_dir / "allowed_text.txt").write_text(_allowed_text(run_dir, recipe), encoding="utf-8")
     project = run_dir / "videos" / "explainer"
     dres = deps.director(run_dir, project, "claude", prompt_path=recipe.prompt_path)
@@ -179,7 +191,9 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         llm = _default_classifier
     try:
         brief = build_brief(args.brief, args.type, url=args.url, assets_dir=args.assets,
-                            orientation=args.orientation, llm=llm)
+                            orientation=args.orientation, llm=llm,
+                            angles=args.angle, cta=args.cta, fmt=args.fmt, ratio=args.ratio,
+                            duration_s=args.duration)
     except NeedsType as exc:
         print(f"Could not classify this brief confidently: guess {_safe(exc.guess)} "
               f"(confidence {exc.confidence:.2f}).")
