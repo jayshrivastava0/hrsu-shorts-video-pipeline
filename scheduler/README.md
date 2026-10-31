@@ -216,6 +216,12 @@ Deliberately deferred by the owner; each one is a limit on what the automatic ch
 
 ## Choosing the text models
 
+**Split of work (set 2026-10-31):** the heavy creative roles, `planner` (hook and plan) and `writer` (script), run on
+**Claude Haiku** (`claude-haiku-5-5`). The checking roles, `verifier` (fact-check) and `critic` (catches mistakes),
+run on **open-source Ollama models** (`qwen3:8b`). The visual director is Claude Haiku too. Switch a role's backend
+with `HRSU_BACKEND_<ROLE>=claude|ollama`, and its Claude model with `HRSU_CLAUDE_MODEL_<ROLE>` (default Haiku).
+`HRSU_LLM_BACKEND=ollama` forces every role onto Ollama. The Ollama table below applies to roles on `ollama`.
+
 Each text-stage role has a default in `_shorts_engine_impl/shorts_engine/config.py` (`MODEL_ROLES`) and can be
 overridden per run with an environment variable, no code change:
 

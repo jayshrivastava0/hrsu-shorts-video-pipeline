@@ -25,12 +25,27 @@ def backend_is_claude() -> bool:
     return os.environ.get("HRSU_LLM_BACKEND", "claude").strip().lower() == "claude"
 
 
+# Which backend each text role uses. The creative, heavy roles (planner = hook/plan, writer = script) run on
+# Claude Haiku; the checking roles (verifier = fact-check, critic = catches mistakes) run on open-source Ollama
+# models so a model never grades its own work. Override one role with HRSU_BACKEND_<ROLE>=claude|ollama.
+ROLE_BACKEND_DEFAULTS = {"planner": "claude", "writer": "claude", "verifier": "ollama", "critic": "ollama"}
+DEFAULT_CLAUDE_TEXT_MODEL = "claude-haiku-5-5"
+
+
+def role_uses_claude(role: str) -> bool:
+    # HRSU_LLM_BACKEND=ollama (used by the tests) forces every role onto Ollama.
+    if os.environ.get("HRSU_LLM_BACKEND", "").strip().lower() == "ollama":
+        return False
+    chosen = os.environ.get(f"HRSU_BACKEND_{role.upper()}", "").strip().lower()
+    return (chosen or ROLE_BACKEND_DEFAULTS.get(role, "claude")) == "claude"
+
+
 def claude_model_for(role: str | None) -> str:
     if role:
         specific = os.environ.get(f"HRSU_CLAUDE_MODEL_{role.upper()}")
         if specific:
             return specific
-    return os.environ.get("HRSU_CLAUDE_MODEL", "sonnet")
+    return os.environ.get("HRSU_CLAUDE_MODEL", DEFAULT_CLAUDE_TEXT_MODEL)
 
 
 def _log_cost(model: str, envelope: dict) -> None:

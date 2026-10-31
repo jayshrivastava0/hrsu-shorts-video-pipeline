@@ -60,10 +60,9 @@ def _get_role_client(role: str):
     """OllamaClient for a configured role. Cloud models go through the Python SDK
     (they reject /api/generate, see OllamaClient._generate_via_sdk)."""
     from shorts_engine import config
-    from video_agent.claude_client import ClaudeCliClient, backend_is_claude, claude_model_for
-    if backend_is_claude():
-        # Claude backend: verifier/critic use a separate Claude model (HRSU_CLAUDE_MODEL_<ROLE>)
-        # in a fresh, context-free call; the family-independence check does not apply.
+    from video_agent.claude_client import ClaudeCliClient, claude_model_for, role_uses_claude
+    if role_uses_claude(role):
+        # Claude roles (planner/writer by default): model from HRSU_CLAUDE_MODEL_<ROLE>, default Haiku.
         return ClaudeCliClient(model=claude_model_for(role))
     config.check_role_independence(role)
     from video_agent.ollama_client import OllamaClient
