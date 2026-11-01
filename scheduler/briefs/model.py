@@ -19,6 +19,7 @@ class Brief:
     orientation: str | None = None          # landscape | portrait | square (from --ratio / --format / --orientation)
     angles: list[str] = field(default_factory=list)   # buyer_reasons ids (or free text) the video should lead with
     cta: str | None = None                   # call-to-action override; None = the video type's default
+    pace: str = "standard"                    # standard | fast (attention-first cutting, see prompts/pace_fast.md)
     duration_s: int | None = None            # target narration length in seconds; None = the type's default
 
 

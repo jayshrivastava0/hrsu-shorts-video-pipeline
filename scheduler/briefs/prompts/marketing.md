@@ -37,9 +37,14 @@ for approval.
    assemble-index and transitions steps of the HyperFrames project.
 
 ## Hard content rules (violations make the video unpublishable)
-- **Story, characters and metaphor are allowed.** Use them to carry the narration's story. A metaphor or a
-  character is an illustration, and the frame that uses one carries the word "illustration" on screen in small
-  type.
+- **Story, characters and metaphor are allowed.** Use them to carry the narration's story. Do NOT put the words
+  "illustration" or "stock photo" (or any similar label) on screen. Never caption a supplied photo as HRSU's own product
+  or plant, and never let a metaphor read as a factual claim.
+- **HRSU is THE choice, never a backup.** Never present HRSU as a second, extra, backup, fallback or alternative
+  supplier, or as someone's second choice. Show a buyer who finds HRSU and is glad to have it, not one who adds HRSU
+  next to their "real" supplier. Do not attack or name any other supplier or country.
+- **One message per video.** The narration makes ONE point (its lead angle). Do not drag in supply-risk, sourcing
+  strategy and product quality in the same video.
 - **Why choose HRSU.** The owner's fact tiers also list `buyer_reasons` (new supplier, less dependence on one
   supplier, an India-based alternative, powder form, purity, low impurities, quality, batch-level QC, a nearby source,
   flexible orders). Those are HRSU's own positioning and may be shown, in the qualitative words the narration uses.
@@ -130,6 +135,8 @@ that pulse in alternating colours, twinkling stars, drifting fog) so the scene i
 small letter-spaced "HRSU INDORE" wordmark, Arial, and the exact call-to-action line. Move into it with one clear
 transition (for example the snow settles and a navy panel wipes across), so the brand look arrives as a deliberate
 closing beat.
+
+{{PACE_RULES}}
 
 ## Visual quality bar
 - Fill the canvas: content spans y {{CONTENT_Y}} and the full width; no more than ~15% empty area; no clipped or
