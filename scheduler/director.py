@@ -160,6 +160,16 @@ def prepare_project(run_dir: Path | str, project_dir: Path | str, run: Runner = 
         shutil.copytree(supplied, project_dir / "assets", dirs_exist_ok=True)
 
 
+def _pace_rules(run_dir: Path | str) -> str:
+    """The attention-first rules when the run's pace.txt says "fast"; empty otherwise."""
+    try:
+        pace = (Path(run_dir) / "pace.txt").read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return ""
+    path = Path(__file__).resolve().parent / "briefs" / "prompts" / f"pace_{pace}.md"
+    return path.read_text(encoding="utf-8") if pace != "standard" and path.is_file() else ""
+
+
 def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH,
                  review_note: str | None = None) -> str:
     text = template.read_text(encoding="utf-8")
@@ -171,7 +181,7 @@ def build_prompt(project_dir: Path, run_dir: Path, template: Path = PROMPT_PATH,
         cta = DEFAULT_CTA
     fill = {"{{PROJECT_DIR}}": str(project_dir), "{{RUN_DIR}}": str(run_dir),
             "{{ORIENTATION}}": orientation, "{{CANVAS}}": canvas, "{{CAPTION_KEEPOUT_Y}}": keepout,
-            "{{CONTENT_Y}}": content_y, "{{WORDMARK_Y}}": wordmark_y, "{{CTA}}": cta}
+            "{{CONTENT_Y}}": content_y, "{{WORDMARK_Y}}": wordmark_y, "{{CTA}}": cta, "{{PACE_RULES}}": _pace_rules(run_dir)}
     for k, v in fill.items():
         text = text.replace(k, v)
     if review_note:

@@ -121,6 +121,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--angle", action="append", default=[], metavar="REASON",
                    help="why-choose-HRSU angle to lead with: a buyer_reasons id from brand_facts.yaml or free text "
                         "(repeatable). Default: the writer picks what fits the brief")
+    p.add_argument("--pace", choices=["standard", "fast"], default="standard",
+                   help="fast = a new picture every 2-4 s, recurring character, pattern breaks (attention-first)")
     p.add_argument("--cta", default=None, help="call-to-action line; default: the video type's own")
     p.add_argument("--yes", action="store_true", help="run again even if this brief id already exists")
     p.add_argument("--resume", action="store_true",
@@ -152,6 +154,7 @@ def _after_text(state: State, brief: Brief, run_dir: Path, deps: Deps, alerts: P
         (run_dir / "orientation.txt").write_text(brief.orientation, encoding="utf-8")
     recipe = recipe_for(brief)
     (run_dir / "cta.txt").write_text(recipe.cta_line, encoding="utf-8")
+    (run_dir / "pace.txt").write_text(brief.pace, encoding="utf-8")
     (run_dir / "allowed_text.txt").write_text(_allowed_text(run_dir, recipe), encoding="utf-8")
     project = run_dir / "videos" / "explainer"
     dres = deps.director(run_dir, project, "claude", prompt_path=recipe.prompt_path)
@@ -193,7 +196,7 @@ def _run(args, deps: Deps, alerts: Path, type_gate: Callable, brief_text: Callab
         brief = build_brief(args.brief, args.type, url=args.url, assets_dir=args.assets,
                             orientation=args.orientation, llm=llm,
                             angles=args.angle, cta=args.cta, fmt=args.fmt, ratio=args.ratio,
-                            duration_s=args.duration)
+                            duration_s=args.duration, pace=args.pace)
     except NeedsType as exc:
         print(f"Could not classify this brief confidently: guess {_safe(exc.guess)} "
               f"(confidence {exc.confidence:.2f}).")

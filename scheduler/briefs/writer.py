@@ -74,6 +74,8 @@ WORDS_PER_SECOND = 2.5
 
 def _beat_range(recipe: Recipe, brief: Brief) -> tuple[int, int]:
     """Beat count range: from the brief's target duration when it has one, else the type's default (5-8)."""
+    if brief.duration_s and brief.pace == "fast":
+        return max(3, round(brief.duration_s / 10)), max(5, round(brief.duration_s / 6))   # beats of 6-10 s
     if brief.duration_s:
         low = max(3, round(brief.duration_s / 15))
         return low, max(low + 2, round(brief.duration_s / 6))
@@ -87,6 +89,11 @@ def _length_rule(recipe: Recipe, brief: Brief) -> str:
         return (f"Write {low}-{high} beats, about {brief.duration_s} seconds in total (about {words} words of "
                 f"narration).")
     return _LENGTH_RULES.get(recipe.name, "Write 5-8 beats.")
+
+
+_FAST_RULES = ("Pace is FAST: short spoken sentences of 4-10 words, each one a single picture idea; a beat is one or "
+               "two sentences (6-10 seconds). Vary the sentence length. Every sentence must give the director "
+               "something new to show.")
 
 
 def _script_schema(recipe: Recipe, brief: Brief) -> dict:
@@ -155,9 +162,14 @@ def _reasons_block(brief: Brief, recipe: Recipe, facts: Facts) -> list[str]:
     lines += [f"- {r['text']}" for r in facts.buyer_reasons]
     angles = _resolve_angles(brief, facts)
     if angles:
-        lines.append("Lead with these angles: " + "; ".join(angles) + ".")
+        lines.append("Lead with this angle: " + angles[0] + "."
+                     + (" At most one supporting reason: " + angles[1] + "." if len(angles) > 1 else ""))
     else:
-        lines.append("Pick the one or two reasons that best fit the brief. Do not default to batch-level QC.")
+        lines.append("Pick the single reason that best fits the brief as the lead. Do not default to batch-level QC.")
+    lines.append("The video makes ONE point. Do not cover several reasons, and do not mix supply-risk, sourcing "
+                 "strategy and product quality in one video.")
+    lines.append("HRSU is the buyer's choice, never a backup. Never call HRSU a second, extra, backup or "
+                 "alternative supplier, and never show a buyer using HRSU beside their main supplier.")
     lines.append("Never state a number, grade, certificate or a named impurity being absent unless it is in the "
                  "facts list above.")
     return lines
@@ -180,7 +192,8 @@ def _user_prompt(brief: Brief, recipe: Recipe, facts: Facts, sources: list[Sourc
         lines.append(f"[{s.id}] {s.title} ({s.publisher}): {s.snippet}")
     lines += [
         "",
-        _length_rule(recipe, brief) + " The first beat is a hook with purpose \"hook\".",
+        _length_rule(recipe, brief) + (" " + _FAST_RULES if brief.pace == "fast" else "")
+        + " The first beat is a hook with purpose \"hook\".",
         f"The last beat must end with this exact line: {recipe.cta_line}",
         "Each beat has kind \"fact\", \"opinion\" or \"story\".",
         "thesis is the single core claim, equal to the narration of one fact beat; null for marketing.",

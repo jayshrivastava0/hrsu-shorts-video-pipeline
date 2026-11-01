@@ -50,7 +50,8 @@ def test_marketing_prompt_leads_with_angle_and_does_not_default_to_qc():
     plain = writer._user_prompt(_brief(), recipe, facts, [], "")
     assert "Do not default to batch-level QC" in plain
     led = writer._user_prompt(_brief(angles=["alt_to_china"]), recipe, facts, [], "")
-    assert "Lead with these angles: An India-based alternative" in led
+    assert "Lead with this angle: An India-based alternative" in led
+    assert "ONE point" in led and "never a backup" in led
 
 
 def test_duration_sets_length_rule_and_beat_range():
@@ -70,3 +71,39 @@ def test_square_canvas_and_cta_in_director_prompt(tmp_path):
     text = director.build_prompt(proj, run, template=get_recipe("marketing").prompt_path)
     assert "1080x1080" in text and "Talk to us at example.com" in text
     assert "{{CTA}}" not in text and "Ask for a quotation" not in text
+
+
+def test_fast_pace_changes_beat_range_prompt_and_id():
+    recipe = get_recipe("marketing")
+    fast = _brief(duration_s=150, pace="fast")
+    assert fast.id != _brief(duration_s=150).id
+    assert writer._beat_range(recipe, fast) == (15, 25)
+    assert "Pace is FAST" in writer._user_prompt(fast, recipe, load_facts(), [], "")
+    assert "Pace is FAST" not in writer._user_prompt(_brief(duration_s=150), recipe, load_facts(), [], "")
+
+
+def test_fast_pace_rules_reach_director_prompt_only_when_asked(tmp_path):
+    run, proj = tmp_path / "run", tmp_path / "proj"
+    run.mkdir(); proj.mkdir()
+    marketing = get_recipe("marketing").prompt_path
+    assert "Pace: FAST" not in director.build_prompt(proj, run, template=marketing)
+    (run / "pace.txt").write_text("fast", encoding="utf-8")
+    text = director.build_prompt(proj, run, template=marketing)
+    assert "Pace: FAST" in text and "{{PACE_RULES}}" not in text
+
+
+def test_backup_and_second_choice_phrases_are_banned():
+    banned = [b.lower() for b in load_facts().banned_claims]
+    for phrase in ("second supplier", "backup supplier", "second choice", "plan b"):
+        assert phrase in banned
+    beats = [{"narration": "HRSU can be your second supplier.", "card_text": "", "broll_wish": ""}]
+    assert "second supplier" in writer._offending(beats, load_facts().banned_claims)
+
+
+def test_marketing_prompt_has_no_label_text_and_demands_one_message():
+    text = get_recipe("marketing").prompt_path.read_text(encoding="utf-8")
+    assert 'carries the word "illustration"' not in text
+    assert "One message per video" in text and "THE choice, never a backup" in text
+    fast = (get_recipe("marketing").prompt_path.parent / "pace_fast.md").read_text(encoding="utf-8")
+    assert "stock photo" not in fast.lower().replace('"stock photo" (or', "")  # only the ban mention remains
+    assert "Backgrounds must vary" in fast

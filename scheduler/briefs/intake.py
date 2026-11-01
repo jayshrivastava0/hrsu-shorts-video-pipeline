@@ -111,6 +111,7 @@ def build_brief(
     fmt: str | None = None,
     ratio: str | None = None,
     duration_s: int | None = None,
+    pace: str = "standard",
 ) -> Brief:
     """Validate the brief text and assets and return a Brief with a resolved type."""
     if not text or not text.strip():
@@ -149,7 +150,7 @@ def build_brief(
     angles = [a.strip() for a in angles or [] if a and a.strip()]
     cta = (cta or "").strip() or None
     # only the new options change the id, so ids of older briefs (incl. --orientation ones) stay stable
-    variant = "|".join(filter(None, [",".join(angles), cta or "", fmt_orientation or "", str(duration_s or "")]))
+    variant = "|".join(filter(None, [",".join(angles), cta or "", fmt_orientation or "", str(duration_s or ""), "" if pace == "standard" else pace]))
     return Brief(
         id=brief_id(text, variant),
         text=text,
@@ -160,6 +161,7 @@ def build_brief(
         angles=angles,
         cta=cta,
         duration_s=duration_s,
+        pace=pace,
     )
 
 

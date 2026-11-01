@@ -23,6 +23,13 @@ banned_claims:
   - "delivered to your door"
   - "delivery to your door"
   - "Incoterm"
+  - "second supplier"
+  - "second source"
+  - "backup supplier"
+  - "back-up supplier"
+  - "backup source"
+  - "second choice"
+  - "plan b"
 
 # Reasons a buyer may choose HRSU (owner-supplied 2026-10-31). These are HRSU's positioning: videos may lead with
 # any of them, qualitatively. A buyer judges "better" for themselves. Anything specific and checkable (a number,
