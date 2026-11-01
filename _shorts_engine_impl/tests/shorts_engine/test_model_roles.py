@@ -37,8 +37,8 @@ def _clear_role_env(monkeypatch):
 
 def test_default_verifier_and_critic_models(monkeypatch):
     _clear_role_env(monkeypatch)
-    assert config.model_for_role("verifier") == "nemotron-3-ultra:cloud"
-    assert config.model_for_role("critic") == "nemotron-3-ultra:cloud"
+    assert config.model_for_role("verifier") == "qwen3:8b"
+    assert config.model_for_role("critic") == "qwen3:8b"
 
 
 def test_default_verifier_and_critic_differ_from_writer_family(monkeypatch):
@@ -59,7 +59,7 @@ def test_independence_check_rejects_same_family(monkeypatch):
 def test_independence_check_rejects_planner_family(monkeypatch):
     # the verifier grades the PLANNER's claims, so it must differ from the planner too
     _clear_role_env(monkeypatch)
-    monkeypatch.setenv("HRSU_MODEL_PLANNER", "nemotron-3-ultra:cloud")
+    monkeypatch.setenv("HRSU_MODEL_PLANNER", "qwen3:32b")
     with pytest.raises(EngineConfigError, match="same model family"):
         config.check_role_independence("verifier")
     with pytest.raises(EngineConfigError, match="same model family"):
