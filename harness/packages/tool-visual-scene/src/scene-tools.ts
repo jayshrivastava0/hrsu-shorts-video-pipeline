@@ -83,9 +83,20 @@ function resolveScopedPath(workspaceId: string, shotId: string, projectRoot: str
  * defects (a duplicate `class` attribute, and adding a `<script>` tag it was told not to add),
  * so this is injected unconditionally into every subagent-authored composition rather than left
  * to a prompt the model could omit or contradict.
+ *
+ * Selector is `:where(.clip)`, not `.clip` -- `:where()` always contributes zero specificity to
+ * the rule it wraps. A later escalated author rule (see `escalatePositionDeclarations`) is also
+ * `!important`, and when two declarations are both `!important`, origin/importance ties are
+ * broken by SPECIFICITY FIRST, source order only as the final tiebreak at equal specificity.
+ * Plain `.clip{...}` has specificity (0,1,0); an author rule as low-specificity as a bare type
+ * selector (`h1{position:absolute}`, applied to `<h1 class="clip">`) is (0,0,1) -- LOWER than
+ * `.clip`, so it would lose to the reset even after escalation, regardless of appearing later in
+ * the file. `:where(.clip)` fixes this by contributing (0,0,0): any escalated author rule, no
+ * matter how low its own specificity, now wins on specificity alone (and falls back to source
+ * order -- author rule after the reset -- on an exact tie).
  */
 export function injectClipPositionReset(html: string): string {
-  const RESET = '<style>.clip{position:static!important}</style>'
+  const RESET = '<style>:where(.clip){position:static!important}</style>'
   const styleOpenIndex = html.search(/<style[^>]*>/i)
   if (styleOpenIndex === -1) {
     // No <style> tag to anchor against -- insert before </head> (or, failing that, before
@@ -99,6 +110,78 @@ export function injectClipPositionReset(html: string): string {
   // deliberately positioned element -- still needs its own !important to win; this keeps the
   // reset as the default floor, not an unconditional override no author rule can beat.
   return html.slice(0, styleOpenIndex) + RESET + html.slice(styleOpenIndex)
+}
+
+/**
+ * Companion to `injectClipPositionReset`. The reset is necessary -- confirmed by direct render
+ * (`npx hyperframes render`, both with and without it, on the real composition from run-2612bce4
+ * shot s07): WITHOUT it, several `.clip` elements with no author `position` rule (relying on
+ * `#root`'s flex layout to stack them) render piled on top of each other at the same spot despite
+ * being `position: static` in the authored CSS -- the HyperFrames render runtime forces its own
+ * positioning onto timed `.clip` elements at render time, through a mechanism invisible to a
+ * static read of the installed package (no literal `.clip` CSS rule exists in its bundle; it must
+ * construct the selector or apply inline styles at runtime). The blanket `!important` reset is the
+ * only thing that reliably beats it.
+ *
+ * But the reset is ALSO, by itself, wrong for any composition where an author deliberately gives a
+ * `.clip` element its own `position: absolute` for real layout -- confirmed by the same
+ * direct-render method on run-e721c494 shot s03 (a DIAGRAM with three `.layer` boxes stacked via
+ * `bottom: 100/260/420px` inside a `position: relative` container, plus a `.stat-pill` positioned
+ * `right: -150px` relative to its own layer): WITHOUT the reset this renders exactly as authored
+ * (three stacked boxes, pill beside the first one); WITH it (the reset alone, as shipped in
+ * 5b45d0f), every `.layer`'s `position: absolute` is silently overridden to `static` by the
+ * `!important` floor -- since no non-important author rule can ever beat an `!important` one
+ * regardless of selector specificity -- so the layers fall into flex-row flow instead of stacking,
+ * and the stat-pill (not itself `.clip`, but a child of a now-unpositioned `.layer`) resolves its
+ * `position: absolute` against the next positioned ancestor up (`.diagram-container`) instead of
+ * its own layer, landing on top of a sibling layer's text. This is the overlap the user reported
+ * as still-unresolved after 5b45d0f: the earlier fix didn't fail to work, it was solving a real
+ * problem (s07-style pile-up) while silently causing a different one (s03-style mispositioned
+ * elements) that happened to surface in the very next real pipeline run.
+ *
+ * Fix: let authors win back their own deliberate positioning by escalating every `position`
+ * declaration already present in the composition's OWN `<style>` block(s) to `!important` too.
+ * Since `injectClipPositionReset` inserts the reset `<style>` tag BEFORE the composition's own
+ * `<style>` block, two `!important` declarations of equal specificity resolve by source order --
+ * the author's later, escalated rule wins over the earlier reset floor, while the reset still
+ * applies to any `.clip` element the author left with no `position` rule at all (nothing to
+ * escalate there). Mechanical, not a persona instruction, for the same reason the reset itself is
+ * mechanical: this applies unconditionally to every write_scene_file call rather than asking the
+ * authoring subagent to remember to add `!important` itself.
+ *
+ * Deliberately a regex scan, matching the file's existing style (`findDuplicateAttributeIssues`,
+ * `findGsapScriptIssues`) rather than a full CSS parser -- authored compositions are simple,
+ * single-file, LLM-generated stylesheets. The negative lookbehind excludes `background-position`/
+ * `object-position` (anything where `position` isn't its own word), and the negative lookahead
+ * skips any declaration that already carries `!important` (including the reset's own rule, when
+ * this runs over the already-reset HTML) so it is idempotent and never double-escalates.
+ *
+ * Also escalates inline `style="..."` attributes, not just `<style>` blocks -- confirmed present
+ * in the real corpus (`run-2612bce4/s05.html`: `style="position: absolute; bottom: 200px; ..."`
+ * on a `.clip` element, no `!important`). An inline declaration is already closer to the top of
+ * the specificity order than anything a stylesheet selector can express, but the reset is
+ * `!important`, and a non-important inline style loses to ANY `!important` stylesheet rule
+ * regardless of its origin as inline -- `!important` inside the `style` attribute itself is valid
+ * CSS and is what actually lets it win back.
+ */
+const POSITION_DECLARATION = /(?<![\w-])position(\s*:\s*)(static|relative|absolute|fixed|sticky)\b(?!\s*!important)/gi
+
+function escalateCss(css: string): string {
+  return css.replace(POSITION_DECLARATION, (_decl, sep: string, value: string) => `position${sep}${value} !important`)
+}
+
+export function escalatePositionDeclarations(html: string): string {
+  // The replacement callback (not a replacement STRING) matters here: `String.prototype.replace`
+  // treats `$&`/`` $` ``/`$'`/`$<n>` specially in a string replacement, so a composition whose
+  // text content happens to contain one of those sequences (e.g. `content: "$12M"` -- a dollar
+  // sign and digits read as a `$<n>`-shaped pattern) would get silently corrupted. A callback
+  // returning the literal string sidesteps that entirely.
+  const withStyleBlocksEscalated = html.replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (fullMatch, css: string) => {
+    return fullMatch.replace(css, () => escalateCss(css))
+  })
+  return withStyleBlocksEscalated.replace(/\sstyle\s*=\s*"([^"]*)"/gi, (fullMatch, value: string) => {
+    return fullMatch.replace(value, () => escalateCss(value))
+  })
 }
 
 export function writeSceneFile(

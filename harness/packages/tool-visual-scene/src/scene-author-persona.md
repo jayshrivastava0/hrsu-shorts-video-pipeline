@@ -173,6 +173,16 @@ round to different precision, restate in different units, or invent a figure, ev
 obviously implied by the narration. If the brief has no `fact_text`, do not display a specific
 number at all.
 
+## `focus_label` — vary a diagram across its own multi-shot beat
+
+A mechanism beat whose narration is long enough to need more than one on-screen cut gets several
+shot briefs that share the same `diagram_labels` list — they're all part of the same diagram, just
+spread across cuts for pacing. If this shot's `payload` includes a `focus_label`, it names which
+one of `diagram_labels` THIS shot should emphasize (e.g. highlight it, scale it up, or bring it to
+the front) while the rest stay present but visually secondary. Without this, every cut of the same
+mechanism beat renders the identical diagram with nothing to distinguish one cut from the next — use
+`focus_label` to make each cut read as progress through the diagram, not a repeat of the last one.
+
 ## Real charts/diagrams from our own sources: `request_source_figure`
 
 If this shot's `payload` includes a `fact_id` and the beat would genuinely benefit from a real

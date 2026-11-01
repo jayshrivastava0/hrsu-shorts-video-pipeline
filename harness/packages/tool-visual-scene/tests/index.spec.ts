@@ -271,9 +271,32 @@ describe('write_scene_file tool', () => {
       html: '<html><head><style>.headline{color:gold}</style></head><body></body></html>',
     }) as { path: string }
     const written = readFileSync(path, 'utf8')
-    expect(written).toContain('.clip{position:static!important}')
-    expect(written.indexOf('.clip{position:static!important}'))
+    expect(written).toContain(':where(.clip){position:static!important}')
+    expect(written.indexOf(':where(.clip){position:static!important}'))
       .toBeLessThan(written.indexOf('.headline{color:gold}'))
+  })
+
+  // Regression for the overlap the reset alone (5b45d0f) introduced: a shot with a deliberately
+  // positioned `.clip` element (e.g. a DIAGRAM's stacked `.layer` boxes) must keep that
+  // positioning after write_scene_file, not have it silently flattened to `position: static` by
+  // the reset.
+  it('escalates an authored .clip position declaration so it survives the reset', async () => {
+    const { mkdtempSync, readFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const projectRoot = mkdtempSync(join(tmpdir(), 'tool-visual-scene-'))
+    const ctx = makeFakeCtx()
+    apply(ctx, {
+      projectRoot, shortsEngineCwd: '/tmp/engine',
+      agentOptions: { model: 'gemma4:31b-cloud' },
+    })
+    const tool = ctx.tools.getRegistered('write_scene_file')
+    const { path } = await tool.execute({
+      workspace_id: 'run-42', shot_id: 's03',
+      html: '<html><head><style>.layer{position:absolute;bottom:100px}</style></head>' +
+        '<body><div class="clip layer">x</div></body></html>',
+    }) as { path: string }
+    const written = readFileSync(path, 'utf8')
+    expect(written).toContain('.layer{position:absolute !important;bottom:100px}')
   })
 })
 

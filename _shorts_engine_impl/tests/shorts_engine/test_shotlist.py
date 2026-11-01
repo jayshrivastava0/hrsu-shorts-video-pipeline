@@ -121,13 +121,21 @@ class TestBeatMapping:
                                          self._brand())
         assert all(s["suggested_type"] == "HEADLINE_CARD" for s in shots)
         assert all(s["beat_purpose"] == "hook" for s in shots)
-        assert all(s["payload"]["text"] == "Nitrate limits are tightening" for s in shots)
+        # This beat's narration is long enough to need two on-screen cuts
+        # (see TestFreeformShotPlanning.test_multi_shot_beat_does_not_repeat_the_same_card_text
+        # for why only the first one keeps the beat's own card_text).
+        assert shots[0]["payload"]["text"] == "Nitrate limits are tightening"
+        assert all(s["payload"]["text"] != "" for s in shots)
 
     def test_stakes_uses_stat_from_fact(self):
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[1], self._facts_by_id(), self._cites(),
                                          self._brand())
-        assert all(s["suggested_type"] == "STAT_CARD" for s in shots)
+        # Only the first shot carries the fact -- see
+        # test_multi_shot_stat_beat_does_not_repeat_the_same_number for why a
+        # continuation shot degrades to HEADLINE_CARD instead of repeating
+        # the same number on a second STAT_CARD.
+        assert shots[0]["suggested_type"] == "STAT_CARD"
         assert shots[0]["payload"]["fact_value"] == "1.5–3"
         assert "mdpi.com" in shots[0]["payload"]["fact_citation"]
 
@@ -143,7 +151,7 @@ class TestBeatMapping:
         from shorts_engine.stages import shotlist
         shots = shotlist.plan_beat_shots(BEATS[3], self._facts_by_id(), self._cites(),
                                          self._brand())  # f2 cites web
-        assert all(s["suggested_type"] == "STAT_CARD" for s in shots)
+        assert shots[0]["suggested_type"] == "STAT_CARD"
         assert shots[0]["payload"]["fact_text"] == \
             "denitrifying filters removed 92 percent of nitrate"
 
@@ -268,6 +276,100 @@ class TestFreeformShotPlanning:
         shots = [{"id": "s00", "duration_s": 2.0, "beat_purpose": "hook"}]  # well under 30s
         errors = lint_shotlist(shots, {"facts": []})
         assert any("floor" in e or "under" in e for e in errors)
+
+    def test_multi_shot_beat_does_not_repeat_the_same_card_text(self):
+        """Regression: a beat whose narration is long enough to need more
+        than one on-screen cut (SHOT_MAX_S) used to stamp the SAME static
+        card_text onto every resulting shot -- confirmed in real runs as
+        literal back-to-back duplicate cards. Only the first shot should
+        carry the beat's headline; later shots must show something else."""
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        narration = (
+            "Low retention and rapid infiltration during dry season irrigation "
+            "compromise nutrient uptake across the whole growing cycle for every plot"
+        )
+        shots = plan_beat_shots(
+            _beat("the-challenge", "stakes", narration, card_text="Soil Retention Risks"),
+            {}, {}, _fake_brand())
+        assert len(shots) > 1, "fixture narration must actually split into multiple shots"
+        assert shots[0]["payload"]["text"] == "Soil Retention Risks"
+        for s in shots[1:]:
+            assert s["payload"]["text"] != "Soil Retention Risks"
+            assert s["payload"]["text"] != ""
+
+    def test_multi_shot_stat_beat_does_not_repeat_the_same_number(self):
+        """Regression: a beat with a numeric fact used to attach the SAME
+        fact_value/fact_text/fact_citation to every shot it split into, so a
+        multi-cut stat beat showed the identical number on repeat (e.g.
+        "425 EC" three times in a row in a real run). Only the first shot
+        should carry the fact; later shots degrade to HEADLINE_CARD (the
+        persona's own rule: no fact_text in the brief -> no number shown)."""
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        facts = {"f1": {"id": "f1", "verbatim_quote": "425 mS/cm peak conductivity",
+                        "value": 425, "unit": "mS/cm", "citation_marker": 1}}
+        cites = {1: {"url": "https://epa.gov/x", "kind": "standard"}}
+        narration = (
+            "Electrical conductivity peaked at 425 during sandy soil infiltration "
+            "testing across every plot in the trial for the full growing season"
+        )
+        shots = plan_beat_shots(
+            _beat("evidence", "proof", narration, fact_ids=["f1"],
+                  card_text="EC Peak Measurement"),
+            facts, cites, _fake_brand())
+        assert len(shots) > 1, "fixture narration must actually split into multiple shots"
+        assert shots[0]["suggested_type"] == "STAT_CARD"
+        assert shots[0]["payload"]["fact_value"] == 425
+        for s in shots[1:]:
+            assert s["suggested_type"] == "HEADLINE_CARD"
+            assert "fact_value" not in s["payload"]
+            assert "fact_text" not in s["payload"]
+
+    def test_multi_shot_mechanism_beat_gets_a_focus_label_per_shot(self):
+        """Regression: a multi-cut mechanism beat used to render the exact
+        same diagram (identical labels, no per-shot distinction) on every
+        cut. Each shot now gets its own focus_label from the beat's label
+        list so the authoring subagent has a reason to vary each cut."""
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        narration = (
+            "Calcium nitrate feeds denitrifying bacteria so they strip oxygen from "
+            "nitrate releasing harmless nitrogen gas before discharge without any retrofit work"
+        )
+        labels = ["Effluent in", "Calcium nitrate dosing", "Denitrifying bacteria", "N2 out"]
+        shots = plan_beat_shots(
+            {**_beat("mechanism", "mechanism", narration, card_text="Bacteria do the removal"),
+             "diagram_labels": labels},
+            {}, {}, _fake_brand())
+        assert len(shots) > 1, "fixture narration must actually split into multiple shots"
+        focus_labels = [s["payload"]["focus_label"] for s in shots]
+        assert focus_labels == [labels[i % len(labels)] for i in range(len(shots))]
+
+    def test_continuation_text_never_shows_an_uncited_number(self):
+        """A continuation shot carries no fact_id, so a number pulled
+        straight from its own narration would appear on screen with no
+        citation behind it -- a never-unverified violation. The number must
+        be dropped, not just reformatted."""
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        from shorts_engine.stages.script import extract_numeric_tokens
+        narration = (
+            "Electrical conductivity peaked at 425 during sandy soil infiltration "
+            "testing across every plot in the trial for the full growing season"
+        )
+        shots = plan_beat_shots(
+            _beat("evidence", "proof", narration, card_text="EC Peak Measurement"),
+            {}, {}, _fake_brand())
+        assert len(shots) > 1, "fixture narration must actually split into multiple shots"
+        for s in shots[1:]:
+            assert extract_numeric_tokens(s["payload"]["text"]) == []
+
+    def test_single_shot_beat_still_gets_its_card_text(self):
+        """No regression for the common case: a beat short enough to stay
+        one shot must still show its own card_text, not a narration snippet."""
+        from shorts_engine.stages.shotlist import plan_beat_shots
+        shots = plan_beat_shots(
+            _beat("cold-open", "hook", "Cold weather pours.", card_text="Winter is coming"),
+            {}, {}, _fake_brand())
+        assert len(shots) == 1
+        assert shots[0]["payload"]["text"] == "Winter is coming"
 
 
 def _beat(beat, purpose, narration, fact_ids=None, card_text="c", broll_wish=""):

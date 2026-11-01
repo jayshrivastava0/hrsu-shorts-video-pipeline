@@ -109,6 +109,42 @@ def _suggest_type(purpose: str, fact: dict | None) -> str:
     return "HEADLINE_CARD"
 
 
+def _continuation_text(narration_span: str) -> str:
+    """On-screen text for a shot that is NOT the first one produced from a
+    beat split by pack_phrases (see plan_beat_shots). Every shot built from
+    one beat used to get the identical `payload["text"]` (the beat's static
+    `card_text`) regardless of how many on-screen cuts the beat's narration
+    was split into -- confirmed in real runs as literal back-to-back
+    duplicate cards (e.g. "Soil Retention Risks" shown twice in a row,
+    "Substrate Simulation Setup" twice, "425 EC" three times -- the latter
+    two needed the fact/diagram_labels handling below too, not just this
+    function, since pack_phrases only varies `narration_span`, never the
+    rest of the payload). Splitting itself is correct and necessary --
+    SHOT_MAX_S caps how long any one card can hold the screen, so long
+    narration must still cut -- but repeating the exact same card for every
+    cut wastes the cut instead of using it. Draws this shot's on-screen text
+    from what THIS shot's own narration is actually saying (first few
+    words) instead of the beat's static headline, so a multi-shot beat
+    reads as a short sequence of related points rather than the same card
+    shown again. `.title()` mangles acronyms/units (e.g. "mg/l" ->
+    "Mg/L") but every composition's own CSS already applies
+    `text-transform: uppercase` to headline text (confirmed in the real
+    compositions this bug came from), so the exact input casing never
+    reaches the screen -- this only has to be reasonable for any
+    non-visual consumer (the vision judge's `_expected_text`, logs). A
+    continuation shot never carries a `fact_id` (see plan_beat_shots), so a
+    number pulled straight from its own narration would land on screen with
+    no citation behind it -- contradicts the persona's own verbatim-facts
+    rule and the project's never-unverified rule alike. Numeric words are
+    filtered out of the candidate words before taking the first six, rather
+    than filtered out of the final slice, so a dropped number doesn't just
+    shorten the card -- the next real word slides in instead."""
+    words = [w for w in narration_span.split() if not extract_numeric_tokens(w)]
+    if not words:
+        words = narration_span.split()  # every word was numeric -- fall back rather than go blank
+    return " ".join(words[:6]).rstrip(",;:.").title()
+
+
 def plan_beat_shots(beat: dict, facts: dict, cites: dict, brand) -> list[dict]:
     narration = beat["narration"]
     purpose = beat.get("purpose", "other")
@@ -117,18 +153,37 @@ def plan_beat_shots(beat: dict, facts: dict, cites: dict, brand) -> list[dict]:
 
     fact = _first_numeric_fact(beat, facts) or next(
         (facts[f] for f in beat.get("fact_ids", []) if f in facts), None)
+    diagram_labels = beat.get("diagram_labels") or _fallback_labels(narration)
 
     shots: list[dict] = []
-    for span in spans:
-        payload = {"text": beat.get("card_text", "")}
-        if fact is not None:
-            payload["fact_id"] = fact["id"]
-            payload["fact_text"] = fact["verbatim_quote"]
-            payload["fact_value"] = fact.get("value")
-            payload["fact_unit"] = fact.get("unit")
-            payload["fact_citation"] = _chip(fact.get("citation_marker"), cites)
+    for i, span in enumerate(spans):
+        # Only the FIRST shot of a split beat carries the beat's own static
+        # headline/fact -- see _continuation_text's doc comment for why.
+        # `shot_fact` (not the beat-level `fact`) drives BOTH the payload
+        # fields below AND suggested_type, so a continuation shot of a
+        # numeric-fact beat degrades from a repeated STAT_CARD to a
+        # HEADLINE_CARD carrying this shot's own narration instead --
+        # matching the scene-author-persona's own rule ("no fact_text in
+        # the brief -> do not display a specific number at all").
+        shot_fact = fact if i == 0 else None
+        card_text = beat.get("card_text", "") if i == 0 else _continuation_text(span)
+        payload = {"text": card_text}
+        if shot_fact is not None:
+            payload["fact_id"] = shot_fact["id"]
+            payload["fact_text"] = shot_fact["verbatim_quote"]
+            payload["fact_value"] = shot_fact.get("value")
+            payload["fact_unit"] = shot_fact.get("unit")
+            payload["fact_citation"] = _chip(shot_fact.get("citation_marker"), cites)
         if purpose == "mechanism":
-            payload["diagram_labels"] = beat.get("diagram_labels") or _fallback_labels(narration)
+            payload["diagram_labels"] = diagram_labels
+            if len(spans) > 1:
+                # A multi-shot mechanism beat would otherwise render the
+                # IDENTICAL diagram (same labels, same implied layout) on
+                # every cut. `focus_label` cycles through the beat's own
+                # labels one per shot so the authoring subagent has a
+                # concrete reason to vary each cut (e.g. highlight that
+                # one step) instead of redrawing the same diagram.
+                payload["focus_label"] = diagram_labels[i % len(diagram_labels)]
         if purpose == "cta":
             diff_text = ""
             for fid in beat.get("fact_ids", []):
@@ -140,7 +195,7 @@ def plan_beat_shots(beat: dict, facts: dict, cites: dict, brand) -> list[dict]:
             payload["domain"] = brand.domain
         shots.append({
             "id": "", "beat": beat.get("beat", purpose), "beat_purpose": purpose,
-            "suggested_type": _suggest_type(purpose, fact), "duration_s": 0.0,
+            "suggested_type": _suggest_type(purpose, shot_fact), "duration_s": 0.0,
             "narration_span": span, "payload": payload,
             "broll_wish": beat.get("broll_wish", ""),
         })

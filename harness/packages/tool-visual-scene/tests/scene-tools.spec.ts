@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues, findGsapScriptIssues, injectClipPositionReset } from '../src/scene-tools.ts'
+import { writeSceneFile, renderScene, renderFallbackScene, findDuplicateAttributeIssues, findGsapScriptIssues, injectClipPositionReset, escalatePositionDeclarations } from '../src/scene-tools.ts'
 
 function fakeSpawn() {
   return vi.fn().mockImplementation(() => {
@@ -146,7 +146,7 @@ describe('injectClipPositionReset', () => {
   it('inserts the reset <style> tag before the composition\'s own <style> block', () => {
     const html = '<html><head><style>.headline{color:gold}</style></head><body></body></html>'
     const out = injectClipPositionReset(html)
-    const resetIndex = out.indexOf('.clip{position:static!important}')
+    const resetIndex = out.indexOf(':where(.clip){position:static!important}')
     const ownStyleIndex = out.indexOf('.headline{color:gold}')
     expect(resetIndex).toBeGreaterThan(-1)
     expect(resetIndex).toBeLessThan(ownStyleIndex)
@@ -155,19 +155,91 @@ describe('injectClipPositionReset', () => {
   it('inserts before </head> when there is no <style> tag at all', () => {
     const html = '<html><head></head><body>x</body></html>'
     const out = injectClipPositionReset(html)
-    expect(out).toContain('.clip{position:static!important}</style></head>')
+    expect(out).toContain(':where(.clip){position:static!important}</style></head>')
   })
 
   it('inserts before </html> when there is neither a <style> tag nor a </head>', () => {
     const html = '<html><body>x</body></html>'
     const out = injectClipPositionReset(html)
-    expect(out).toContain('.clip{position:static!important}</style></html>')
+    expect(out).toContain(':where(.clip){position:static!important}</style></html>')
   })
 
   it('appends when the document has no style tag, head, or html closing tag at all', () => {
     const html = '<body>x</body>'
     const out = injectClipPositionReset(html)
-    expect(out.endsWith('.clip{position:static!important}</style>')).toBe(true)
+    expect(out.endsWith(':where(.clip){position:static!important}</style>')).toBe(true)
+  })
+})
+
+describe('escalatePositionDeclarations', () => {
+  it('escalates an author position declaration that has no !important', () => {
+    const html = '<style>.layer{position:absolute;bottom:100px}</style>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toContain('.layer{position:absolute !important;bottom:100px}')
+  })
+
+  it('leaves a declaration that already has !important untouched (idempotent)', () => {
+    const html = '<style>:where(.clip){position:static!important}</style>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toBe(html)
+  })
+
+  it('does not touch background-position or object-position', () => {
+    const html = '<style>.bg{background-position:center;object-position:top}</style>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toBe(html)
+  })
+
+  it('escalates every position value, not just absolute', () => {
+    const html = '<style>.a{position:relative}.b{position:fixed}.c{position:sticky}</style>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toContain('position:relative !important')
+    expect(out).toContain('position:fixed !important')
+    expect(out).toContain('position:sticky !important')
+  })
+
+  it('escalates across multiple <style> blocks and leaves non-style content alone', () => {
+    const html = '<style>.a{position:absolute}</style><body>position:not-css</body>' +
+      '<style>.b{position:relative}</style>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toContain('.a{position:absolute !important}')
+    expect(out).toContain('.b{position:relative !important}')
+    expect(out).toContain('<body>position:not-css</body>')
+  })
+
+  it('combined with injectClipPositionReset, lets an authored .clip position win the cascade', () => {
+    const html = '<html><head><style>.headline{position:absolute;top:400px}</style></head>' +
+      '<body></body></html>'
+    const out = escalatePositionDeclarations(injectClipPositionReset(html))
+    const resetIndex = out.indexOf(':where(.clip){position:static!important}')
+    const authorIndex = out.indexOf('.headline{position:absolute !important;top:400px}')
+    expect(resetIndex).toBeGreaterThan(-1)
+    expect(authorIndex).toBeGreaterThan(resetIndex)
+  })
+
+  // Specificity regression: `.clip{...}` (specificity 0,1,0) would beat a lower-specificity
+  // escalated author rule like a bare type selector even after escalation, since two `!important`
+  // declarations resolve by specificity BEFORE source order. injectClipPositionReset's reset must
+  // use `:where(.clip)` (zero specificity) for this to hold regardless of how low the author's own
+  // rule's specificity is.
+  it('an escalated author rule beats the reset even at lower specificity than .clip', () => {
+    const html = '<html><head><style>h1{position:absolute;top:10px}</style></head>' +
+      '<body><h1 class="clip">x</h1></body></html>'
+    const out = escalatePositionDeclarations(injectClipPositionReset(html))
+    expect(out).toContain(':where(.clip){position:static!important}')
+    expect(out).toContain('h1{position:absolute !important;top:10px}')
+  })
+
+  it('escalates a position declaration inside an inline style attribute', () => {
+    const html = '<div class="clip" style="position: absolute; bottom: 200px;">x</div>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toContain('style="position: absolute !important; bottom: 200px;"')
+  })
+
+  it('leaves an inline style position declaration that already has !important untouched', () => {
+    const html = '<div style="position:absolute!important;bottom:0">x</div>'
+    const out = escalatePositionDeclarations(html)
+    expect(out).toBe(html)
   })
 })
 
